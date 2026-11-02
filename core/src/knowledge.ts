@@ -17,12 +17,54 @@ import { assertWritable, loadPackage, readPackageMeta, savePackage } from './sto
 import type {
   DraftCandidate,
   DraftItem,
+  DraftTargetKind,
   KnowledgeSourceRecord,
   LlmPort,
   OntologyPackage,
   SourceType,
 } from './types.js'
 import { SOURCE_TYPES } from './types.js'
+
+/** 单源解析报告：收到/接受/幂等跳过/非法丢弃 + 引擎。 */
+export interface ParseReport {
+  received: number
+  accepted: number
+  idempotentSkipped: number
+  invalidDropped: number
+  engine: 'deepseek' | 'heuristic'
+}
+
+/** previewMaterialize 单条结果。 */
+export interface MaterializePreviewItem {
+  id: string
+  ok: boolean
+  error?: string
+  targetKind: string
+  name: string
+  /** 将写入包的元素（RedLine 为 { scenarioId, phrases } 增量描述）。 */
+  element?: unknown
+  /** 变更摘要（人类可读一行）。 */
+  summary: string
+}
+
+/** 单条草案的结构化形状校验（DeepSeek 输出逐条过闸）。返回 null = 合法。 */
+export function validateDraftItem(item: unknown): string | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return 'not an object'
+  const it = item as Record<string, unknown>
+  if (it['layer'] !== 'O1' && it['layer'] !== 'O2' && it['layer'] !== 'O3') return 'bad layer'
+  const kinds: DraftTargetKind[] = [
+    'ObjectType', 'RelationType', 'Attribute', 'Dictionary', 'BehaviorType',
+    'ScoreRule', 'ExclusionRule', 'SkillTemplate', 'ScenarioCard', 'RedLine',
+    'FieldMap', 'ApiSource',
+  ]
+  if (!kinds.includes(it['targetKind'] as DraftTargetKind)) return 'bad targetKind'
+  if (typeof it['name'] !== 'string' || !it['name'].trim()) return 'bad name'
+  const payload = it['payload']
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'bad payload'
+  const conf = it['confidence']
+  if (typeof conf !== 'number' || !Number.isFinite(conf) || conf < 0 || conf > 1) return 'bad confidence'
+  return null
+}
 
 export class KnowledgeError extends Error {
   readonly code: string
@@ -118,7 +160,7 @@ export class KnowledgeStore {
   async parseSource(
     sourceId: string,
     llm: LlmPort,
-  ): Promise<{ added: DraftCandidate[]; engine: 'deepseek' | 'heuristic' }> {
+  ): Promise<{ added: DraftCandidate[]; engine: 'deepseek' | 'heuristic'; report: ParseReport }> {
     const src = this.getSource(sourceId)
     const { items, engine } = await parseWithFallback(llm, {
       sourceType: src.sourceType,
@@ -127,9 +169,19 @@ export class KnowledgeStore {
     })
     const queue = this.loadQueue()
     const added: DraftCandidate[] = []
-    for (const item of items) {
+    let invalidDropped = 0
+    let idempotentSkipped = 0
+    for (const raw of items) {
+      if (validateDraftItem(raw) !== null) {
+        invalidDropped++
+        continue
+      }
+      const item = raw as DraftItem
       const key = `${src.packageId}|${item.layer}|${item.targetKind}|${item.name}`
-      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.name}` === key)) continue
+      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.name}` === key)) {
+        idempotentSkipped++
+        continue
+      }
       const conclusionLike = isConclusionLike(item)
       const cand: DraftCandidate = {
         ...item,
@@ -147,7 +199,14 @@ export class KnowledgeStore {
     this.saveQueue(queue)
     src.parseStatus = 'parsed'
     writeFileSync(join(this.root, 'sources', `${sourceId}.json`), `${JSON.stringify(src, null, 2)}\n`, 'utf8')
-    return { added, engine }
+    const report: ParseReport = {
+      received: items.length,
+      accepted: added.length,
+      idempotentSkipped,
+      invalidDropped,
+      engine,
+    }
+    return { added, engine, report }
   }
 
   /* ── 人审队列 ──────────────────────────────────────────────────────── */
@@ -161,6 +220,35 @@ export class KnowledgeStore {
   getCandidate(id: string): DraftCandidate {
     const c = this.loadQueue().find((x) => x.id === id)
     if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
+    return c
+  }
+
+  /**
+   * 批准前编辑草案载荷（人审动作的一部分；仅 pending 可改）。
+   * 改 confidence 会重算 forcedReview；改内容会重算 conclusionLike。
+   */
+  updateCandidate(
+    id: string,
+    patch: { name?: string; payload?: Record<string, unknown>; rationale?: string; confidence?: number },
+  ): DraftCandidate {
+    const queue = this.loadQueue()
+    const c = queue.find((x) => x.id === id)
+    if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
+    if (c.status !== 'pending') {
+      throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
+    }
+    if (patch.name !== undefined) c.name = patch.name
+    if (patch.payload !== undefined) c.payload = patch.payload
+    if (patch.rationale !== undefined) c.rationale = patch.rationale
+    if (patch.confidence !== undefined) {
+      if (!Number.isFinite(patch.confidence) || patch.confidence < 0 || patch.confidence > 1) {
+        throw new KnowledgeError('BAD_CONFIDENCE', 'confidence must be a number in [0,1]')
+      }
+      c.confidence = patch.confidence
+    }
+    c.forcedReview = c.confidence < 0.75
+    c.conclusionLike = isConclusionLike(c)
+    this.saveQueue(queue)
     return c
   }
 
@@ -256,6 +344,99 @@ export class KnowledgeStore {
     this.saveQueue(queue)
     return { applied, skipped }
   }
+
+  /**
+   * 干跑预览：把候选应用到包模型副本，返回每个候选将物化成的元素/变更，不落盘。
+   * 不校验 status（批准前也要能看 diff）；不拒 ISSUED（只读预览）。
+   */
+  previewMaterialize(versionDir: string, candidateIds: string[]): MaterializePreviewItem[] {
+    const base = loadPackage(versionDir)
+    const queue = this.loadQueue()
+    const out: MaterializePreviewItem[] = []
+    for (const id of candidateIds) {
+      const c = queue.find((x) => x.id === id)
+      if (!c) {
+        out.push({ id, ok: false, error: `candidate ${id} not found`, targetKind: '-', name: '-', summary: '' })
+        continue
+      }
+      const pkg = structuredClone(base)
+      try {
+        const before = snapshotPkg(pkg)
+        applyDraftToPackage(pkg, c)
+        const delta = diffSnapshot(before, snapshotPkg(pkg))
+        out.push({ id, ok: true, targetKind: c.targetKind, name: c.name, element: delta.element, summary: delta.summary })
+      } catch (e) {
+        out.push({
+          id,
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          targetKind: c.targetKind,
+          name: c.name,
+          summary: '',
+        })
+      }
+    }
+    return out
+  }
+}
+
+/** 包模型快照：各集合的 JSON 串（用于干跑 diff）。 */
+function snapshotPkg(pkg: OntologyPackage): Record<string, string> {
+  return {
+    objects: JSON.stringify(pkg.objects),
+    relations: JSON.stringify(pkg.relations),
+    dictionaries: JSON.stringify(pkg.dictionaries),
+    behaviors: JSON.stringify(pkg.behaviors),
+    scoreRules: JSON.stringify(pkg.scoreRules),
+    exclusionRules: JSON.stringify(pkg.exclusionRules),
+    skillTemplates: JSON.stringify(pkg.skillTemplates),
+    scenarios: JSON.stringify(pkg.scenarios),
+    fieldMaps: JSON.stringify(pkg.fieldMaps),
+    apiSources: JSON.stringify(pkg.apiSources),
+  }
+}
+
+function diffSnapshot(
+  before: Record<string, string>,
+  after: Record<string, string>,
+): { element: unknown; summary: string } {
+  const labels: Record<string, string> = {
+    objects: 'ObjectType',
+    relations: 'RelationType',
+    dictionaries: 'Dictionary',
+    behaviors: 'BehaviorType',
+    scoreRules: 'ScoreRule',
+    exclusionRules: 'ExclusionRule',
+    skillTemplates: 'SkillTemplate',
+    scenarios: 'ScenarioCard',
+    fieldMaps: 'FieldMap',
+    apiSources: 'ApiSource',
+  }
+  for (const key of Object.keys(before)) {
+    if (before[key] === after[key]) continue
+    const arr = JSON.parse(after[key]) as unknown[]
+    const prev = JSON.parse(before[key]) as unknown[]
+    // 新增元素：取数组尾部差异；修改元素（RedLine 改 forbiddenPhrases）：取最后一个变化项
+    const added = arr.length > prev.length ? arr.slice(prev.length) : arr.filter((x, i) => JSON.stringify(x) !== JSON.stringify(prev[i]))
+    const el = added.length > 0 ? added[added.length - 1] : arr[arr.length - 1]
+    if (key === 'scenarios') {
+      const s = el as { id?: string; outputContract?: { forbiddenPhrases?: string[] } }
+      const prevS = (prev.find((x) => (x as { id?: string }).id === s.id) ?? {}) as { outputContract?: { forbiddenPhrases?: string[] } }
+      const beforePhrases = new Set(prevS.outputContract?.forbiddenPhrases ?? [])
+      const newPhrases = (s.outputContract?.forbiddenPhrases ?? []).filter((p) => !beforePhrases.has(p))
+      if (newPhrases.length > 0) {
+        return {
+          element: { scenarioId: s.id, phrases: newPhrases },
+          summary: `→ ${labels[key]} ${s.id ?? ''} 禁语 +${newPhrases.length}: ${newPhrases.join('、')}`,
+        }
+      }
+      return { element: el, summary: `→ ${labels[key]} ${s.id ?? ''}（内容变更）` }
+    }
+    const id = (el as { id?: string })?.id ?? '?'
+    const name = (el as { name?: string })?.name ?? ''
+    return { element: el, summary: `→ ${labels[key]} ${id}${name ? `「${name}」` : ''}` }
+  }
+  return { element: null, summary: '（无变化）' }
 }
 
 function readdirSafe(dir: string): string[] {

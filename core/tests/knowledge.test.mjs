@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, loadPackage, savePackage, readPackageMeta } from '../dist/index.js'
+import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, mkWorkspace } from './helpers.mjs'
 
 const llm = new HeuristicLlm()
@@ -235,6 +235,126 @@ test('LLM 失败回落词面启发（parseWithFallback 语义）', async () => {
     })
     const { added } = await store.parseSource(src.id, broken)
     assert.ok(added.length > 0, 'heuristic fallback yields candidates')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confidence', () => {
+  const good = { layer: 'O2', targetKind: 'ScoreRule', name: '规则', payload: { weight: 0.1 }, confidence: 0.8, rationale: 'r' }
+  assert.equal(validateDraftItem(good), null)
+  assert.equal(validateDraftItem({ ...good, layer: 'O9' }), 'bad layer')
+  assert.equal(validateDraftItem({ ...good, targetKind: 'Nope' }), 'bad targetKind')
+  assert.equal(validateDraftItem({ ...good, name: '  ' }), 'bad name')
+  assert.equal(validateDraftItem({ ...good, payload: null }), 'bad payload')
+  assert.equal(validateDraftItem({ ...good, payload: [] }), 'bad payload')
+  assert.equal(validateDraftItem({ ...good, confidence: 1.5 }), 'bad confidence')
+  assert.equal(validateDraftItem({ ...good, confidence: '0.8' }), 'bad confidence')
+  assert.equal(validateDraftItem(null), 'not an object')
+  assert.equal(validateDraftItem('x'), 'not an object')
+})
+
+test('parseSource 报告：received/accepted/idempotentSkipped/invalidDropped + engine', async () => {
+  const { store, root } = mkStore()
+  try {
+    // 合法 + 非法混杂的假 LLM
+    const mixed = {
+      async parseSource() {
+        return {
+          items: [
+            { layer: 'O2', targetKind: 'ScoreRule', name: '有效规则', payload: { weight: 0.2, expression: '1' }, confidence: 0.9, rationale: 'ok' },
+            { layer: 'O2', targetKind: 'ScoreRule', name: '', payload: {}, confidence: 0.9, rationale: 'bad name' },
+            { layer: 'OX', targetKind: 'ScoreRule', name: '坏层', payload: {}, confidence: 0.5, rationale: 'bad layer' },
+            { layer: 'O1', targetKind: 'ObjectType', name: '样本对象', payload: { name: '样本对象' }, confidence: 'high', rationale: 'bad conf' },
+          ],
+        }
+      },
+    }
+    const src = store.uploadSource({ packageId: 'pkg-x', sourceType: 'LEGACY_SYS', name: 'algo', content: '权重 0.2 的特征。' })
+    const r1 = await store.parseSource(src.id, mixed)
+    assert.equal(r1.report.received, 4)
+    assert.equal(r1.report.accepted, 1)
+    assert.equal(r1.report.invalidDropped, 3)
+    assert.equal(r1.report.idempotentSkipped, 0)
+    assert.equal(r1.report.engine, 'heuristic') // 假 LLM 非 DeepSeek 实例 → heuristic 标注
+    // 二次解析：同名幂等跳过
+    const r2 = await store.parseSource(src.id, mixed)
+    assert.equal(r2.report.accepted, 0)
+    assert.equal(r2.report.idempotentSkipped, 1)
+    assert.equal(r2.report.invalidDropped, 3)
+    // heuristic 引擎也带报告
+    const r3 = await store.parseSource(src.id, new HeuristicLlm())
+    assert.ok(r3.report.engine === 'heuristic' || r3.report.engine === 'deepseek')
+    assert.equal(typeof r3.report.received, 'number')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('updateCandidate：批准前可编辑载荷；finalized 拒绝；confidence 重算 forcedReview', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    const updated = store.updateCandidate(draft.id, {
+      payload: { ...draft.payload, weight: 0.35, expression: 'min(1, f1)' },
+      confidence: 0.9,
+    })
+    assert.equal(updated.payload.weight, 0.35)
+    assert.equal(updated.confidence, 0.9)
+    assert.equal(updated.forcedReview, false)
+    // 非法 confidence 拒绝
+    assert.throws(() => store.updateCandidate(draft.id, { confidence: 2 }), /confidence/)
+    // 批准后不可再改
+    store.reviewCandidate(draft.id, 'approve')
+    assert.throws(() => store.updateCandidate(draft.id, { name: 'x' }), /already/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize：干跑返回将物化的元素，不落盘', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const before = loadPackage(dir)
+    const beforeRules = before.scoreRules.length
+    const beforePhrases = before.scenarios[0].outputContract.forbiddenPhrases.length
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '夜间交易权重 0.2。\n该账户认定洗钱。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const ids = added.map((c) => c.id)
+    const previews = store.previewMaterialize(dir, ids)
+    assert.equal(previews.length, added.length)
+    // 未批准也能预览
+    const scoreP = previews.find((p) => p.targetKind === 'ScoreRule')
+    assert.ok(scoreP && scoreP.ok, scoreP?.error)
+    assert.ok(scoreP.summary.includes('ScoreRule'))
+    assert.ok(scoreP.element && typeof scoreP.element === 'object')
+    const redP = previews.find((p) => p.targetKind === 'RedLine')
+    if (redP) {
+      assert.ok(redP.ok, redP.error)
+      assert.ok(redP.summary.includes('禁语'))
+      assert.ok(Array.isArray(redP.element.phrases))
+    }
+    // 干跑不落盘
+    const after = loadPackage(dir)
+    assert.equal(after.scoreRules.length, beforeRules)
+    assert.equal(after.scenarios[0].outputContract.forbiddenPhrases.length, beforePhrases)
+    // 不存在的候选 → ok:false
+    const miss = store.previewMaterialize(dir, ['dc-nope'])
+    assert.equal(miss[0].ok, false)
   } finally {
     rmWorkspace(root)
   }
