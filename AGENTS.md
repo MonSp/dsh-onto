@@ -26,7 +26,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`。
 3. `scripts/dump-config.ps1` — 硬断言 `@dsh-onto/backend`、`@dsh-onto/workbench` 均在组合结果中。
-4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「本体建模」→ 五个 tab
+4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「dsh-onto」→ 五个 tab
    （包管理/建模/知识库/校验派生/场景运行）；选中 aml-analysis@1.0.0 → 场景运行
    用 `examples/aml-run.json` 跑 SCN-AML-FIND-CLUES，候选/证据链/审计/人审字段齐全。
    重启前先杀 3080 旧监听；Tabbit 用 `localhost:3808`/`localhost:3080`（勿用 127.0.0.1）。
