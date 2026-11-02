@@ -1,7 +1,7 @@
 {
   "locale": "en",
   "meta": {
-    "title": "Caliber backend",
-    "description": "Unified backend: caliber* wire services for the business ontology platform"
+    "title": "dsh-onto backend",
+    "description": "Unified backend: dsh-onto* wire services for the business ontology platform"
   }
 }

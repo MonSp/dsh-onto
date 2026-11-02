@@ -1,9 +1,9 @@
 /**
- * Caliber 工作台 client half —— browser entry（classic script，零 runtime import/export）。
+ * dsh-onto 工作台 client half —— browser entry（classic script，零 runtime import/export）。
  *
  * 五个 tab：包管理 | 建模 | 知识库 | 校验派生 | 场景运行。
- * 远程命名空间：caliberWorkspace / caliberModel / caliberValidate / caliberDerive /
- * caliberKnowledge / caliberRuntime（inject 必须列全）。
+ * 远程命名空间：ontoWorkspace / ontoModel / ontoValidate / ontoDerive /
+ * ontoKnowledge / ontoRuntime（inject 必须列全）。
  */
 
 /** Remote call result: the gateway never rejects; branch on `ok`. */
@@ -51,18 +51,18 @@ interface Window {
 }
 
 window.__ModuleLoader__.load({
-  id: '@caliber/workbench',
+  id: '@dsh-onto/workbench',
   factory(require): PluginModule {
     const React = require('react')
     const h = React.createElement
     const { useState, useEffect, useCallback, useMemo } = React
 
-    const NS = 'caliber.workbench'
-    const PANEL_ID = 'caliber-workbench'
+    const NS = 'dsh-onto.workbench'
+    const PANEL_ID = 'dsh-onto-workbench'
 
     const zh = {
-      panel: 'Caliber',
-      title: 'Caliber 业务本体建模平台',
+      panel: 'dsh-onto',
+      title: 'dsh-onto 业务本体建模平台',
       subtitle: '判定在规则引擎，认定在人工',
       tabPackages: '包管理',
       tabModel: '建模',
@@ -156,8 +156,8 @@ window.__ModuleLoader__.load({
       readme: '建模到运行：建包 → 建模/知识库物化 → 校验 → 签发 → 派生 → 场景运行。ISSUED 只读，改需 fork。',
     }
     const en = {
-      panel: 'Caliber',
-      title: 'Caliber Business Ontology Platform',
+      panel: 'dsh-onto',
+      title: 'dsh-onto Business Ontology Platform',
       subtitle: 'Rules judge; humans decide',
       tabPackages: 'Packages',
       tabModel: 'Modeling',
@@ -281,33 +281,33 @@ window.__ModuleLoader__.load({
      * ═══════════════════════════════════════════════════════════════════ */
 
     const CSS = [
-      '.cw-wrap{display:flex;flex-direction:column;gap:12px;padding:16px 20px 40px;color:var(--dsw-alias-label-primary,#1c2333);font-family:var(--dsw-font-family);max-width:1080px;margin:0 auto;}',
-      '.cw-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}',
-      '.cw-h1{margin:0;font-size:19px;font-weight:700;}',
-      '.cw-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);}',
-      '.cw-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--dsw-alias-line,#e5e7eb);padding-bottom:8px;}',
-      '.cw-tab{padding:6px 14px;border-radius:8px;border:1px solid var(--dsw-alias-line,#e5e7eb);background:transparent;cursor:pointer;font-size:13px;}',
-      '.cw-tab.on{background:var(--dsw-alias-brand,#3b6fd4);color:#fff;border-color:transparent;}',
-      '.cw-card{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;}',
-      '.cw-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
-      '.cw-label{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);min-width:64px;}',
-      '.cw-in{padding:6px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:13px;flex:1;min-width:120px;background:transparent;color:inherit;}',
-      '.cw-btn{padding:6px 14px;border-radius:8px;border:1px solid var(--dsw-alias-brand,#3b6fd4);background:var(--dsw-alias-brand,#3b6fd4);color:#fff;cursor:pointer;font-size:13px;}',
-      '.cw-btn.ghost{background:transparent;color:var(--dsw-alias-brand,#3b6fd4);}',
-      '.cw-btn:disabled{opacity:.5;cursor:default;}',
-      '.cw-table{width:100%;border-collapse:collapse;font-size:12.5px;}',
-      '.cw-table th,.cw-table td{border-bottom:1px solid var(--dsw-alias-line,#e5e7eb);padding:6px 8px;text-align:left;vertical-align:top;}',
-      '.cw-table th{color:var(--dsw-alias-label-secondary,#6b7280);font-weight:600;}',
-      '.cw-tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;background:var(--dsw-alias-fill,#eef2ff);margin-right:4px;}',
-      '.cw-tag.warn{background:#fef3c7;color:#92400e;}',
-      '.cw-tag.err{background:#fee2e2;color:#b91c1c;}',
-      '.cw-tag.ok{background:#dcfce7;color:#166534;}',
-      '.cw-mono{font-family:var(--dsw-font-mono,monospace);font-size:12px;white-space:pre-wrap;word-break:break-all;}',
-      '.cw-h2{margin:0;font-size:15px;font-weight:650;}',
-      '.cw-note{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);line-height:1.6;}',
-      '.cw-textarea{width:100%;min-height:110px;padding:8px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:12px;font-family:var(--dsw-font-mono,monospace);background:transparent;color:inherit;box-sizing:border-box;}',
-      '.cw-sel{padding:6px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:13px;background:transparent;color:inherit;}',
-      '.cw-stat{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:8px;background:var(--dsw-alias-fill,#f3f4f6);font-size:12px;}',
+      '.ow-wrap{display:flex;flex-direction:column;gap:12px;padding:16px 20px 40px;color:var(--dsw-alias-label-primary,#1c2333);font-family:var(--dsw-font-family);max-width:1080px;margin:0 auto;}',
+      '.ow-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}',
+      '.ow-h1{margin:0;font-size:19px;font-weight:700;}',
+      '.ow-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);}',
+      '.ow-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--dsw-alias-line,#e5e7eb);padding-bottom:8px;}',
+      '.ow-tab{padding:6px 14px;border-radius:8px;border:1px solid var(--dsw-alias-line,#e5e7eb);background:transparent;cursor:pointer;font-size:13px;}',
+      '.ow-tab.on{background:var(--dsw-alias-brand,#3b6fd4);color:#fff;border-color:transparent;}',
+      '.ow-card{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;}',
+      '.ow-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
+      '.ow-label{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);min-width:64px;}',
+      '.ow-in{padding:6px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:13px;flex:1;min-width:120px;background:transparent;color:inherit;}',
+      '.ow-btn{padding:6px 14px;border-radius:8px;border:1px solid var(--dsw-alias-brand,#3b6fd4);background:var(--dsw-alias-brand,#3b6fd4);color:#fff;cursor:pointer;font-size:13px;}',
+      '.ow-btn.ghost{background:transparent;color:var(--dsw-alias-brand,#3b6fd4);}',
+      '.ow-btn:disabled{opacity:.5;cursor:default;}',
+      '.ow-table{width:100%;border-collapse:collapse;font-size:12.5px;}',
+      '.ow-table th,.ow-table td{border-bottom:1px solid var(--dsw-alias-line,#e5e7eb);padding:6px 8px;text-align:left;vertical-align:top;}',
+      '.ow-table th{color:var(--dsw-alias-label-secondary,#6b7280);font-weight:600;}',
+      '.ow-tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;background:var(--dsw-alias-fill,#eef2ff);margin-right:4px;}',
+      '.ow-tag.warn{background:#fef3c7;color:#92400e;}',
+      '.ow-tag.err{background:#fee2e2;color:#b91c1c;}',
+      '.ow-tag.ok{background:#dcfce7;color:#166534;}',
+      '.ow-mono{font-family:var(--dsw-font-mono,monospace);font-size:12px;white-space:pre-wrap;word-break:break-all;}',
+      '.ow-h2{margin:0;font-size:15px;font-weight:650;}',
+      '.ow-note{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);line-height:1.6;}',
+      '.ow-textarea{width:100%;min-height:110px;padding:8px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:12px;font-family:var(--dsw-font-mono,monospace);background:transparent;color:inherit;box-sizing:border-box;}',
+      '.ow-sel{padding:6px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:13px;background:transparent;color:inherit;}',
+      '.ow-stat{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:8px;background:var(--dsw-alias-fill,#f3f4f6);font-size:12px;}',
     ].join('\n')
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -315,15 +315,15 @@ window.__ModuleLoader__.load({
      * ═══════════════════════════════════════════════════════════════════ */
 
     function Tag(props: { text: string; tone?: 'ok' | 'warn' | 'err' }) {
-      const cls = props.tone ? `cw-tag ${props.tone}` : 'cw-tag'
+      const cls = props.tone ? `ow-tag ${props.tone}` : 'ow-tag'
       return h('span', { className: cls }, props.text)
     }
 
     function Row(props: { label?: string; children?: ReactNode }) {
       return h(
         'div',
-        { className: 'cw-row' },
-        props.label ? h('span', { className: 'cw-label' }, props.label) : null,
+        { className: 'ow-row' },
+        props.label ? h('span', { className: 'ow-label' }, props.label) : null,
         props.children,
       )
     }
@@ -331,8 +331,8 @@ window.__ModuleLoader__.load({
     function Card(props: { title?: string; children?: ReactNode }) {
       return h(
         'div',
-        { className: 'cw-card' },
-        props.title ? h('h3', { className: 'cw-h2' }, props.title) : null,
+        { className: 'ow-card' },
+        props.title ? h('h3', { className: 'ow-h2' }, props.title) : null,
         props.children,
       )
     }
@@ -368,11 +368,11 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
 
-      const api = apis.remote['caliberWorkspace']
+      const api = apis.remote['ontoWorkspace']
       const call = useCallback(
         async (label: string, fn: () => Promise<unknown>) => {
           if (!api) {
-            setError('remote caliberWorkspace missing')
+            setError('remote ontoWorkspace missing')
             return
           }
           setBusy(label)
@@ -391,20 +391,20 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'cw-card' },
-        h('h3', { className: 'cw-h2' }, t('tabPackages')),
-        h('p', { className: 'cw-note' }, t('readme')),
-        error ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, error) : null,
+        { className: 'ow-card' },
+        h('h3', { className: 'ow-h2' }, t('tabPackages')),
+        h('p', { className: 'ow-note' }, t('readme')),
+        error ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, error) : null,
         h(
           Row,
           { label: t('create') },
-          h('input', { className: 'cw-in', placeholder: t('name'), value: name, onChange: (e: { target: { value: string } }) => setName(e.target.value) }),
-          h('input', { className: 'cw-in', placeholder: t('version'), value: version, onChange: (e: { target: { value: string } }) => setVersion(e.target.value) }),
-          h('input', { className: 'cw-in', placeholder: t('domain'), value: domain, onChange: (e: { target: { value: string } }) => setDomain(e.target.value) }),
+          h('input', { className: 'ow-in', placeholder: t('name'), value: name, onChange: (e: { target: { value: string } }) => setName(e.target.value) }),
+          h('input', { className: 'ow-in', placeholder: t('version'), value: version, onChange: (e: { target: { value: string } }) => setVersion(e.target.value) }),
+          h('input', { className: 'ow-in', placeholder: t('domain'), value: domain, onChange: (e: { target: { value: string } }) => setDomain(e.target.value) }),
           h(
             'button',
             {
-              className: 'cw-btn',
+              className: 'ow-btn',
               disabled: !name || !domain || !!busy,
               onClick: () =>
                 void call('create', async () => {
@@ -416,7 +416,7 @@ window.__ModuleLoader__.load({
         ),
         h(
           'table',
-          { className: 'cw-table' },
+          { className: 'ow-table' },
           h(
             'thead',
             null,
@@ -449,13 +449,13 @@ window.__ModuleLoader__.load({
                       'td',
                       null,
                       h('button', {
-                        className: 'cw-btn ghost',
+                        className: 'ow-btn ghost',
                         onClick: () => props.setSelected({ name: v.name, version: v.version }),
                       }, t('select')),
                       ' ',
                       v.status === 'DRAFT'
                         ? h('button', {
-                            className: 'cw-btn ghost',
+                            className: 'ow-btn ghost',
                             disabled: !!busy,
                             onClick: () =>
                               void call('review', async () => {
@@ -465,7 +465,7 @@ window.__ModuleLoader__.load({
                         : null,
                       v.status === 'IN_REVIEW'
                         ? h('button', {
-                            className: 'cw-btn ghost',
+                            className: 'ow-btn ghost',
                             disabled: !!busy || !issuedBy.trim(),
                             title: t('issueBy'),
                             onClick: () =>
@@ -481,7 +481,7 @@ window.__ModuleLoader__.load({
                         : null,
                       ' ',
                       h('button', {
-                        className: 'cw-btn ghost',
+                        className: 'ow-btn ghost',
                         disabled: !!busy || !forkTo.trim(),
                         onClick: () =>
                           void call('fork', async () => {
@@ -490,7 +490,7 @@ window.__ModuleLoader__.load({
                       }, t('fork')),
                       ' ',
                       h('button', {
-                        className: 'cw-btn ghost',
+                        className: 'ow-btn ghost',
                         disabled: !!busy,
                         onClick: () =>
                           void call('export', async () => {
@@ -506,30 +506,30 @@ window.__ModuleLoader__.load({
         h(
           Row,
           { label: t('issueBy') },
-          h('input', { className: 'cw-in', value: issuedBy, onChange: (e: { target: { value: string } }) => setIssuedBy(e.target.value) }),
+          h('input', { className: 'ow-in', value: issuedBy, onChange: (e: { target: { value: string } }) => setIssuedBy(e.target.value) }),
           h('input', {
-            className: 'cw-in',
+            className: 'ow-in',
             placeholder: t('fork') + ' → ' + t('version'),
             value: forkTo,
             onChange: (e: { target: { value: string } }) => setForkTo(e.target.value),
           }),
         ),
         exportText
-          ? h('div', null, h('div', { className: 'cw-label' }, t('exportBtn')), h('pre', { className: 'cw-mono' }, exportText))
+          ? h('div', null, h('div', { className: 'ow-label' }, t('exportBtn')), h('pre', { className: 'ow-mono' }, exportText))
           : null,
         h(
           Card,
           { title: t('importBtn') },
-          h('p', { className: 'cw-note' }, t('importHint')),
+          h('p', { className: 'ow-note' }, t('importHint')),
           h('textarea', {
-            className: 'cw-textarea',
+            className: 'ow-textarea',
             value: importText,
             onChange: (e: { target: { value: string } }) => setImportText(e.target.value),
           }),
           h(
             'button',
             {
-              className: 'cw-btn',
+              className: 'ow-btn',
               disabled: !!busy || !importText.trim(),
               onClick: () =>
                 void call('import', async () => {
@@ -549,15 +549,15 @@ window.__ModuleLoader__.load({
         'slots',
         'locale',
         'remote',
-        'remote.caliberWorkspace',
-        'remote.caliberModel',
-        'remote.caliberValidate',
-        'remote.caliberDerive',
-        'remote.caliberKnowledge',
-        'remote.caliberRuntime',
+        'remote.ontoWorkspace',
+        'remote.ontoModel',
+        'remote.ontoValidate',
+        'remote.ontoDerive',
+        'remote.ontoKnowledge',
+        'remote.ontoRuntime',
       ],
       apply(ctx: Ctx) {
-        ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'caliber-workbench: dictionaries')
+        ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-onto-workbench: dictionaries')
         const t = ctx.locale.bind(NS)
 
         ctx.effect(() => {
@@ -567,7 +567,7 @@ window.__ModuleLoader__.load({
           return () => {
             style.remove()
           }
-        }, 'caliber-workbench: styles')
+        }, 'dsh-onto-workbench: styles')
 
         function PanelIcon({ size }: { size?: number }) {
           const px = size || 20
@@ -606,7 +606,7 @@ window.__ModuleLoader__.load({
           const [evidence, setEvidence] = useState('')
           const [busy, setBusy] = useState('')
           const [error, setError] = useState('')
-          const api = apis.remote['caliberModel']
+          const api = apis.remote['ontoModel']
 
           const reload = useCallback(async () => {
             if (!api || !selected) return
@@ -644,7 +644,7 @@ window.__ModuleLoader__.load({
             }
           }
 
-          if (!selected) return h('div', { className: 'cw-card' }, h('p', { className: 'cw-note' }, t('none')))
+          if (!selected) return h('div', { className: 'ow-card' }, h('p', { className: 'ow-note' }, t('none')))
           const model = (pkg ?? {}) as {
             objects?: Array<{ id: string; name: string }>
             relations?: Array<{ id: string; name: string }>
@@ -660,20 +660,20 @@ window.__ModuleLoader__.load({
 
           return h(
             'div',
-            { className: 'cw-card' },
-            h('h3', { className: 'cw-h2' }, t('tabModel')),
-            error ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, error) : null,
+            { className: 'ow-card' },
+            h('h3', { className: 'ow-h2' }, t('tabModel')),
+            error ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, error) : null,
             h(
               'div',
-              { className: 'cw-row' },
-              h('span', { className: 'cw-stat' }, `${t('objects')} ${model.objects?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('relations')} ${model.relations?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('dictionaries')} ${model.dictionaries?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('behaviors')} ${model.behaviors?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('scoreRules')} ${model.scoreRules?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('exclusionRules')} ${model.exclusionRules?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('skillTemplates')} ${model.skillTemplates?.length ?? 0}`),
-              h('span', { className: 'cw-stat' }, `${t('scenarios')} ${model.scenarios?.length ?? 0}`),
+              { className: 'ow-row' },
+              h('span', { className: 'ow-stat' }, `${t('objects')} ${model.objects?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('relations')} ${model.relations?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('dictionaries')} ${model.dictionaries?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('behaviors')} ${model.behaviors?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('scoreRules')} ${model.scoreRules?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('exclusionRules')} ${model.exclusionRules?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('skillTemplates')} ${model.skillTemplates?.length ?? 0}`),
+              h('span', { className: 'ow-stat' }, `${t('scenarios')} ${model.scenarios?.length ?? 0}`),
             ),
             h(
               Card,
@@ -681,12 +681,12 @@ window.__ModuleLoader__.load({
               h(
                 Row,
                 null,
-                h('input', { className: 'cw-in', placeholder: t('objectName'), value: objName, onChange: (e: { target: { value: string } }) => setObjName(e.target.value) }),
-                h('input', { className: 'cw-in', placeholder: t('attrNames'), value: attrNames, onChange: (e: { target: { value: string } }) => setAttrNames(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('objectName'), value: objName, onChange: (e: { target: { value: string } }) => setObjName(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('attrNames'), value: attrNames, onChange: (e: { target: { value: string } }) => setAttrNames(e.target.value) }),
                 h(
                   'button',
                   {
-                    className: 'cw-btn',
+                    className: 'ow-btn',
                     disabled: !!busy || !objName.trim(),
                     onClick: () =>
                       void savePkg((p) => {
@@ -710,15 +710,15 @@ window.__ModuleLoader__.load({
               h(
                 Row,
                 null,
-                h('input', { className: 'cw-in', placeholder: t('ruleName'), value: ruleName, onChange: (e: { target: { value: string } }) => setRuleName(e.target.value) }),
-                h('input', { className: 'cw-in', style: { maxWidth: 90 }, placeholder: t('weight'), value: weight, onChange: (e: { target: { value: string } }) => setWeight(e.target.value) }),
-                h('input', { className: 'cw-in', placeholder: t('expression'), value: expression, onChange: (e: { target: { value: string } }) => setExpression(e.target.value) }),
-                h('input', { className: 'cw-in', style: { maxWidth: 90 }, placeholder: t('threshold'), value: threshold, onChange: (e: { target: { value: string } }) => setThreshold(e.target.value) }),
-                h('input', { className: 'cw-in', placeholder: t('evidence'), value: evidence, onChange: (e: { target: { value: string } }) => setEvidence(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('ruleName'), value: ruleName, onChange: (e: { target: { value: string } }) => setRuleName(e.target.value) }),
+                h('input', { className: 'ow-in', style: { maxWidth: 90 }, placeholder: t('weight'), value: weight, onChange: (e: { target: { value: string } }) => setWeight(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('expression'), value: expression, onChange: (e: { target: { value: string } }) => setExpression(e.target.value) }),
+                h('input', { className: 'ow-in', style: { maxWidth: 90 }, placeholder: t('threshold'), value: threshold, onChange: (e: { target: { value: string } }) => setThreshold(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('evidence'), value: evidence, onChange: (e: { target: { value: string } }) => setEvidence(e.target.value) }),
                 h(
                   'button',
                   {
-                    className: 'cw-btn',
+                    className: 'ow-btn',
                     disabled: !!busy || !ruleName.trim(),
                     onClick: () =>
                       void savePkg((p) => {
@@ -745,24 +745,24 @@ window.__ModuleLoader__.load({
                 Row,
                 null,
                 h('select', {
-                  className: 'cw-sel',
+                  className: 'ow-sel',
                   value: yamlPath,
                   onChange: (e: { target: { value: string } }) => {
                     setYamlPath(e.target.value)
                     setYamlText(files[e.target.value] ?? '')
                   },
                 }, ...Object.keys(files).map((k) => h('option', { key: k, value: k }, k))),
-                h('button', { className: 'cw-btn ghost', onClick: () => setYamlText(files[yamlPath] ?? '') }, t('refresh')),
+                h('button', { className: 'ow-btn ghost', onClick: () => setYamlText(files[yamlPath] ?? '') }, t('refresh')),
               ),
               h('textarea', {
-                className: 'cw-textarea',
+                className: 'ow-textarea',
                 value: yamlText,
                 onChange: (e: { target: { value: string } }) => setYamlText(e.target.value),
               }),
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy || !yamlPath.trim(),
                   onClick: () =>
                     void (async () => {
@@ -804,7 +804,7 @@ window.__ModuleLoader__.load({
           const [error, setError] = useState('')
           const [info, setInfo] = useState('')
           const [picked, setPicked] = useState<string[]>([])
-          const api = apis.remote['caliberKnowledge']
+          const api = apis.remote['ontoKnowledge']
 
           const packageId = selected ? selected.name : ''
 
@@ -842,11 +842,11 @@ window.__ModuleLoader__.load({
 
           return h(
             'div',
-            { className: 'cw-card' },
-            h('h3', { className: 'cw-h2' }, t('tabKnowledge')),
-            error ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, error) : null,
-            info ? h('p', { className: 'cw-note', style: { color: '#166534' } }, info) : null,
-            !selected ? h('p', { className: 'cw-note' }, t('none')) : null,
+            { className: 'ow-card' },
+            h('h3', { className: 'ow-h2' }, t('tabKnowledge')),
+            error ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, error) : null,
+            info ? h('p', { className: 'ow-note', style: { color: '#166534' } }, info) : null,
+            !selected ? h('p', { className: 'ow-note' }, t('none')) : null,
             h(
               Card,
               { title: t('upload') },
@@ -854,14 +854,14 @@ window.__ModuleLoader__.load({
                 Row,
                 null,
                 h('select', {
-                  className: 'cw-sel',
+                  className: 'ow-sel',
                   value: sourceType,
                   onChange: (e: { target: { value: string } }) => setSourceType(e.target.value),
                 }, ...['LEGACY_SYS', 'CASE_SAMPLE', 'POLICY', 'SCHEMA_API', 'WORK_ORDER'].map((k) => h('option', { key: k, value: k }, k))),
-                h('input', { className: 'cw-in', placeholder: t('sourceName'), value: sourceName, onChange: (e: { target: { value: string } }) => setSourceName(e.target.value) }),
+                h('input', { className: 'ow-in', placeholder: t('sourceName'), value: sourceName, onChange: (e: { target: { value: string } }) => setSourceName(e.target.value) }),
               ),
               h('textarea', {
-                className: 'cw-textarea',
+                className: 'ow-textarea',
                 placeholder: t('content'),
                 value: content,
                 onChange: (e: { target: { value: string } }) => setContent(e.target.value),
@@ -869,7 +869,7 @@ window.__ModuleLoader__.load({
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy || !sourceName.trim() || !content.trim() || !selected,
                   onClick: () =>
                     void act('upload', async () => {
@@ -891,7 +891,7 @@ window.__ModuleLoader__.load({
               { title: t('tabKnowledge') },
               h(
                 'table',
-                { className: 'cw-table' },
+                { className: 'ow-table' },
                 h('thead', null, h('tr', null,
                   h('th', null, t('sourceName')), h('th', null, t('sourceType')), h('th', null, t('status')), h('th', null, t('actions'))),
                 ),
@@ -911,7 +911,7 @@ window.__ModuleLoader__.load({
                             'td',
                             null,
                             h('button', {
-                              className: 'cw-btn ghost',
+                              className: 'ow-btn ghost',
                               disabled: !!busy,
                               onClick: () =>
                                 void act('parse', async () => {
@@ -921,7 +921,7 @@ window.__ModuleLoader__.load({
                             }, t('parse')),
                             ' ',
                             h('button', {
-                              className: 'cw-btn ghost',
+                              className: 'ow-btn ghost',
                               disabled: !!busy,
                               onClick: () =>
                                 void act('parseApi', async () => {
@@ -940,7 +940,7 @@ window.__ModuleLoader__.load({
               { title: t('queue') },
               h(
                 'table',
-                { className: 'cw-table' },
+                { className: 'ow-table' },
                 h('thead', null, h('tr', null,
                   h('th', null, t('layer')), h('th', null, t('kind')), h('th', null, t('name')),
                   h('th', null, t('confidence')), h('th', null, t('status')), h('th', null, t('actions'))),
@@ -968,21 +968,21 @@ window.__ModuleLoader__.load({
                             null,
                             status === 'pending'
                               ? h('button', {
-                                  className: 'cw-btn ghost',
+                                  className: 'ow-btn ghost',
                                   disabled: !!busy,
                                   onClick: () => void act('approve', async () => { unwrap(await api!.reviewCandidate({ id, action: 'approve' })) }),
                                 }, t('approve'))
                               : null,
                             status === 'pending'
                               ? h('button', {
-                                  className: 'cw-btn ghost',
+                                  className: 'ow-btn ghost',
                                   disabled: !!busy,
                                   onClick: () => void act('reject', async () => { unwrap(await api!.reviewCandidate({ id, action: 'reject' })) }),
                                 }, t('reject'))
                               : null,
                             status === 'approved'
                               ? h('button', {
-                                  className: 'cw-btn ghost',
+                                  className: 'ow-btn ghost',
                                   disabled: !!busy,
                                   onClick: () => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id])),
                                 }, picked.includes(id) ? '✓' : '+')
@@ -995,7 +995,7 @@ window.__ModuleLoader__.load({
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy || picked.length === 0 || !selected,
                   onClick: () =>
                     void act('materialize', async () => {
@@ -1040,23 +1040,23 @@ window.__ModuleLoader__.load({
             }
           }
 
-          if (!selected) return h('div', { className: 'cw-card' }, h('p', { className: 'cw-note' }, t('none')))
-          const vApi = apis.remote['caliberValidate']
-          const dApi = apis.remote['caliberDerive']
+          if (!selected) return h('div', { className: 'ow-card' }, h('p', { className: 'ow-note' }, t('none')))
+          const vApi = apis.remote['ontoValidate']
+          const dApi = apis.remote['ontoDerive']
           const r = report as { score?: number; passed?: boolean; errors?: Array<Record<string, string>>; warnings?: Array<Record<string, string>>; info?: Array<Record<string, string>> } | null
 
           return h(
             'div',
-            { className: 'cw-card' },
-            h('h3', { className: 'cw-h2' }, t('tabValidate')),
-            error ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, error) : null,
+            { className: 'ow-card' },
+            h('h3', { className: 'ow-h2' }, t('tabValidate')),
+            error ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, error) : null,
             h(
               'div',
-              { className: 'cw-row' },
+              { className: 'ow-row' },
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy,
                   onClick: () =>
                     void act('validate', async () => {
@@ -1069,7 +1069,7 @@ window.__ModuleLoader__.load({
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy,
                   onClick: () =>
                     void act('derive', async () => {
@@ -1084,7 +1084,7 @@ window.__ModuleLoader__.load({
               h(
                 'button',
                 {
-                  className: 'cw-btn ghost',
+                  className: 'ow-btn ghost',
                   disabled: !!busy,
                   onClick: () =>
                     void act('gate', async () => {
@@ -1095,11 +1095,11 @@ window.__ModuleLoader__.load({
                 busy === 'gate' ? t('busy') : t('gateBtn'),
               ),
             ),
-            deriveInfo ? h('p', { className: 'cw-note' }, deriveInfo) : null,
+            deriveInfo ? h('p', { className: 'ow-note' }, deriveInfo) : null,
             gate
               ? h(
                   'p',
-                  { className: 'cw-note' },
+                  { className: 'ow-note' },
                   (gate['ok'] ? t('gateOk') : `${t('drift')}: ${String(gate['reason'] ?? '')}`),
                 )
               : null,
@@ -1109,19 +1109,19 @@ window.__ModuleLoader__.load({
                   null,
                   h(
                     'div',
-                    { className: 'cw-row' },
+                    { className: 'ow-row' },
                     h(Tag, { text: `${t('score')} ${String(r.score ?? '')}`, tone: r.passed ? 'ok' : 'err' }),
-                    h('span', { className: 'cw-stat' }, `${t('errors')} ${r.errors?.length ?? 0}`),
-                    h('span', { className: 'cw-stat' }, `${t('warnings')} ${r.warnings?.length ?? 0}`),
+                    h('span', { className: 'ow-stat' }, `${t('errors')} ${r.errors?.length ?? 0}`),
+                    h('span', { className: 'ow-stat' }, `${t('warnings')} ${r.warnings?.length ?? 0}`),
                   ),
                   ...(['errors', 'warnings', 'info'] as const).map((level) =>
                     h(
                       'div',
                       { key: level },
-                      h('div', { className: 'cw-label' }, t(level)),
+                      h('div', { className: 'ow-label' }, t(level)),
                       h(
                         'table',
-                        { className: 'cw-table' },
+                        { className: 'ow-table' },
                         h(
                           'tbody',
                           null,
@@ -1130,7 +1130,7 @@ window.__ModuleLoader__.load({
                               'tr',
                               { key: i },
                               h('td', null, h(Tag, { text: issue['code'] ?? '', tone: level === 'errors' ? 'err' : level === 'warnings' ? 'warn' : undefined })),
-                              h('td', { className: 'cw-mono' }, `${issue['where'] ?? ''} ${issue['message'] ?? ''}`),
+                              h('td', { className: 'ow-mono' }, `${issue['where'] ?? ''} ${issue['message'] ?? ''}`),
                             ),
                           ),
                         ),
@@ -1158,7 +1158,7 @@ window.__ModuleLoader__.load({
           const [result, setResult] = useState<Record<string, unknown> | null>(null)
           const [busy, setBusy] = useState('')
           const [error, setError] = useState('')
-          const api = apis.remote['caliberRuntime']
+          const api = apis.remote['ontoRuntime']
 
           useEffect(() => {
             if (!api || !selected) return
@@ -1175,7 +1175,7 @@ window.__ModuleLoader__.load({
             })()
           }, [apis, selected])
 
-          if (!selected) return h('div', { className: 'cw-card' }, h('p', { className: 'cw-note' }, t('none')))
+          if (!selected) return h('div', { className: 'ow-card' }, h('p', { className: 'ow-note' }, t('none')))
           const res = result as {
             humanReviewRequired?: boolean
             reviewGate?: { threshold: number; requireReviewFor: string[] }
@@ -1198,21 +1198,21 @@ window.__ModuleLoader__.load({
 
           return h(
             'div',
-            { className: 'cw-card' },
-            h('h3', { className: 'cw-h2' }, t('tabRun')),
-            error ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, error) : null,
+            { className: 'ow-card' },
+            h('h3', { className: 'ow-h2' }, t('tabRun')),
+            error ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, error) : null,
             h(
               Row,
               { label: t('scenario') },
               h('select', {
-                className: 'cw-sel',
+                className: 'ow-sel',
                 value: scenarioId,
                 onChange: (e: { target: { value: string } }) => setScenarioId(e.target.value),
               }, ...scenarios.map((s) => h('option', { key: s.id, value: s.id }, `${s.name} (${s.id})`))),
               h(
                 'button',
                 {
-                  className: 'cw-btn',
+                  className: 'ow-btn',
                   disabled: !!busy || !scenarioId,
                   onClick: () =>
                     void (async () => {
@@ -1234,9 +1234,9 @@ window.__ModuleLoader__.load({
                 busy === 'run' ? t('busy') : t('runBtn'),
               ),
             ),
-            h('div', { className: 'cw-label' }, t('dataset')),
+            h('div', { className: 'ow-label' }, t('dataset')),
             h('textarea', {
-              className: 'cw-textarea',
+              className: 'ow-textarea',
               style: { minHeight: 140 },
               value: datasetText,
               onChange: (e: { target: { value: string } }) => setDatasetText(e.target.value),
@@ -1244,10 +1244,10 @@ window.__ModuleLoader__.load({
             res
               ? h(
                   'div',
-                  { className: 'cw-card' },
+                  { className: 'ow-card' },
                   h(
                     'div',
-                    { className: 'cw-row' },
+                    { className: 'ow-row' },
                     h(Tag, { text: t('humanReview'), tone: 'warn' }),
                     h(Tag, {
                       text: `${t('audit')}: ${res.audit?.passed ? t('passed') : t('failed')}`,
@@ -1257,11 +1257,11 @@ window.__ModuleLoader__.load({
                       text: `${t('forbidden')}: ${res.audit?.forbiddenPhraseHits?.length ?? 0}`,
                       tone: (res.audit?.forbiddenPhraseHits?.length ?? 0) === 0 ? 'ok' : 'err',
                     }),
-                    h('span', { className: 'cw-stat' }, `review≤${String(res.reviewGate?.threshold ?? '')}: ${(res.reviewGate?.requireReviewFor ?? []).join(', ') || '—'}`),
+                    h('span', { className: 'ow-stat' }, `review≤${String(res.reviewGate?.threshold ?? '')}: ${(res.reviewGate?.requireReviewFor ?? []).join(', ') || '—'}`),
                   ),
                   h(
                     'table',
-                    { className: 'cw-table' },
+                    { className: 'ow-table' },
                     h('thead', null, h('tr', null,
                       h('th', null, 'ID'), h('th', null, t('riskScore')), h('th', null, t('hits')),
                       h('th', null, t('evidenceChains')), h('th', null, t('pending')), h('th', null, t('narrative'))),
@@ -1275,20 +1275,20 @@ window.__ModuleLoader__.load({
                           { key: c.candidateId },
                           h('td', null, c.candidateId),
                           h('td', null, h(Tag, { text: fmt(c.riskScore), tone: c.riskScore >= 0.75 ? 'err' : undefined })),
-                          h('td', { className: 'cw-mono' }, (c.hitRuleIds ?? []).join('\n') || '—'),
-                          h('td', { className: 'cw-mono' }, (c.evidenceChains ?? []).map((e) => `${e.ruleId}: ${e.evidence}`).join('\n') || '—'),
-                          h('td', { className: 'cw-mono' }, (c.pendingChecks ?? []).map((p) => p.note).join('\n') || '—'),
-                          h('td', { className: 'cw-mono' }, (c.narrative ?? []).join('\n')),
+                          h('td', { className: 'ow-mono' }, (c.hitRuleIds ?? []).join('\n') || '—'),
+                          h('td', { className: 'ow-mono' }, (c.evidenceChains ?? []).map((e) => `${e.ruleId}: ${e.evidence}`).join('\n') || '—'),
+                          h('td', { className: 'ow-mono' }, (c.pendingChecks ?? []).map((p) => p.note).join('\n') || '—'),
+                          h('td', { className: 'ow-mono' }, (c.narrative ?? []).join('\n')),
                         ),
                       ),
                     ),
                   ),
                   (res.excluded ?? []).length > 0
-                    ? h('p', { className: 'cw-note' }, `${t('excluded')}: ${(res.excluded ?? []).map((x) => `${cand(x)}←${x.ruleId}`).join(', ')}`)
+                    ? h('p', { className: 'ow-note' }, `${t('excluded')}: ${(res.excluded ?? []).map((x) => `${cand(x)}←${x.ruleId}`).join(', ')}`)
                     : null,
                   h(
                     'table',
-                    { className: 'cw-table' },
+                    { className: 'ow-table' },
                     h('thead', null, h('tr', null, h('th', null, t('audit')), h('th', null, t('status')), h('th', null, t('info')))),
                     h(
                       'tbody',
@@ -1299,7 +1299,7 @@ window.__ModuleLoader__.load({
                           { key: a.check },
                           h('td', null, a.check),
                           h('td', null, h(Tag, { text: a.closed ? t('passed') : t('failed'), tone: a.closed ? 'ok' : 'err' })),
-                          h('td', { className: 'cw-mono' }, a.detail),
+                          h('td', { className: 'ow-mono' }, a.detail),
                         ),
                       ),
                     ),
@@ -1325,9 +1325,9 @@ window.__ModuleLoader__.load({
           const [listError, setListError] = useState('')
 
           const reload = useCallback(async () => {
-            const api = apis.remote['caliberWorkspace']
+            const api = apis.remote['ontoWorkspace']
             if (!api) {
-              setListError('remote.caliberWorkspace missing')
+              setListError('remote.ontoWorkspace missing')
               return
             }
             try {
@@ -1355,25 +1355,25 @@ window.__ModuleLoader__.load({
 
           return h(
             'div',
-            { className: 'cw-wrap' },
+            { className: 'ow-wrap' },
             h(
               'div',
-              { className: 'cw-head' },
-              h('h2', { className: 'cw-h1' }, t('title')),
-              h('span', { className: 'cw-sub' }, t('subtitle')),
+              { className: 'ow-head' },
+              h('h2', { className: 'ow-h1' }, t('title')),
+              h('span', { className: 'ow-sub' }, t('subtitle')),
               selected
-                ? h('span', { className: 'cw-stat' }, `${t('selected')}: ${selected.name}@${selected.version}`)
-                : h('span', { className: 'cw-stat' }, t('none')),
+                ? h('span', { className: 'ow-stat' }, `${t('selected')}: ${selected.name}@${selected.version}`)
+                : h('span', { className: 'ow-stat' }, t('none')),
             ),
             h(
               'div',
-              { className: 'cw-tabs' },
+              { className: 'ow-tabs' },
               ...tabs.map(([key, label]) =>
                 h(
                   'button',
                   {
                     key,
-                    className: tab === key ? 'cw-tab on' : 'cw-tab',
+                    className: tab === key ? 'ow-tab on' : 'ow-tab',
                     onClick: () => setTab(key),
                   },
                   label,
@@ -1381,7 +1381,7 @@ window.__ModuleLoader__.load({
               ),
             ),
             listError
-              ? h('p', { className: 'cw-note', style: { color: '#b91c1c' } }, `包列表：${listError}`)
+              ? h('p', { className: 'ow-note', style: { color: '#b91c1c' } }, `包列表：${listError}`)
               : null,
             tab === 'packages'
               ? h(PackagesPanel, { t, apis, versions, reload, selected, setSelected })

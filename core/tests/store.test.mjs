@@ -109,7 +109,7 @@ test('导出/导入归档往返', () => {
   const second = mkWorkspace()
   try {
     const archive = ws.exportVersion('test-pkg', '1.0.0')
-    assert.equal(archive.format, 'caliber-package/1')
+    assert.equal(archive.format, 'dsh-onto-package/1')
     assert.ok(archive.files['package.yaml'])
     const dir2 = second.importVersion(archive)
     assert.ok(dir2.includes('test-pkg'))

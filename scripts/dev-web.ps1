@@ -1,7 +1,7 @@
-# Launch the caliber profile's Web UI from the source checkout.
+# Launch the dsh-onto profile's Web UI from the source checkout.
 param(
     [string]$HarnessDir = (Join-Path $PSScriptRoot '..\..\deepseek-harness'),
-    [string]$ProfileName = 'caliber',
+    [string]$ProfileName = 'dsh-onto',
     [string[]]$ExtraArgs = @()
 )
 

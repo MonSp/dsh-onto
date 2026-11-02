@@ -1,7 +1,7 @@
 {
   "locale": "zh",
   "meta": {
-    "title": "Caliber 后端",
-    "description": "业务本体建模平台统一后端：caliber* wire 服务"
+    "title": "dsh-onto 后端",
+    "description": "业务本体建模平台统一后端：dsh-onto* wire 服务"
   }
 }

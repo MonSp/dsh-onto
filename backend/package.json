@@ -1,9 +1,9 @@
 {
-  "name": "@caliber/backend",
+  "name": "@dsh-onto/backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Caliber 业务本体建模平台统一后端：caliber* wire 服务的唯一宿主落点",
+  "description": "dsh-onto 业务本体建模平台统一后端：dsh-onto* wire 服务的唯一宿主落点",
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
@@ -25,7 +25,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
     "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol",
-    "@caliber/core": "link:../core"
+    "@dsh-onto/core": "link:../core"
   },
   "devDependencies": {
     "@types/node": "^24",

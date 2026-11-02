@@ -1,15 +1,15 @@
-# Inspect the composed profile and hard-assert both @caliber/* packages
+# Inspect the composed profile and hard-assert both @dsh-onto/* packages
 # are present. Missing any expected package exits non-zero.
 param(
     [string]$HarnessDir = (Join-Path $PSScriptRoot '..\..\deepseek-harness'),
-    [string]$ProfileName = 'caliber'
+    [string]$ProfileName = 'dsh-onto'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $Expected = @(
-    '@caliber/backend',
-    '@caliber/workbench'
+    '@dsh-onto/backend',
+    '@dsh-onto/workbench'
 )
 
 $HarnessDir = (Resolve-Path $HarnessDir).Path
@@ -31,7 +31,7 @@ finally {
     Pop-Location
 }
 
-function Test-CaliberPackage {
+function Test-OntoPackage {
     param([string[]]$Lines, [string]$Pkg)
     $patterns = @(
         ("# == $Pkg"),
@@ -49,12 +49,12 @@ function Test-CaliberPackage {
 $missing = @()
 $found = @()
 foreach ($pkg in $Expected) {
-    if (Test-CaliberPackage -Lines $lines -Pkg $pkg) { $found += $pkg }
+    if (Test-OntoPackage -Lines $lines -Pkg $pkg) { $found += $pkg }
     else { $missing += $pkg }
 }
 
 Write-Host ""
-Write-Host ("dump-config: found {0}/{1} expected @caliber/* packages" -f $found.Count, $Expected.Count)
+Write-Host ("dump-config: found {0}/{1} expected @dsh-onto/* packages" -f $found.Count, $Expected.Count)
 if ($missing.Count -eq 0) {
     Write-Host "dump-config: OK - all packages present" -ForegroundColor Green
     exit 0

@@ -1,9 +1,9 @@
 {
-  "name": "@caliber/workbench",
+  "name": "@dsh-onto/workbench",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Caliber 业务本体建模平台工作台：包管理 / 建模 / 知识库 / 校验派生 / 场景运行",
+  "description": "dsh-onto 业务本体建模平台工作台：包管理 / 建模 / 知识库 / 校验派生 / 场景运行",
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },

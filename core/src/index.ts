@@ -1,5 +1,5 @@
 /**
- * @caliber/core — 业务本体建模平台核心引擎。
+ * @dsh-onto/core — 业务本体建模平台核心引擎。
  * 判定在规则引擎，认定在人工。
  */
 export * from './types.js'

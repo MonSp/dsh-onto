@@ -1,12 +1,12 @@
-# Create (or reset) the `caliber` dsh profile from the shipped `web`
-# template and install the @caliber/backend + @caliber/workbench bundles,
+# Create (or reset) the `dsh-onto` dsh profile from the shipped `web`
+# template and install the @dsh-onto/backend + @dsh-onto/workbench bundles,
 # then seed the workspace with the example business ontology packages.
 #
 # Run from anywhere; requires the deepseek-harness source checkout at
 # $HarnessDir with dependencies installed (pnpm install + pnpm run build).
 param(
     [string]$HarnessDir = (Join-Path $PSScriptRoot '..\..\deepseek-harness'),
-    [string]$ProfileName = 'caliber',
+    [string]$ProfileName = 'dsh-onto',
     # Reset wipes any user patches previously added to the profile.
     [switch]$Reset
 )
@@ -67,11 +67,11 @@ try {
     if (-not $userHome) { $userHome = $HOME }
     if (-not $userHome) { $userHome = $env:USERPROFILE }
     if (-not $userHome) {
-        Write-Host "seed skipped: cannot resolve user home; copy packages/* manually into <profile>/caliber/workspace/packages/" -ForegroundColor Yellow
+        Write-Host "seed skipped: cannot resolve user home; copy packages/* manually into <profile>/onto/workspace/packages/" -ForegroundColor Yellow
     }
     else {
         $profilesRoot = Join-Path $userHome '.dsh\profiles'
-        $dataDir = Join-Path (Join-Path $profilesRoot $ProfileName) 'caliber'
+        $dataDir = Join-Path (Join-Path $profilesRoot $ProfileName) 'dsh-onto'
         $wsPackages = Join-Path $dataDir 'workspace\packages'
         $seedMap = @(
             @{ Src = 'aml'; Dst = 'aml-analysis' },
@@ -89,7 +89,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Profile '$ProfileName' is ready (@caliber/backend + @caliber/workbench)."
+    Write-Host "Profile '$ProfileName' is ready (@dsh-onto/backend + @dsh-onto/workbench)."
     Write-Host "  Launch:  scripts\dev-web.ps1"
     Write-Host "  Inspect: pnpm dsh --profile $ProfileName --dump-config"
 }
