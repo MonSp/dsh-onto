@@ -1,0 +1,3 @@
+- insert:
+    - id: onto-workbench
+      name: '@onto/workbench'

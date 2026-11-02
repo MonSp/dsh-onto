@@ -1,0 +1,37 @@
+kind: O1ObjectTypes
+objects:
+  - id: OBJ-MED-PATIENT
+    name: 患者
+    idRule: "<his_code>:<patient_no>"
+    attributes:
+      - { name: patientNo, type: string, required: true }
+      - { name: gender, type: string }
+      - { name: birthDate, type: date }
+      - { name: weightKg, type: float }
+    lifecycle: [inpatient, outpatient, discharged]
+
+  - id: OBJ-MED-DRUG
+    name: 药品
+    idRule: "<his_code>:<drug_code>"
+    attributes:
+      - { name: drugCode, type: string, required: true }
+      - { name: drugName, type: string }
+      - { name: category, type: enum, enumValuesRef: dict-drug-category }
+      - { name: maxDailyDose, type: float }
+
+  - id: OBJ-MED-ORDER
+    name: 医嘱
+    idRule: "<his_code>:<order_no>"
+    attributes:
+      - { name: orderNo, type: string, required: true }
+      - { name: dose, type: float }
+      - { name: frequency, type: string }
+      - { name: startAt, type: date }
+      - { name: status, type: enum, enumValuesRef: dict-order-status }
+
+  - id: OBJ-MED-DEPT
+    name: 科室
+    idRule: "<his_code>:<dept_code>"
+    attributes:
+      - { name: deptCode, type: string, required: true }
+      - { name: deptName, type: string }

@@ -1,0 +1,63 @@
+kind: O1ObjectTypes
+objects:
+  - id: OBJ-AML-CUSTOMER
+    name: 客户
+    idRule: "<bank_code>:<cust_no>"
+    attributes:
+      - { name: custNo, type: string, required: true }
+      - { name: custName, type: string }
+      - { name: custType, type: enum, enumValuesRef: dict-cust-type }
+      - { name: idType, type: string }
+      - { name: idNo, type: string }
+      - { name: openDate, type: date }
+    lifecycle: [active, frozen, closed]
+    description: 对公/个人客户的统一登记对象
+
+  - id: OBJ-AML-ACCOUNT
+    name: 账户
+    idRule: "<bank_code>:<acct_no>"
+    attributes:
+      - { name: acctNo, type: string, required: true }
+      - { name: acctType, type: enum, enumValuesRef: dict-acct-type }
+      - { name: openDate, type: date }
+      - { name: status, type: string }
+      - { name: ownerRef, type: ref, refObject: OBJ-AML-CUSTOMER }
+    lifecycle: [active, dormant, closed]
+
+  - id: OBJ-AML-TXN
+    name: 交易
+    idRule: "<bank_code>:<txn_id>"
+    attributes:
+      - { name: txnId, type: string, required: true }
+      - { name: amount, type: float, required: true }
+      - { name: currency, type: string }
+      - { name: occurredAt, type: date }
+      - { name: txnType, type: enum, enumValuesRef: dict-txn-type }
+      - { name: channel, type: enum, enumValuesRef: dict-channel }
+      - { name: counterpartyAcct, type: string }
+
+  - id: OBJ-AML-MERCHANT
+    name: 商户
+    idRule: "<bank_code>:<mch_no>"
+    attributes:
+      - { name: mchNo, type: string, required: true }
+      - { name: mchName, type: string }
+      - { name: industry, type: string }
+      - { name: openDate, type: date }
+
+  - id: OBJ-AML-BENEFICIARY
+    name: 受益人
+    idRule: "<bank_code>:<benef_no>"
+    attributes:
+      - { name: benefNo, type: string, required: true }
+      - { name: benefName, type: string }
+      - { name: idNo, type: string }
+
+  - id: OBJ-AML-LIST-HIT
+    name: 名单命中
+    idRule: "<bank_code>:<hit_id>"
+    attributes:
+      - { name: hitId, type: string, required: true }
+      - { name: listName, type: string }
+      - { name: hitAt, type: date }
+      - { name: hitLevel, type: string }

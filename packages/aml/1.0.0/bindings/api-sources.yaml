@@ -1,0 +1,12 @@
+kind: O1ApiSources
+sources:
+  - id: SRC-AML-CORE
+    name: 核心银行系统
+    sourceType: LEGACY_SYS
+    endpoint: "legacy://core-banking"
+    description: 账户、交易流水、客户视图
+  - id: SRC-AML-RISKLIST
+    name: 风险名单库
+    sourceType: SCHEMA_API
+    endpoint: "legacy://risk-lists"
+    description: 名单命中记录

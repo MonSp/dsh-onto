@@ -1,0 +1,55 @@
+kind: DerivedRuleEngineConfig
+llmForbidden: true
+weightSum: 1
+exclusion:
+  - id: RULE-AML-EXCL-SALARY
+    name: 代发工资降权
+    action: downweight
+    factor: 0.3
+    condition: tag == 'salary'
+    order: before-scoring
+  - id: RULE-AML-EXCL-FISCAL
+    name: 财政拨款降权
+    action: downweight
+    factor: 0.2
+    condition: tag == 'fiscal'
+    order: before-scoring
+  - id: RULE-AML-EXCL-WHITELIST
+    name: 已核销白名单
+    action: drop
+    factor: null
+    condition: tag == 'cleared-whitelist'
+    order: before-scoring
+scoring:
+  - id: RULE-AML-SCORE-FANOUT
+    name: 分散转入集中转出
+    weight: 0.25
+    expression: min(1, inboundCount/10) * min(1, outboundAmount/100000)
+    threshold: 0.6
+    evidenceTemplate: 近 {windowDays} 日转入 {inboundCount} 笔、转出 {outboundAmount} 元
+  - id: RULE-AML-SCORE-FASTFLOW
+    name: 快进快出
+    weight: 0.25
+    expression: min(1, fastInOutRatio)
+    threshold: 0.5
+    evidenceTemplate: 快进快出资金占比 {fastInOutRatio}
+  - id: RULE-AML-SCORE-NIGHT
+    name: 夜间占比
+    weight: 0.2
+    expression: min(1, nightRatio)
+    threshold: 0.6
+    evidenceTemplate: 夜间交易占比 {nightRatio}
+  - id: RULE-AML-SCORE-LISTHIT
+    name: 命中名单
+    weight: 0.3
+    expression: min(1, listHitCount)
+    threshold: 1
+    evidenceTemplate: 命中风险名单 {listHitCount} 次
+skillTemplates:
+  - id: SKL-AML-NARRATIVE
+    name: 线索叙述
+    weights:
+      RULE-AML-SCORE-FANOUT: 0.25
+      RULE-AML-SCORE-FASTFLOW: 0.25
+      RULE-AML-SCORE-NIGHT: 0.2
+      RULE-AML-SCORE-LISTHIT: 0.3

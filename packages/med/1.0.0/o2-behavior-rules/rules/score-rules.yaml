@@ -1,0 +1,33 @@
+kind: O2ScoreRules
+rules:
+  - id: RULE-MED-SCORE-CONFLICT
+    name: 用药冲突
+    description: 同一患者存在相互作用或配伍禁忌用药
+    weight: 0.35
+    expression: "min(1, conflictCount/3)"
+    threshold: 0.3
+    evidenceTemplate: "检出用药冲突 {conflictCount} 例"
+
+  - id: RULE-MED-SCORE-PATHDEV
+    name: 路径偏离
+    description: 诊疗路径与临床路径模板发生偏离
+    weight: 0.25
+    expression: "min(1, pathDeviation)"
+    threshold: 0.5
+    evidenceTemplate: "路径偏离度 {pathDeviation}"
+
+  - id: RULE-MED-SCORE-DOSE
+    name: 超剂量
+    description: 单次/日剂量超过药品上限
+    weight: 0.2
+    expression: "min(1, doseRatio/2)"
+    threshold: 0.5
+    evidenceTemplate: "剂量超限倍数 {doseRatio}"
+
+  - id: RULE-MED-SCORE-DUP
+    name: 重复用药
+    description: 同类药品重复开立
+    weight: 0.2
+    expression: "min(1, dupCount/2)"
+    threshold: 0.5
+    evidenceTemplate: "重复用药 {dupCount} 组"

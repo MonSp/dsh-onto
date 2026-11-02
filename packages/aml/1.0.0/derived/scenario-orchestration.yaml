@@ -1,0 +1,52 @@
+kind: DerivedScenarioOrchestration
+scenarios:
+  - id: SCN-AML-FIND-CLUES
+    name: 识别可疑交易线索
+    goal: 从客户/账户出发识别可疑交易线索
+    boundary: 仅输出候选线索；报送与否人工决定
+    inputs:
+      - name: customerId
+        type: string
+        required: true
+      - name: windowDays
+        type: int
+        required: false
+    outputs:
+      fields:
+        - candidateId
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+    pipeline:
+      - stepId: s1
+        stepType: DATA_INGEST
+      - stepId: s2
+        stepType: BEHAVIOR_CALL
+      - stepId: s3
+        stepType: RULE_EVALUATE
+        order: before-scoring
+      - stepId: s4
+        stepType: RULE_EVALUATE
+      - stepId: s5
+        stepType: SKILL_RUN
+        skillRefs:
+          - SKL-AML-NARRATIVE
+      - stepId: s6
+        stepType: AUDIT_CHECK
+      - stepId: s7
+        stepType: HUMAN_REVIEW
+    outputContract:
+      mustInclude:
+        - candidateList
+        - riskScore
+        - evidenceChains
+        - pendingChecks
+      forbiddenPhrases:
+        - 认定洗钱
+        - 确定为地下钱庄
+        - 已构成犯罪
+        - 该客户系诈骗分子
+    reviewGate:
+      required: true
+      threshold: 0.75

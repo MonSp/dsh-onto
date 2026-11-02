@@ -1,0 +1,8 @@
+kind: BusinessOntologyPackage
+name: aml-analysis
+version: 1.0.0
+domain: AML
+metaFrameworkVersion: "1.0"
+status: DRAFT
+issueRecord: []
+externalRefs: []

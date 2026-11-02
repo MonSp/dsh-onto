@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-acct-type
+name: 账户类型
+values: [basic, general, settlement, cross-border]

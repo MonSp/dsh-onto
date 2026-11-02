@@ -1,0 +1,46 @@
+kind: DerivedManifest
+package: aml-analysis
+version: 1.0.0
+domain: AML
+generatedAt: 2026-11-02T10:11:56.420Z
+sourceDigest: efdb1feef5cab140fdced9671ded6f2ff9515f6c7277ae446b4ab7dd0f17650f
+sources:
+  - path: package.yaml
+    sha256: 99de1b3db46c4dfe61a2dfeb1067d0c67dce52588d3cb6ab57d9efd8e0cf7e3b
+  - path: o1-objects/object-types.yaml
+    sha256: 37533450e9f51fac41fcb84628cc946555637e84263e093ddd0f61be5edc5e42
+  - path: o1-objects/relation-types.yaml
+    sha256: 45f115d55f34e7d79440870eb6e5d1872a0a4bad16b3243f422fff67717d2e63
+  - path: o1-objects/dictionaries/dict-acct-type.yaml
+    sha256: 3e465d2e382ff28810351f20adaa0906c07ec3fa8459f342f56dc50dec06ed56
+  - path: o1-objects/dictionaries/dict-channel.yaml
+    sha256: bce245584e252e692ae516b58de49e1aa6a1c753383920d0a86a46bedc3992e4
+  - path: o1-objects/dictionaries/dict-cust-type.yaml
+    sha256: e4d5040af6e18587ceb207bfbd4cde730ab393d3080caeac6db7ef4c98130945
+  - path: o1-objects/dictionaries/dict-txn-type.yaml
+    sha256: 31def26be02b800fb755e30ce9e525114297f9d0726caf730950ff7ccb7c2f65
+  - path: o2-behavior-rules/behavior-types.yaml
+    sha256: 1cdde6798046de6cc809c60f644446f1d90cfe3d133d882beee9a00fa6c7355a
+  - path: o2-behavior-rules/rules/score-rules.yaml
+    sha256: 71223bcabd00b8e419d0c5ac51ae00b058e28322e265ec151567a18322f4e327
+  - path: o2-behavior-rules/rules/exclusion-rules.yaml
+    sha256: a23cb9502c6c913afa6408d3fb71e7851adfa92b97a367c54c96c27740915d2d
+  - path: o2-behavior-rules/skill-templates/SKL-AML-NARRATIVE.yaml
+    sha256: 8bb0359d1434f20afd2ac4f1b84cf6fda6d84f589022080ca493f941cdc88546
+  - path: o3-scenarios/SCN-AML-FIND-CLUES.yaml
+    sha256: 89375bf0178ccdd65925f33f8a6ad3565ec64cd72faffe9a9c4176e8cc805bc3
+  - path: bindings/field-maps.yaml
+    sha256: cab4d7a172b0948879934f36a98761373d7009037d009bef30fe10f4fd28c265
+  - path: bindings/api-sources.yaml
+    sha256: 9a2d7e86c060cb50d43a3e207d0f44c23321ea2f08a2ec258ca7d487c42f9a65
+derived:
+  - path: derived/tool-contracts/tool-contracts.yaml
+    sha256: 601e0754ed311b0d2ba89a21094bda5bee0d0ebb4cd78bcf9de0ed70603843a5
+  - path: derived/rule-engine-config/rule-engine-config.yaml
+    sha256: 419d24f5d695fccdb48542651c127d89869368339132b2f08987e140809c14ea
+  - path: derived/agent-duties.yaml
+    sha256: 1a03bf64116d4159639d53c3337bc5f65b5a1f52f3e730030b9bbc936485bde2
+  - path: derived/audit-checks.yaml
+    sha256: e50d7b4453c701aaba9769c1b86e8b714ee4faa29bdf4b3f8579f29492ad08f5
+  - path: derived/scenario-orchestration.yaml
+    sha256: 0aa8de60acdc5f85dab470153ed20f0c7c30eef35f6d58f53b6d53645ed00793

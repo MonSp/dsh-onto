@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-channel
+name: 交易渠道
+values: [counter, atm, mobile, online-bank, third-party]

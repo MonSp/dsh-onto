@@ -1,0 +1,36 @@
+kind: O2BehaviorTypes
+behaviors:
+  - id: BHV-AML-TRANSFER
+    name: 转账
+    anchor: OBJ-AML-ACCOUNT
+    relations: [REL-AML-OUTBOUND, REL-AML-INBOUND]
+    states: [initiated, completed, failed]
+    trigger: 交易流水落库
+  - id: BHV-AML-WITHDRAW
+    name: 取现
+    anchor: OBJ-AML-ACCOUNT
+    relations: [REL-AML-OUTBOUND]
+    states: [initiated, completed]
+    trigger: 柜面/ATM 取现流水
+  - id: BHV-AML-OPEN-ACCT
+    name: 开户
+    anchor: OBJ-AML-ACCOUNT
+    relations: [REL-AML-HOLDS]
+    states: [submitted, activated]
+    trigger: 开户申请通过
+  - id: BHV-AML-CARD-SWAP
+    name: 换卡
+    anchor: OBJ-AML-ACCOUNT
+    states: [requested, done]
+    trigger: 换卡申请
+  - id: BHV-AML-CLOSE-ACCT
+    name: 销户
+    anchor: OBJ-AML-ACCOUNT
+    states: [requested, closed]
+    trigger: 销户申请
+  - id: BHV-AML-XBORDER
+    name: 跨境汇款
+    anchor: OBJ-AML-ACCOUNT
+    relations: [REL-AML-OUTBOUND, REL-AML-INBOUND]
+    states: [initiated, completed, rejected]
+    trigger: 跨境汇款流水

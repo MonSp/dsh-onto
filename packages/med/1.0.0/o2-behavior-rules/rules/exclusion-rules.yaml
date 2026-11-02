@@ -1,0 +1,11 @@
+kind: O2ExclusionRules
+rules:
+  - id: RULE-MED-EXCL-PATH-WL
+    name: 已审核白名单路径
+    action: drop
+    condition: "tag == 'path-whitelist'"
+  - id: RULE-MED-EXCL-TEACHING
+    name: 教学查房降权
+    action: downweight
+    factor: 0.4
+    condition: "tag == 'teaching'"

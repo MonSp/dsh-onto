@@ -1,0 +1,107 @@
+kind: DerivedAgentDuties
+duties:
+  - id: AGT-MED-RISK-NOTICE-s1
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: allowed
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s2
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: allowed
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s3
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: forbidden
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s4
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: forbidden
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s5
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: allowed
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s6
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: forbidden
+    humanGate: false
+  - id: AGT-MED-RISK-NOTICE-s7
+    scenario: SCN-MED-RISK-NOTICE
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs:
+      - TOOL-MED-PATIENT
+      - TOOL-MED-DRUG
+      - TOOL-MED-ORDER
+      - TOOL-MED-DEPT
+      - TOOL-MED-PRESCRIBES
+      - TOOL-MED-CONTAINS
+      - TOOL-MED-TREATS
+    llm: forbidden
+    humanGate: true

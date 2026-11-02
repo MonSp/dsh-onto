@@ -1,0 +1,25 @@
+{
+  "name": "@onto/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Onto 业务本体建模平台核心引擎：O1/O2/O3 模型、校验、派生、规则引擎、场景执行、知识库管线 + CLI",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./cli": "./dist/cli.js"
+  },
+  "bin": {
+    "onto": "./dist/cli.js"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.2"
+  }
+}

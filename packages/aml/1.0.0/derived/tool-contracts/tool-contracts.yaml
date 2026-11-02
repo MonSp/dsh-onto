@@ -1,0 +1,184 @@
+kind: DerivedToolContracts
+llmForbidden: true
+idRules:
+  - objectId: OBJ-AML-CUSTOMER
+    idRule: <bank_code>:<cust_no>
+  - objectId: OBJ-AML-ACCOUNT
+    idRule: <bank_code>:<acct_no>
+  - objectId: OBJ-AML-TXN
+    idRule: <bank_code>:<txn_id>
+  - objectId: OBJ-AML-MERCHANT
+    idRule: <bank_code>:<mch_no>
+  - objectId: OBJ-AML-BENEFICIARY
+    idRule: <bank_code>:<benef_no>
+  - objectId: OBJ-AML-LIST-HIT
+    idRule: <bank_code>:<hit_id>
+tools:
+  - id: TOOL-AML-CUSTOMER
+    name: 读取客户
+    kind: object-read
+    objectId: OBJ-AML-CUSTOMER
+    grantScope: OBJ-AML-CUSTOMER
+    inputs:
+      - OBJ-AML-CUSTOMER.custNo
+    outputs:
+      - OBJ-AML-CUSTOMER.custNo
+      - OBJ-AML-CUSTOMER.custName
+      - OBJ-AML-CUSTOMER.custType
+      - OBJ-AML-CUSTOMER.idType
+      - OBJ-AML-CUSTOMER.idNo
+      - OBJ-AML-CUSTOMER.openDate
+  - id: TOOL-AML-ACCOUNT
+    name: 读取账户
+    kind: object-read
+    objectId: OBJ-AML-ACCOUNT
+    grantScope: OBJ-AML-ACCOUNT
+    inputs:
+      - OBJ-AML-ACCOUNT.acctNo
+    outputs:
+      - OBJ-AML-ACCOUNT.acctNo
+      - OBJ-AML-ACCOUNT.acctType
+      - OBJ-AML-ACCOUNT.openDate
+      - OBJ-AML-ACCOUNT.status
+      - OBJ-AML-ACCOUNT.ownerRef
+  - id: TOOL-AML-TXN
+    name: 读取交易
+    kind: object-read
+    objectId: OBJ-AML-TXN
+    grantScope: OBJ-AML-TXN
+    inputs:
+      - OBJ-AML-TXN.txnId
+      - OBJ-AML-TXN.amount
+    outputs:
+      - OBJ-AML-TXN.txnId
+      - OBJ-AML-TXN.amount
+      - OBJ-AML-TXN.currency
+      - OBJ-AML-TXN.occurredAt
+      - OBJ-AML-TXN.txnType
+      - OBJ-AML-TXN.channel
+      - OBJ-AML-TXN.counterpartyAcct
+  - id: TOOL-AML-MERCHANT
+    name: 读取商户
+    kind: object-read
+    objectId: OBJ-AML-MERCHANT
+    grantScope: OBJ-AML-MERCHANT
+    inputs:
+      - OBJ-AML-MERCHANT.mchNo
+    outputs:
+      - OBJ-AML-MERCHANT.mchNo
+      - OBJ-AML-MERCHANT.mchName
+      - OBJ-AML-MERCHANT.industry
+      - OBJ-AML-MERCHANT.openDate
+  - id: TOOL-AML-BENEFICIARY
+    name: 读取受益人
+    kind: object-read
+    objectId: OBJ-AML-BENEFICIARY
+    grantScope: OBJ-AML-BENEFICIARY
+    inputs:
+      - OBJ-AML-BENEFICIARY.benefNo
+    outputs:
+      - OBJ-AML-BENEFICIARY.benefNo
+      - OBJ-AML-BENEFICIARY.benefName
+      - OBJ-AML-BENEFICIARY.idNo
+  - id: TOOL-AML-LIST-HIT
+    name: 读取名单命中
+    kind: object-read
+    objectId: OBJ-AML-LIST-HIT
+    grantScope: OBJ-AML-LIST-HIT
+    inputs:
+      - OBJ-AML-LIST-HIT.hitId
+    outputs:
+      - OBJ-AML-LIST-HIT.hitId
+      - OBJ-AML-LIST-HIT.listName
+      - OBJ-AML-LIST-HIT.hitAt
+      - OBJ-AML-LIST-HIT.hitLevel
+  - id: TOOL-AML-HOLDS
+    name: 读取持卡
+    kind: relation-read
+    relationId: REL-AML-HOLDS
+    grantScope: REL-AML-HOLDS
+    inputs:
+      - OBJ-AML-CUSTOMER
+      - OBJ-AML-ACCOUNT
+    outputs:
+      - REL-AML-HOLDS.since
+  - id: TOOL-AML-OUTBOUND
+    name: 读取转出
+    kind: relation-read
+    relationId: REL-AML-OUTBOUND
+    grantScope: REL-AML-OUTBOUND
+    inputs:
+      - OBJ-AML-ACCOUNT
+      - OBJ-AML-TXN
+    outputs:
+      - REL-AML-OUTBOUND.role
+  - id: TOOL-AML-INBOUND
+    name: 读取转入
+    kind: relation-read
+    relationId: REL-AML-INBOUND
+    grantScope: REL-AML-INBOUND
+    inputs:
+      - OBJ-AML-TXN
+      - OBJ-AML-ACCOUNT
+    outputs:
+      - REL-AML-INBOUND.role
+  - id: TOOL-AML-CONTROLS
+    name: 读取控制
+    kind: relation-read
+    relationId: REL-AML-CONTROLS
+    grantScope: REL-AML-CONTROLS
+    inputs:
+      - OBJ-AML-CUSTOMER
+      - OBJ-AML-ACCOUNT
+    outputs:
+      - REL-AML-CONTROLS.controlType
+  - id: TOOL-AML-BENEFITS
+    name: 读取受益
+    kind: relation-read
+    relationId: REL-AML-BENEFITS
+    grantScope: REL-AML-BENEFITS
+    inputs:
+      - OBJ-AML-BENEFICIARY
+      - OBJ-AML-ACCOUNT
+    outputs:
+      - REL-AML-BENEFITS.benefRatio
+  - id: TOOL-AML-SAME-DEVICE
+    name: 读取同设备
+    kind: relation-read
+    relationId: REL-AML-SAME-DEVICE
+    grantScope: REL-AML-SAME-DEVICE
+    inputs:
+      - OBJ-AML-CUSTOMER
+      - OBJ-AML-CUSTOMER
+    outputs:
+      - REL-AML-SAME-DEVICE.deviceId
+  - id: TOOL-AML-SAME-ADDR
+    name: 读取同地址
+    kind: relation-read
+    relationId: REL-AML-SAME-ADDR
+    grantScope: REL-AML-SAME-ADDR
+    inputs:
+      - OBJ-AML-CUSTOMER
+      - OBJ-AML-CUSTOMER
+    outputs:
+      - REL-AML-SAME-ADDR.addr
+  - id: TOOL-AML-PAID-TO
+    name: 读取交易流向商户
+    kind: relation-read
+    relationId: REL-AML-PAID-TO
+    grantScope: REL-AML-PAID-TO
+    inputs:
+      - OBJ-AML-TXN
+      - OBJ-AML-MERCHANT
+    outputs:
+      - REL-AML-PAID-TO.settleAt
+  - id: TOOL-AML-HIT
+    name: 读取名单命中
+    kind: relation-read
+    relationId: REL-AML-HIT
+    grantScope: REL-AML-HIT
+    inputs:
+      - OBJ-AML-LIST-HIT
+      - OBJ-AML-CUSTOMER
+    outputs:
+      - REL-AML-HIT.matchedBy

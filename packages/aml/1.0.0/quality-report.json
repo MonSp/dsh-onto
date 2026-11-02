@@ -1,0 +1,156 @@
+{
+  "package": "aml-analysis",
+  "version": "1.0.0",
+  "generatedAt": "2026-11-02T10:11:25.720Z",
+  "errors": [],
+  "warnings": [
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/object-types.yaml",
+      "message": "ID 未被引用: OBJ-AML-MERCHANT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/object-types.yaml",
+      "message": "ID 未被引用: OBJ-AML-LIST-HIT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/relation-types.yaml",
+      "message": "ID 未被引用: REL-AML-CONTROLS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/relation-types.yaml",
+      "message": "ID 未被引用: REL-AML-BENEFITS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/relation-types.yaml",
+      "message": "ID 未被引用: REL-AML-SAME-DEVICE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o1-objects/relation-types.yaml",
+      "message": "ID 未被引用: REL-AML-SAME-ADDR"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-TRANSFER"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-WITHDRAW"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-OPEN-ACCT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-CARD-SWAP"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-CLOSE-ACCT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-AML-XBORDER"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/rules/exclusion-rules.yaml",
+      "message": "ID 未被引用: RULE-AML-EXCL-SALARY"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/rules/exclusion-rules.yaml",
+      "message": "ID 未被引用: RULE-AML-EXCL-FISCAL"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/rules/exclusion-rules.yaml",
+      "message": "ID 未被引用: RULE-AML-EXCL-WHITELIST"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o3-scenarios/SCN-AML-FIND-CLUES.yaml",
+      "message": "ID 未被引用: SCN-AML-FIND-CLUES"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-AML-ACCT-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-AML-ACCT-TYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-AML-TXN-AMT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-AML-TXN-TYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-AML-CUST-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/api-sources.yaml",
+      "message": "ID 未被引用: SRC-AML-CORE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/api-sources.yaml",
+      "message": "ID 未被引用: SRC-AML-RISKLIST"
+    }
+  ],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 6 / 关系 7 / 字典 4 / 行为 6 / 打分规则 4 / 排除规则 3 / 方法论模板 1 / 场景 1 / 字段映射 5 / 数据源 2"
+    }
+  ],
+  "score": 54,
+  "passed": true
+}

@@ -1,0 +1,64 @@
+kind: O1RelationTypes
+relations:
+  - id: REL-AML-HOLDS
+    name: 持卡
+    from: OBJ-AML-CUSTOMER
+    to: OBJ-AML-ACCOUNT
+    attributes:
+      - { name: since, type: date }
+
+  - id: REL-AML-OUTBOUND
+    name: 转出
+    from: OBJ-AML-ACCOUNT
+    to: OBJ-AML-TXN
+    attributes:
+      - { name: role, type: string }
+
+  - id: REL-AML-INBOUND
+    name: 转入
+    from: OBJ-AML-TXN
+    to: OBJ-AML-ACCOUNT
+    attributes:
+      - { name: role, type: string }
+
+  - id: REL-AML-CONTROLS
+    name: 控制
+    from: OBJ-AML-CUSTOMER
+    to: OBJ-AML-ACCOUNT
+    attributes:
+      - { name: controlType, type: string }
+
+  - id: REL-AML-BENEFITS
+    name: 受益
+    from: OBJ-AML-BENEFICIARY
+    to: OBJ-AML-ACCOUNT
+    attributes:
+      - { name: benefRatio, type: float }
+
+  - id: REL-AML-SAME-DEVICE
+    name: 同设备
+    from: OBJ-AML-CUSTOMER
+    to: OBJ-AML-CUSTOMER
+    attributes:
+      - { name: deviceId, type: string, required: true }
+
+  - id: REL-AML-SAME-ADDR
+    name: 同地址
+    from: OBJ-AML-CUSTOMER
+    to: OBJ-AML-CUSTOMER
+    attributes:
+      - { name: addr, type: string, required: true }
+
+  - id: REL-AML-PAID-TO
+    name: 交易流向商户
+    from: OBJ-AML-TXN
+    to: OBJ-AML-MERCHANT
+    attributes:
+      - { name: settleAt, type: date }
+
+  - id: REL-AML-HIT
+    name: 名单命中
+    from: OBJ-AML-LIST-HIT
+    to: OBJ-AML-CUSTOMER
+    attributes:
+      - { name: matchedBy, type: string }

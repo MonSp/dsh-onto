@@ -1,0 +1,63 @@
+{
+  "objects": [
+    { "id": "ACCT-001", "type": "OBJ-AML-ACCOUNT", "attrs": { "acctNo": "6222001", "acctType": "general" } },
+    { "id": "ACCT-002", "type": "OBJ-AML-ACCOUNT", "attrs": { "acctNo": "6222002", "acctType": "basic" } },
+    { "id": "CUST-001", "type": "OBJ-AML-CUSTOMER", "attrs": { "custNo": "C001", "custType": "personal" } },
+    { "id": "TXN-001", "type": "OBJ-AML-TXN", "attrs": { "txnId": "T001", "amount": 90000, "txnType": "transfer" } }
+  ],
+  "relations": [
+    { "id": "R-001", "type": "REL-AML-HOLDS", "from": "CUST-001", "to": "ACCT-001" },
+    { "id": "R-002", "type": "REL-AML-INBOUND", "from": "TXN-001", "to": "ACCT-001" }
+  ],
+  "behaviors": [
+    { "id": "B-001", "type": "BHV-AML-TRANSFER", "anchorRef": "ACCT-001", "objectRef": "ACCT-001", "occurredAt": "2026-10-30T22:10:00Z" },
+    { "id": "B-002", "type": "BHV-AML-TRANSFER", "anchorRef": "ACCT-002", "objectRef": "ACCT-002", "occurredAt": "2026-10-31T23:05:00Z" }
+  ],
+  "candidates": [
+    {
+      "candidateId": "CAND-001",
+      "objectRef": "ACCT-001",
+      "features": {
+        "windowDays": 7,
+        "inboundCount": 12,
+        "outboundAmount": 250000,
+        "fastInOutRatio": 0.82,
+        "nightRatio": 0.71,
+        "listHitCount": 1
+      },
+      "tags": []
+    },
+    {
+      "candidateId": "CAND-002",
+      "objectRef": "ACCT-002",
+      "features": {
+        "windowDays": 7,
+        "inboundCount": 3,
+        "outboundAmount": 4200,
+        "fastInOutRatio": 0.2,
+        "nightRatio": 0.1
+      },
+      "tags": ["salary"]
+    },
+    {
+      "candidateId": "CAND-003",
+      "objectRef": "ACCT-001",
+      "features": {
+        "windowDays": 7,
+        "inboundCount": 2,
+        "outboundAmount": 900
+      },
+      "tags": ["cleared-whitelist"]
+    },
+    {
+      "candidateId": "CAND-004",
+      "objectRef": "ACCT-002",
+      "features": {
+        "windowDays": 7,
+        "inboundCount": 8,
+        "outboundAmount": 50000
+      },
+      "tags": []
+    }
+  ]
+}

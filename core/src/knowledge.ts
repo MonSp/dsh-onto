@@ -1,0 +1,487 @@
+/**
+ * 知识库 → LLM 解析 → 快速建模（规范 §5）。
+ *
+ * 硬规则（§5.3）：
+ *  1. 原料永不直写包内 YAML；只产 draft 候选。
+ *  2. 结论性表述禁止进入 O3 输出契约（只能落红线 forbiddenPhrases）。
+ *  3. 同 (包 + 层 + kind + name) 幂等跳过。
+ *  4. confidence < 0.75 强制人审；LLM 失败回落词面启发。
+ *  5. LLM 永不直写生效版——物化只发生在人工 approve 之后。
+ */
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { draftCandidateId, knowledgeSourceId, isValidId } from './ids.js'
+import { isConclusionLike, parseWithFallback } from './llm.js'
+import { assertWritable, loadPackage, readPackageMeta, savePackage } from './store.js'
+import type {
+  DraftCandidate,
+  DraftItem,
+  KnowledgeSourceRecord,
+  LlmPort,
+  OntologyPackage,
+  SourceType,
+} from './types.js'
+import { SOURCE_TYPES } from './types.js'
+
+export class KnowledgeError extends Error {
+  readonly code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'KnowledgeError'
+    this.code = code
+  }
+}
+
+function sha256Hex(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/** 知识库存储（profile 数据目录下的一等运行时状态）。 */
+export class KnowledgeStore {
+  readonly root: string
+
+  constructor(dataDir: string) {
+    this.root = join(dataDir, 'knowledge')
+    mkdirSync(join(this.root, 'sources'), { recursive: true })
+    if (!existsSync(this.queuePath)) writeFileSync(this.queuePath, '[]\n', 'utf8')
+  }
+
+  private get queuePath(): string {
+    return join(this.root, 'queue.json')
+  }
+
+  private loadQueue(): DraftCandidate[] {
+    try {
+      return JSON.parse(readFileSync(this.queuePath, 'utf8')) as DraftCandidate[]
+    } catch {
+      return []
+    }
+  }
+
+  private saveQueue(queue: DraftCandidate[]): void {
+    writeFileSync(this.queuePath, `${JSON.stringify(queue, null, 2)}\n`, 'utf8')
+  }
+
+  /* ── 上传（sha256 幂等） ────────────────────────────────────────────── */
+
+  uploadSource(input: {
+    packageId: string
+    sourceType: SourceType
+    name: string
+    content: string
+  }): KnowledgeSourceRecord {
+    if (!SOURCE_TYPES.includes(input.sourceType)) {
+      throw new KnowledgeError('BAD_SOURCE_TYPE', `unknown sourceType ${input.sourceType}`)
+    }
+    const sha256 = sha256Hex(input.content)
+    const existing = this.listSources().find((s) => s.sha256 === sha256 && s.packageId === input.packageId)
+    if (existing) return existing
+    const id = knowledgeSourceId(`${input.packageId}|${input.sourceType}|${input.name}|${sha256}`)
+    const record: KnowledgeSourceRecord = {
+      id,
+      packageId: input.packageId,
+      sourceType: input.sourceType,
+      name: input.name,
+      content: input.content,
+      sha256,
+      parseStatus: 'uploaded',
+      uploadedAt: new Date().toISOString(),
+    }
+    writeFileSync(join(this.root, 'sources', `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+    return record
+  }
+
+  listSources(packageId?: string): KnowledgeSourceRecord[] {
+    const dir = join(this.root, 'sources')
+    const out: KnowledgeSourceRecord[] = []
+    for (const f of readdirSafe(dir)) {
+      if (!f.endsWith('.json')) continue
+      try {
+        const rec = JSON.parse(readFileSync(join(dir, f), 'utf8')) as KnowledgeSourceRecord
+        if (!packageId || rec.packageId === packageId) out.push(rec)
+      } catch {
+        /* skip */
+      }
+    }
+    return out.sort((a, b) => (a.uploadedAt < b.uploadedAt ? -1 : 1))
+  }
+
+  getSource(id: string): KnowledgeSourceRecord {
+    const path = join(this.root, 'sources', `${id}.json`)
+    if (!existsSync(path)) throw new KnowledgeError('SOURCE_NOT_FOUND', `source ${id} not found`)
+    return JSON.parse(readFileSync(path, 'utf8')) as KnowledgeSourceRecord
+  }
+
+  /* ── 解析（LLM → 候选队列；幂等） ──────────────────────────────────── */
+
+  async parseSource(
+    sourceId: string,
+    llm: LlmPort,
+  ): Promise<{ added: DraftCandidate[]; engine: 'deepseek' | 'heuristic' }> {
+    const src = this.getSource(sourceId)
+    const { items, engine } = await parseWithFallback(llm, {
+      sourceType: src.sourceType,
+      content: src.content,
+      packageName: src.packageId,
+    })
+    const queue = this.loadQueue()
+    const added: DraftCandidate[] = []
+    for (const item of items) {
+      const key = `${src.packageId}|${item.layer}|${item.targetKind}|${item.name}`
+      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.name}` === key)) continue
+      const conclusionLike = isConclusionLike(item)
+      const cand: DraftCandidate = {
+        ...item,
+        id: draftCandidateId(key),
+        packageId: src.packageId,
+        sourceId,
+        status: 'pending',
+        forcedReview: item.confidence < 0.75,
+        conclusionLike,
+        createdAt: new Date().toISOString(),
+      }
+      queue.push(cand)
+      added.push(cand)
+    }
+    this.saveQueue(queue)
+    src.parseStatus = 'parsed'
+    writeFileSync(join(this.root, 'sources', `${sourceId}.json`), `${JSON.stringify(src, null, 2)}\n`, 'utf8')
+    return { added, engine }
+  }
+
+  /* ── 人审队列 ──────────────────────────────────────────────────────── */
+
+  listCandidates(filter?: { packageId?: string; status?: DraftCandidate['status'] }): DraftCandidate[] {
+    return this.loadQueue().filter(
+      (c) => (!filter?.packageId || c.packageId === filter.packageId) && (!filter?.status || c.status === filter.status),
+    )
+  }
+
+  getCandidate(id: string): DraftCandidate {
+    const c = this.loadQueue().find((x) => x.id === id)
+    if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
+    return c
+  }
+
+  /**
+   * 人审动作：approve / reject / merge（合并进已有元素名）。
+   * LLM/agent 路径永不绕过此入口直写包。
+   */
+  reviewCandidate(
+    id: string,
+    action: 'approve' | 'reject' | 'merge',
+    opts: { mergeIntoName?: string; reviewedBy?: string } = {},
+  ): DraftCandidate {
+    const queue = this.loadQueue()
+    const c = queue.find((x) => x.id === id)
+    if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
+    if (c.status !== 'pending') {
+      throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
+    }
+    if (action === 'approve') {
+      // 结论性表述不允许批准进任何非 RedLine 目标（§5.3.2）
+      if (c.conclusionLike && c.targetKind !== 'RedLine') {
+        throw new KnowledgeError(
+          'CONCLUSION_BLOCKED',
+          `结论性表述禁止进入 ${c.targetKind}（只能落 RedLine 红线）`,
+        )
+      }
+      c.status = 'approved'
+    } else if (action === 'reject') {
+      c.status = 'rejected'
+    } else {
+      if (!opts.mergeIntoName) {
+        throw new KnowledgeError('MERGE_TARGET_REQUIRED', 'merge requires mergeIntoName')
+      }
+      c.status = 'merged'
+      c.payload = { ...c.payload, mergeInto: opts.mergeIntoName }
+    }
+    this.saveQueue(queue)
+    return c
+  }
+
+  /* ── 物化（approved → 包 YAML；ISSUED 拒绝） ───────────────────────── */
+
+  /**
+   * 将 approved 候选物化进包版本目录。硬规则：
+   * - 只物化 status=approved 的候选（pending/forcedReview 未过人审的拒绝）
+   * - ISSUED 包拒绝写入（§3.4）
+   * - 结论性表述只落 forbiddenPhrases 红线，绝不进输出契约（§5.3.2）
+   */
+  materialize(versionDir: string, candidateIds: string[]): { applied: string[]; skipped: Array<{ id: string; reason: string }> } {
+    const meta = readPackageMeta(versionDir)
+    const queue = this.loadQueue()
+    const applied: string[] = []
+    const skipped: Array<{ id: string; reason: string }> = []
+
+    const targets = candidateIds.map((id) => {
+      const c = queue.find((x) => x.id === id)
+      if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
+      return c
+    })
+    for (const c of targets) {
+      if (c.status !== 'approved') {
+        skipped.push({ id: c.id, reason: `status=${c.status}，未经人审批准不得物化` })
+        continue
+      }
+    }
+    const eligible = targets.filter((c) => c.status === 'approved')
+    if (eligible.length === 0) return { applied, skipped }
+
+    // ISSUED 拒写（对 agent 路径是一等硬约束）
+    try {
+      assertWritable(versionDir)
+    } catch (e) {
+      throw new KnowledgeError(
+        'PACKAGE_READONLY',
+        `${meta.name}@${meta.version} 已签发，知识物化拒绝写入（先 fork 新版本）`,
+      )
+    }
+
+    const pkg = loadPackage(versionDir)
+    for (const c of eligible) {
+      try {
+        applyDraftToPackage(pkg, c)
+        applied.push(c.id)
+      } catch (e) {
+        skipped.push({ id: c.id, reason: e instanceof Error ? e.message : String(e) })
+      }
+    }
+    savePackage(versionDir, pkg)
+
+    for (const c of queue) {
+      if (applied.includes(c.id)) c.status = 'merged'
+    }
+    this.saveQueue(queue)
+    return { applied, skipped }
+  }
+}
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 草案 → 包模型
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const MAX_ID_SEQ = 900
+
+function nextId(pkg: OntologyPackage, prefix: string, tag: string): string {
+  const taken = new Set<string>()
+  for (const o of pkg.objects) taken.add(o.id)
+  for (const r of pkg.relations) taken.add(r.id)
+  for (const b of pkg.behaviors) taken.add(b.id)
+  for (const r of pkg.scoreRules) taken.add(r.id)
+  for (const r of pkg.exclusionRules) taken.add(r.id)
+  for (const s of pkg.skillTemplates) taken.add(s.id)
+  for (const s of pkg.scenarios) taken.add(s.id)
+  for (const f of pkg.fieldMaps) taken.add(f.id)
+  for (const s of pkg.apiSources) taken.add(s.id)
+  for (let i = 1; i < MAX_ID_SEQ; i++) {
+    const id = `${prefix}-${tag}-${i}`
+    if (!taken.has(id)) return id
+  }
+  throw new KnowledgeError('ID_EXHAUSTED', `cannot allocate ${prefix}-${tag}-* id`)
+}
+
+function tagOf(pkg: OntologyPackage): string {
+  const domain = (pkg.meta.domain || 'GEN').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'GEN'
+  return domain.slice(0, 12)
+}
+
+/** 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）。 */
+export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): void {
+  const p = c.payload ?? {}
+  const tag = tagOf(pkg)
+
+  if (c.targetKind === 'RedLine') {
+    // 结论性表述/禁语 → 只允许进场景 forbiddenPhrases（§5.3.2）
+    const phrases: string[] = Array.isArray(p['phrases'])
+      ? (p['phrases'] as string[]).map(String)
+      : [String(p['phrase'] ?? c.name)]
+    const scenarioId = typeof p['scenarioId'] === 'string' ? p['scenarioId'] : undefined
+    let scenario = scenarioId ? pkg.scenarios.find((s) => s.id === scenarioId) : undefined
+    if (!scenario) scenario = pkg.scenarios[0]
+    if (!scenario) {
+      throw new KnowledgeError('REDLINE_NEEDS_SCENARIO', '红线物化需要已有场景卡（或 payload.scenarioId）')
+    }
+    for (const phrase of phrases) {
+      if (phrase && !scenario.outputContract.forbiddenPhrases.includes(phrase)) {
+        scenario.outputContract.forbiddenPhrases.push(phrase)
+      }
+    }
+    return
+  }
+
+  if (c.conclusionLike) {
+    throw new KnowledgeError('CONCLUSION_BLOCKED', '结论性表述禁止物化为业务元素（只能落 RedLine）')
+  }
+
+  switch (c.targetKind) {
+    case 'ObjectType': {
+      const id = pickId(p, 'OBJ', tag, pkg)
+      pkg.objects.push({
+        id,
+        name: String(p['name'] ?? c.name),
+        idRule: typeof p['idRule'] === 'string' ? p['idRule'] : undefined,
+        attributes: Array.isArray(p['attributes']) ? (p['attributes'] as OntologyPackage['objects'][number]['attributes']) : [],
+        lifecycle: Array.isArray(p['lifecycle']) ? (p['lifecycle'] as string[]) : undefined,
+      })
+      break
+    }
+    case 'RelationType': {
+      const id = pickId(p, 'REL', tag, pkg)
+      pkg.relations.push({
+        id,
+        name: String(p['name'] ?? c.name),
+        from: String(p['from'] ?? ''),
+        to: String(p['to'] ?? ''),
+        attributes: Array.isArray(p['attributes']) ? (p['attributes'] as OntologyPackage['relations'][number]['attributes']) : [],
+      })
+      break
+    }
+    case 'Attribute': {
+      const ownerName = typeof p['ownerName'] === 'string' ? p['ownerName'] : undefined
+      const ownerId = typeof p['ownerId'] === 'string' ? p['ownerId'] : undefined
+      const owner =
+        pkg.objects.find((o) => o.id === ownerId || o.name === ownerName) ??
+        pkg.relations.find((r) => r.id === ownerId || r.name === ownerName)
+      if (!owner) throw new KnowledgeError('ATTR_OWNER_NOT_FOUND', `属性 owner 不存在: ${ownerId ?? ownerName ?? '(空)'}`)
+      owner.attributes = owner.attributes ?? []
+      if (owner.attributes.some((a) => a.name === String(p['name'] ?? c.name))) break
+      owner.attributes.push({
+        name: String(p['name'] ?? c.name),
+        type: (p['type'] as 'string') ?? 'string',
+        enumValuesRef: typeof p['enumValuesRef'] === 'string' ? p['enumValuesRef'] : undefined,
+        refObject: typeof p['refObject'] === 'string' ? p['refObject'] : undefined,
+      })
+      break
+    }
+    case 'Dictionary': {
+      pkg.dictionaries.push({
+        id: pickDictId(p),
+        name: String(p['name'] ?? c.name),
+        values: Array.isArray(p['values']) ? (p['values'] as string[]).map(String) : [],
+      })
+      break
+    }
+    case 'BehaviorType': {
+      pkg.behaviors.push({
+        id: pickId(p, 'BHV', tag, pkg),
+        name: String(p['name'] ?? c.name),
+        anchor: String(p['anchor'] ?? ''),
+        relations: Array.isArray(p['relations']) ? (p['relations'] as string[]) : undefined,
+        states: Array.isArray(p['states']) ? (p['states'] as string[]) : undefined,
+        trigger: typeof p['trigger'] === 'string' ? p['trigger'] : undefined,
+      })
+      break
+    }
+    case 'ScoreRule': {
+      pkg.scoreRules.push({
+        id: pickId(p, 'RULE', tag, pkg),
+        name: String(p['name'] ?? c.name),
+        description: typeof p['description'] === 'string' ? p['description'] : undefined,
+        weight: typeof p['weight'] === 'number' ? p['weight'] : 0,
+        expression: String(p['expression'] ?? '1'),
+        threshold: typeof p['threshold'] === 'number' ? p['threshold'] : undefined,
+        evidenceTemplate: typeof p['evidenceTemplate'] === 'string' ? p['evidenceTemplate'] : undefined,
+      })
+      break
+    }
+    case 'ExclusionRule': {
+      pkg.exclusionRules.push({
+        id: pickId(p, 'RULE', tag, pkg),
+        name: String(p['name'] ?? c.name),
+        action: p['action'] === 'downweight' ? 'downweight' : 'drop',
+        factor: typeof p['factor'] === 'number' ? p['factor'] : undefined,
+        condition: String(p['condition'] ?? "tag == 'unknown'"),
+      })
+      break
+    }
+    case 'SkillTemplate': {
+      pkg.skillTemplates.push({
+        id: pickId(p, 'SKL', tag, pkg),
+        name: String(p['name'] ?? c.name),
+        weights: (p['weights'] as Record<string, number>) ?? {},
+        steps: Array.isArray(p['steps']) ? (p['steps'] as string[]) : undefined,
+        outputTemplate: typeof p['outputTemplate'] === 'string' ? p['outputTemplate'] : undefined,
+      })
+      break
+    }
+    case 'ScenarioCard': {
+      const id = pickId(p, 'SCN', tag, pkg)
+      pkg.scenarios.push({
+        id,
+        name: String(p['name'] ?? c.name),
+        goal: String(p['goal'] ?? ''),
+        boundary: String(p['boundary'] ?? ''),
+        inputs: Array.isArray(p['inputs']) ? (p['inputs'] as OntologyPackage['scenarios'][number]['inputs']) : [],
+        outputs: { fields: Array.isArray((p['outputs'] as { fields?: string[] })?.fields) ? (p['outputs'] as { fields: string[] }).fields : [] },
+        pipeline: Array.isArray(p['pipeline'])
+          ? (p['pipeline'] as OntologyPackage['scenarios'][number]['pipeline'])
+          : [
+              { stepId: 's1', stepType: 'DATA_INGEST' },
+              { stepId: 's2', stepType: 'BEHAVIOR_CALL' },
+              { stepId: 's3', stepType: 'RULE_EVALUATE', order: 'before-scoring' },
+              { stepId: 's4', stepType: 'RULE_EVALUATE' },
+              { stepId: 's5', stepType: 'AUDIT_CHECK' },
+              { stepId: 's6', stepType: 'HUMAN_REVIEW' },
+            ],
+        // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里
+        outputContract: {
+          mustInclude: Array.isArray(p['mustInclude'])
+            ? (p['mustInclude'] as string[]).filter((m) => !isConclusionLike({ name: m, payload: {}, rationale: '' }))
+            : ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks'],
+          forbiddenPhrases: Array.isArray((p['outputContract'] as { forbiddenPhrases?: string[] })?.forbiddenPhrases)
+            ? (p['outputContract'] as { forbiddenPhrases: string[] }).forbiddenPhrases
+            : [],
+        },
+        reviewGate: {
+          required: true,
+          threshold: typeof (p['reviewGate'] as { threshold?: number })?.threshold === 'number'
+            ? (p['reviewGate'] as { threshold: number }).threshold
+            : 0.75,
+        },
+        auditChecks: Array.isArray(p['auditChecks']) ? (p['auditChecks'] as string[]) : ['O1_CLOSED', 'O2_CLOSED', 'O3_CLOSED'],
+      })
+      break
+    }
+    case 'FieldMap': {
+      pkg.fieldMaps.push({
+        id: pickId(p, 'FM', tag, pkg),
+        source: String(p['source'] ?? ''),
+        target: String(p['target'] ?? ''),
+      })
+      break
+    }
+    case 'ApiSource': {
+      pkg.apiSources.push({
+        id: pickId(p, 'SRC', tag, pkg),
+        name: String(p['name'] ?? c.name),
+        sourceType: (p['sourceType'] as SourceType) ?? 'SCHEMA_API',
+        endpoint: typeof p['endpoint'] === 'string' ? p['endpoint'] : undefined,
+      })
+      break
+    }
+    default:
+      throw new KnowledgeError('BAD_TARGET_KIND', `unknown targetKind ${String(c.targetKind)}`)
+  }
+}
+
+function pickId(p: Record<string, unknown>, prefix: string, tag: string, pkg: OntologyPackage): string {
+  const raw = p['id']
+  if (typeof raw === 'string' && isValidId(raw)) return raw
+  return nextId(pkg, prefix, tag)
+}
+
+function pickDictId(p: Record<string, unknown>): string {
+  const raw = p['id']
+  if (typeof raw === 'string' && raw.startsWith('dict-')) return raw
+  return `dict-${String(p['name'] ?? 'gen').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gen'}`
+}

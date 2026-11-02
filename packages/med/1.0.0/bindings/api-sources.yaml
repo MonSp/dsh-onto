@@ -1,0 +1,11 @@
+kind: O1ApiSources
+sources:
+  - id: SRC-MED-HIS
+    name: HIS 医嘱与药品库
+    sourceType: SCHEMA_API
+    endpoint: "legacy://his"
+    description: 患者、医嘱、药品主数据
+  - id: SRC-MED-RULEBOOK
+    name: 用药规则手册
+    sourceType: POLICY
+    description: 配伍禁忌与临床路径口径

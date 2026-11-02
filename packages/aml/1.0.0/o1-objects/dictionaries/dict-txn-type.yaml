@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-txn-type
+name: 交易类型
+values: [transfer, withdraw, deposit, xborder-remittance, pos, online]

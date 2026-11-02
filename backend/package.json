@@ -1,0 +1,46 @@
+{
+  "name": "@onto/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Onto 业务本体建模平台统一后端：onto* wire 服务的唯一宿主落点",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol",
+    "@onto/core": "link:../core"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9.2",
+    "zod": "^4.6.7"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  }
+}

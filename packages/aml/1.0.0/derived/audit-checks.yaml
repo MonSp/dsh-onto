@@ -1,0 +1,26 @@
+kind: DerivedAuditChecks
+checks:
+  - id: AUD-AML-FIND-CLUES-O1_CLOSED
+    scenario: SCN-AML-FIND-CLUES
+    check: O1_CLOSED
+    requirement: 引用的对象/关系真实存在（对照行为实例表与运行时数据）
+  - id: AUD-AML-FIND-CLUES-O2_CLOSED
+    scenario: SCN-AML-FIND-CLUES
+    check: O2_CLOSED
+    requirement: 行为实例与规则命中真实发生（对照行为实例表与规则日志）
+  - id: AUD-AML-FIND-CLUES-O3_CLOSED
+    scenario: SCN-AML-FIND-CLUES
+    check: O3_CLOSED
+    requirement: 结论未越出场景卡输出契约；禁用表述零命中
+forbiddenPhrases:
+  SCN-AML-FIND-CLUES:
+    - 认定洗钱
+    - 确定为地下钱庄
+    - 已构成犯罪
+    - 该客户系诈骗分子
+mustInclude:
+  SCN-AML-FIND-CLUES:
+    - candidateList
+    - riskScore
+    - evidenceChains
+    - pendingChecks

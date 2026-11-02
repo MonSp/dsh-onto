@@ -1,0 +1,14 @@
+kind: O2SkillTemplate
+template:
+  id: SKL-MED-NARRATIVE
+  name: 风险提示叙述
+  description: 依据证据模板汇总用药风险事实，不下诊断结论
+  weights:
+    RULE-MED-SCORE-CONFLICT: 0.35
+    RULE-MED-SCORE-PATHDEV: 0.25
+    RULE-MED-SCORE-DOSE: 0.2
+    RULE-MED-SCORE-DUP: 0.2
+  steps:
+    - "医嘱 {orderNo} 聚集以下事实："
+    - "命中规则：{ruleIds}"
+  outputTemplate: "风险提示（非结论，仅供药师/医师复核）：风险分 {riskScore}，命中 {hitCount} 条规则。"

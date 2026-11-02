@@ -1,0 +1,51 @@
+{
+  "objects": [
+    { "id": "PAT-001", "type": "OBJ-MED-PATIENT", "attrs": { "patientNo": "P001", "gender": "F", "weightKg": 52 } },
+    { "id": "ORD-001", "type": "OBJ-MED-ORDER", "attrs": { "orderNo": "O001", "dose": 1200, "frequency": "bid" } },
+    { "id": "DRG-001", "type": "OBJ-MED-DRUG", "attrs": { "drugCode": "D001", "drugName": "华法林", "category": "anticoagulant", "maxDailyDose": 10 } },
+    { "id": "DEP-001", "type": "OBJ-MED-DEPT", "attrs": { "deptCode": "DEPT-ICU", "deptName": "重症医学科" } }
+  ],
+  "relations": [
+    { "id": "MR-001", "type": "REL-MED-PRESCRIBES", "from": "DEP-001", "to": "ORD-001" },
+    { "id": "MR-002", "type": "REL-MED-CONTAINS", "from": "ORD-001", "to": "DRG-001" },
+    { "id": "MR-003", "type": "REL-MED-TREATS", "from": "ORD-001", "to": "PAT-001" }
+  ],
+  "behaviors": [
+    { "id": "MB-001", "type": "BHV-MED-ISSUE-ORDER", "anchorRef": "ORD-001", "objectRef": "ORD-001", "occurredAt": "2026-10-30T09:00:00Z" }
+  ],
+  "candidates": [
+    {
+      "candidateId": "MED-CAND-001",
+      "objectRef": "ORD-001",
+      "features": {
+        "orderNo": "O001",
+        "conflictCount": 2,
+        "pathDeviation": 0.8,
+        "doseRatio": 2.4,
+        "dupCount": 1
+      },
+      "tags": []
+    },
+    {
+      "candidateId": "MED-CAND-002",
+      "objectRef": "ORD-001",
+      "features": {
+        "orderNo": "O002",
+        "conflictCount": 0,
+        "pathDeviation": 0.1,
+        "doseRatio": 0.5,
+        "dupCount": 0
+      },
+      "tags": ["path-whitelist"]
+    },
+    {
+      "candidateId": "MED-CAND-003",
+      "objectRef": "ORD-001",
+      "features": {
+        "orderNo": "O003",
+        "conflictCount": 1
+      },
+      "tags": ["teaching"]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+kind: O1FieldMaps
+maps:
+  - id: FM-AML-ACCT-NO
+    source: src.acct_no
+    target: OBJ-AML-ACCOUNT.acctNo
+  - id: FM-AML-ACCT-TYPE
+    source: src.acct_type
+    target: OBJ-AML-ACCOUNT.acctType
+  - id: FM-AML-TXN-AMT
+    source: src.txn_amount
+    target: OBJ-AML-TXN.amount
+  - id: FM-AML-TXN-TYPE
+    source: src.txn_type
+    target: OBJ-AML-TXN.txnType
+  - id: FM-AML-CUST-NO
+    source: src.cust_no
+    target: OBJ-AML-CUSTOMER.custNo

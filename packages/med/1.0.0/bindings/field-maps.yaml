@@ -1,0 +1,14 @@
+kind: O1FieldMaps
+maps:
+  - id: FM-MED-PATIENT-NO
+    source: his.patient_no
+    target: OBJ-MED-PATIENT.patientNo
+  - id: FM-MED-DRUG-CODE
+    source: his.drug_code
+    target: OBJ-MED-DRUG.drugCode
+  - id: FM-MED-ORDER-NO
+    source: his.order_no
+    target: OBJ-MED-ORDER.orderNo
+  - id: FM-MED-ORDER-DOSE
+    source: his.dose
+    target: OBJ-MED-ORDER.dose

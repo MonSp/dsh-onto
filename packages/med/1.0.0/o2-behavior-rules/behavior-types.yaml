@@ -1,0 +1,18 @@
+kind: O2BehaviorTypes
+behaviors:
+  - id: BHV-MED-ISSUE-ORDER
+    name: 开立医嘱
+    anchor: OBJ-MED-ORDER
+    relations: [REL-MED-PRESCRIBES, REL-MED-CONTAINS, REL-MED-TREATS]
+    states: [draft, active]
+    trigger: 医生站开立
+  - id: BHV-MED-DISPENSE
+    name: 发药
+    anchor: OBJ-MED-ORDER
+    states: [dispensed]
+    trigger: 药房发药
+  - id: BHV-MED-EXECUTE
+    name: 执行
+    anchor: OBJ-MED-ORDER
+    states: [executed]
+    trigger: 护理执行

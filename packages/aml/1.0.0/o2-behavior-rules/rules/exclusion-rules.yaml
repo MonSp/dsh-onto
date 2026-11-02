@@ -1,0 +1,16 @@
+kind: O2ExclusionRules
+rules:
+  - id: RULE-AML-EXCL-SALARY
+    name: 代发工资降权
+    action: downweight
+    factor: 0.3
+    condition: "tag == 'salary'"
+  - id: RULE-AML-EXCL-FISCAL
+    name: 财政拨款降权
+    action: downweight
+    factor: 0.2
+    condition: "tag == 'fiscal'"
+  - id: RULE-AML-EXCL-WHITELIST
+    name: 已核销白名单
+    action: drop
+    condition: "tag == 'cleared-whitelist'"

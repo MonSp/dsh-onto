@@ -1,0 +1,22 @@
+kind: O1RelationTypes
+relations:
+  - id: REL-MED-PRESCRIBES
+    name: 开立
+    from: OBJ-MED-DEPT
+    to: OBJ-MED-ORDER
+    attributes:
+      - { name: at, type: date }
+
+  - id: REL-MED-CONTAINS
+    name: 医嘱包含药品
+    from: OBJ-MED-ORDER
+    to: OBJ-MED-DRUG
+    attributes:
+      - { name: dose, type: float }
+
+  - id: REL-MED-TREATS
+    name: 作用于患者
+    from: OBJ-MED-ORDER
+    to: OBJ-MED-PATIENT
+    attributes:
+      - { name: course, type: string }

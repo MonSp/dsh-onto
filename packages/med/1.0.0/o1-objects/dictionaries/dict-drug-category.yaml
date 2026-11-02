@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-drug-category
+name: 药品类别
+values: [antibiotic, analgesic, anticoagulant, sedative, other]

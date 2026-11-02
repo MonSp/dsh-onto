@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-cust-type
+name: 客户类型
+values: [personal, corporate]

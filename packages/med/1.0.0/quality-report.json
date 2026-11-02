@@ -1,0 +1,90 @@
+{
+  "package": "med-safety",
+  "version": "1.0.0",
+  "generatedAt": "2026-11-02T10:12:34.977Z",
+  "errors": [],
+  "warnings": [
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-MED-ISSUE-ORDER"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-MED-DISPENSE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/behavior-types.yaml",
+      "message": "ID 未被引用: BHV-MED-EXECUTE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/rules/exclusion-rules.yaml",
+      "message": "ID 未被引用: RULE-MED-EXCL-PATH-WL"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o2-behavior-rules/rules/exclusion-rules.yaml",
+      "message": "ID 未被引用: RULE-MED-EXCL-TEACHING"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "o3-scenarios/SCN-MED-RISK-NOTICE.yaml",
+      "message": "ID 未被引用: SCN-MED-RISK-NOTICE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-MED-PATIENT-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-MED-DRUG-CODE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-MED-ORDER-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/field-maps.yaml",
+      "message": "ID 未被引用: FM-MED-ORDER-DOSE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/api-sources.yaml",
+      "message": "ID 未被引用: SRC-MED-HIS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "bindings/api-sources.yaml",
+      "message": "ID 未被引用: SRC-MED-RULEBOOK"
+    }
+  ],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 4 / 关系 3 / 字典 2 / 行为 3 / 打分规则 4 / 排除规则 2 / 方法论模板 1 / 场景 1 / 字段映射 4 / 数据源 2"
+    }
+  ],
+  "score": 76,
+  "passed": true
+}

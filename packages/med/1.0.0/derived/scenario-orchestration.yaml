@@ -1,0 +1,51 @@
+kind: DerivedScenarioOrchestration
+scenarios:
+  - id: SCN-MED-RISK-NOTICE
+    name: 临床用药风险提示
+    goal: 从患者/医嘱出发输出用药风险提示
+    boundary: 仅输出风险提示；是否干预由药师/医师决定
+    inputs:
+      - name: patientId
+        type: string
+        required: true
+      - name: orderNo
+        type: string
+        required: false
+    outputs:
+      fields:
+        - candidateId
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+    pipeline:
+      - stepId: s1
+        stepType: DATA_INGEST
+      - stepId: s2
+        stepType: BEHAVIOR_CALL
+      - stepId: s3
+        stepType: RULE_EVALUATE
+        order: before-scoring
+      - stepId: s4
+        stepType: RULE_EVALUATE
+      - stepId: s5
+        stepType: SKILL_RUN
+        skillRefs:
+          - SKL-MED-NARRATIVE
+      - stepId: s6
+        stepType: AUDIT_CHECK
+      - stepId: s7
+        stepType: HUMAN_REVIEW
+    outputContract:
+      mustInclude:
+        - candidateList
+        - riskScore
+        - evidenceChains
+        - pendingChecks
+      forbiddenPhrases:
+        - 确诊
+        - 属医疗事故
+        - 该用药必然导致
+    reviewGate:
+      required: true
+      threshold: 0.75

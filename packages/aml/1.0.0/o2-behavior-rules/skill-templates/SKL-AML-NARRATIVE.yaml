@@ -1,0 +1,14 @@
+kind: O2SkillTemplate
+template:
+  id: SKL-AML-NARRATIVE
+  name: 线索叙述
+  description: 依据证据模板汇总线索事实，不做认定
+  weights:
+    RULE-AML-SCORE-FANOUT: 0.25
+    RULE-AML-SCORE-FASTFLOW: 0.25
+    RULE-AML-SCORE-NIGHT: 0.2
+    RULE-AML-SCORE-LISTHIT: 0.3
+  steps:
+    - "候选 {candidateId} 于观察窗内聚集以下事实："
+    - "命中规则：{ruleIds}"
+  outputTemplate: "线索摘要（非认定，仅供人工复核）：风险分 {riskScore}，命中 {hitCount} 条规则。"

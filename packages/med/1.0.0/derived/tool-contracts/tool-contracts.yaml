@@ -1,0 +1,89 @@
+kind: DerivedToolContracts
+llmForbidden: true
+idRules:
+  - objectId: OBJ-MED-PATIENT
+    idRule: <his_code>:<patient_no>
+  - objectId: OBJ-MED-DRUG
+    idRule: <his_code>:<drug_code>
+  - objectId: OBJ-MED-ORDER
+    idRule: <his_code>:<order_no>
+  - objectId: OBJ-MED-DEPT
+    idRule: <his_code>:<dept_code>
+tools:
+  - id: TOOL-MED-PATIENT
+    name: 读取患者
+    kind: object-read
+    objectId: OBJ-MED-PATIENT
+    grantScope: OBJ-MED-PATIENT
+    inputs:
+      - OBJ-MED-PATIENT.patientNo
+    outputs:
+      - OBJ-MED-PATIENT.patientNo
+      - OBJ-MED-PATIENT.gender
+      - OBJ-MED-PATIENT.birthDate
+      - OBJ-MED-PATIENT.weightKg
+  - id: TOOL-MED-DRUG
+    name: 读取药品
+    kind: object-read
+    objectId: OBJ-MED-DRUG
+    grantScope: OBJ-MED-DRUG
+    inputs:
+      - OBJ-MED-DRUG.drugCode
+    outputs:
+      - OBJ-MED-DRUG.drugCode
+      - OBJ-MED-DRUG.drugName
+      - OBJ-MED-DRUG.category
+      - OBJ-MED-DRUG.maxDailyDose
+  - id: TOOL-MED-ORDER
+    name: 读取医嘱
+    kind: object-read
+    objectId: OBJ-MED-ORDER
+    grantScope: OBJ-MED-ORDER
+    inputs:
+      - OBJ-MED-ORDER.orderNo
+    outputs:
+      - OBJ-MED-ORDER.orderNo
+      - OBJ-MED-ORDER.dose
+      - OBJ-MED-ORDER.frequency
+      - OBJ-MED-ORDER.startAt
+      - OBJ-MED-ORDER.status
+  - id: TOOL-MED-DEPT
+    name: 读取科室
+    kind: object-read
+    objectId: OBJ-MED-DEPT
+    grantScope: OBJ-MED-DEPT
+    inputs:
+      - OBJ-MED-DEPT.deptCode
+    outputs:
+      - OBJ-MED-DEPT.deptCode
+      - OBJ-MED-DEPT.deptName
+  - id: TOOL-MED-PRESCRIBES
+    name: 读取开立
+    kind: relation-read
+    relationId: REL-MED-PRESCRIBES
+    grantScope: REL-MED-PRESCRIBES
+    inputs:
+      - OBJ-MED-DEPT
+      - OBJ-MED-ORDER
+    outputs:
+      - REL-MED-PRESCRIBES.at
+  - id: TOOL-MED-CONTAINS
+    name: 读取医嘱包含药品
+    kind: relation-read
+    relationId: REL-MED-CONTAINS
+    grantScope: REL-MED-CONTAINS
+    inputs:
+      - OBJ-MED-ORDER
+      - OBJ-MED-DRUG
+    outputs:
+      - REL-MED-CONTAINS.dose
+  - id: TOOL-MED-TREATS
+    name: 读取作用于患者
+    kind: relation-read
+    relationId: REL-MED-TREATS
+    grantScope: REL-MED-TREATS
+    inputs:
+      - OBJ-MED-ORDER
+      - OBJ-MED-PATIENT
+    outputs:
+      - REL-MED-TREATS.course

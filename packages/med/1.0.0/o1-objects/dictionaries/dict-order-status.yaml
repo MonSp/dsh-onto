@@ -1,0 +1,4 @@
+kind: O1Dictionary
+id: dict-order-status
+name: 医嘱状态
+values: [draft, active, stopped, completed]

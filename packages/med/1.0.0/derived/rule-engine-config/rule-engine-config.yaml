@@ -1,0 +1,49 @@
+kind: DerivedRuleEngineConfig
+llmForbidden: true
+weightSum: 1
+exclusion:
+  - id: RULE-MED-EXCL-PATH-WL
+    name: 已审核白名单路径
+    action: drop
+    factor: null
+    condition: tag == 'path-whitelist'
+    order: before-scoring
+  - id: RULE-MED-EXCL-TEACHING
+    name: 教学查房降权
+    action: downweight
+    factor: 0.4
+    condition: tag == 'teaching'
+    order: before-scoring
+scoring:
+  - id: RULE-MED-SCORE-CONFLICT
+    name: 用药冲突
+    weight: 0.35
+    expression: min(1, conflictCount/3)
+    threshold: 0.3
+    evidenceTemplate: 检出用药冲突 {conflictCount} 例
+  - id: RULE-MED-SCORE-PATHDEV
+    name: 路径偏离
+    weight: 0.25
+    expression: min(1, pathDeviation)
+    threshold: 0.5
+    evidenceTemplate: 路径偏离度 {pathDeviation}
+  - id: RULE-MED-SCORE-DOSE
+    name: 超剂量
+    weight: 0.2
+    expression: min(1, doseRatio/2)
+    threshold: 0.5
+    evidenceTemplate: 剂量超限倍数 {doseRatio}
+  - id: RULE-MED-SCORE-DUP
+    name: 重复用药
+    weight: 0.2
+    expression: min(1, dupCount/2)
+    threshold: 0.5
+    evidenceTemplate: 重复用药 {dupCount} 组
+skillTemplates:
+  - id: SKL-MED-NARRATIVE
+    name: 风险提示叙述
+    weights:
+      RULE-MED-SCORE-CONFLICT: 0.35
+      RULE-MED-SCORE-PATHDEV: 0.25
+      RULE-MED-SCORE-DOSE: 0.2
+      RULE-MED-SCORE-DUP: 0.2
