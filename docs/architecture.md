@@ -1,4 +1,4 @@
-# Onto 业务本体建模平台 — 架构
+# Caliber 业务本体建模平台 — 架构
 
 > 本文件自成一体：平台的目标、概念、规则与结构在此完整定义，阅读不依赖任何外部文档。
 > 一句话：**把专家脑子里的业务口径写成机器可校验、可签发、可派生的结构；判定在规则引擎，认定在人工。**
@@ -20,14 +20,14 @@
 浏览器 ── dsh Web UI（未改动）
             │  slots: main / sidebar.panellist
             ▼
-  @onto/workbench（Web UI bundle：包管理|建模|知识库|校验派生|场景运行）
-            │  ctx.remote.onto{Workspace,Model,Validate,Derive,Knowledge,Runtime}
+  @caliber/workbench（Web UI bundle：包管理|建模|知识库|校验派生|场景运行）
+            │  ctx.remote.caliber{Workspace,Model,Validate,Derive,Knowledge,Runtime}
             ▼
-  dsh Host（profile=onto = web 模板 + @onto/backend + @onto/workbench）
-            │  @onto/backend 注册 onto* wire 服务（唯一后端落点）
-            │  工作区 <profile>/onto/workspace/packages/<name>/<version>/
+  dsh Host（profile=caliber = web 模板 + @caliber/backend + @caliber/workbench）
+            │  @caliber/backend 注册 caliber* wire 服务（唯一后端落点）
+            │  工作区 <profile>/caliber/workspace/packages/<name>/<version>/
             ▼
-  @onto/core（纯 TypeScript 引擎库 + CLI，零 harness 依赖）
+  @caliber/core（纯 TypeScript 引擎库 + CLI，零 harness 依赖）
 ```
 
 - **deepseek-harness 只读**：以官方扩展点接入（`dsh.bundle.patch` 注册 bundle、`dsh.client` 进启动图、
@@ -256,6 +256,6 @@ scenario:
 | `core/src/rules.ts` | 表达式求值、排除→打分 | `tests/scenario.test.mjs` |
 | `core/src/scenario.ts` `audit.ts` | 场景派发、三层审计、禁语扫描 | `tests/scenario.test.mjs` |
 | `core/src/knowledge.ts` `llm.ts` | 五类原料解析、人审队列、物化 | `tests/knowledge.test.mjs` |
-| `core/src/cli.ts` | `onto package/validate/derive/gate/run/knowledge` | — |
-| `backend/` | onto* wire 服务（唯一后端落点） | — |
+| `core/src/cli.ts` | `caliber package/validate/derive/gate/run/knowledge` | — |
+| `backend/` | caliber* wire 服务（唯一后端落点） | — |
 | `workbench/` | Web UI 五 tab | — |

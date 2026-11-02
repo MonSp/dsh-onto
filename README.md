@@ -1,4 +1,4 @@
-# Onto — 业务本体建模平台
+# Caliber — 业务本体建模平台
 
 > 以 DeepSeek Harness（dsh）为宿主的**业务本体建模 + AI 辅助决策**平台：
 > 把专家的业务口径写成机器可校验、可签发、可派生的结构；**判定在规则引擎，认定在人工**。
@@ -8,22 +8,22 @@
 
 | 能力 | 入口 |
 |---|---|
-| 包管理：创建 / 导入导出 / 版本 fork / 签发状态机（DRAFT→IN_REVIEW→ISSUED，ISSUED 只读） | `onto package *` / Web「包管理」 |
-| 建模面：O1/O2/O3 结构录入 + YAML 导入 | Web「建模」 / `ontoModel.writeSource` |
-| 知识库：五类原料上传 + LLM 解析（失败回落词面启发）+ 候选队列 + 人审 | `onto knowledge *` / Web「知识库」 |
-| 校验器：引用闭合 / 权重=1.0 / 字典 / 事件口径 / 属性解析 + 质量分 | `onto validate` / Web「校验派生」 |
-| 派生器：derived/** + manifest 指纹 + 加载门禁（DERIVED_DRIFT） | `onto derive` / `onto gate` |
+| 包管理：创建 / 导入导出 / 版本 fork / 签发状态机（DRAFT→IN_REVIEW→ISSUED，ISSUED 只读） | `caliber package *` / Web「包管理」 |
+| 建模面：O1/O2/O3 结构录入 + YAML 导入 | Web「建模」 / `caliberModel.writeSource` |
+| 知识库：五类原料上传 + LLM 解析（失败回落词面启发）+ 候选队列 + 人审 | `caliber knowledge *` / Web「知识库」 |
+| 校验器：引用闭合 / 权重=1.0 / 字典 / 事件口径 / 属性解析 + 质量分 | `caliber validate` / Web「校验派生」 |
+| 派生器：derived/** + manifest 指纹 + 加载门禁（DERIVED_DRIFT） | `caliber derive` / `caliber gate` |
 | 规则引擎：排除（before-scoring）→ 打分（权重来自 O2），每分回指 ruleId | `core` 规则引擎 |
-| 场景执行：pipeline 最小步派发 + 三层审计闭合 + 人审字段 | `onto run` / Web「场景运行」 |
+| 场景执行：pipeline 最小步派发 + 三层审计闭合 + 人审字段 | `caliber run` / Web「场景运行」 |
 | 第二域零改引擎：AML（反洗钱）+ MED（医疗）只换包内容 | `packages/` |
 
 ## 目录
 
 ```
-Onto/
-  core/       @onto/core — 纯引擎库 + CLI（零 harness 依赖，node --test 46 项验收测试）
-  backend/    @onto/backend — dsh bundle：onto* wire 服务（唯一后端落点）
-  workbench/  @onto/workbench — dsh bundle：Web UI 五 tab
+Caliber/
+  core/       @caliber/core — 纯引擎库 + CLI（零 harness 依赖，node --test 46 项验收测试）
+  backend/    @caliber/backend — dsh bundle：caliber* wire 服务（唯一后端落点）
+  workbench/  @caliber/workbench — dsh bundle：Web UI 五 tab
   packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0
   examples/   场景运行样例数据（aml-run.json / med-run.json）
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
@@ -36,18 +36,18 @@ Onto/
 `../deepseek-harness` 已完成 `pnpm install && pnpm run build`。
 
 ```powershell
-# 1. 创建 onto profile 并安装 @onto/backend + @onto/workbench，播种示例包
-Onto\scripts\setup-profile.ps1
+# 1. 创建 caliber profile 并安装 @caliber/backend + @caliber/workbench，播种示例包
+Caliber\scripts\setup-profile.ps1
 # 2. 核对组合配置
-Onto\scripts\dump-config.ps1
+Caliber\scripts\dump-config.ps1
 # 3. 启动 Web UI（浏览器访问打印的 dsh web URL）→ 侧栏「本体建模」
-Onto\scripts\dev-web.ps1
+Caliber\scripts\dev-web.ps1
 ```
 
 ## CLI（不经浏览器）
 
 ```powershell
-cd Onto\core
+cd Caliber\core
 node dist\cli.js package create --name demo --version 1.0.0 --domain DEMO --root ..\workspace
 node dist\cli.js validate ..\packages\aml\1.0.0
 node dist\cli.js derive   ..\packages\aml\1.0.0

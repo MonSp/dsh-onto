@@ -9,7 +9,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = join(HERE, '..', '..')
 
 export function mkWorkspace() {
-  const root = mkdtempSync(join(tmpdir(), 'onto-test-'))
+  const root = mkdtempSync(join(tmpdir(), 'caliber-test-'))
   return new PackageWorkspace(root)
 }
 

@@ -8,15 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@caliber/core':
+        specifier: link:../core
+        version: link:../core
       '@deepseek-ai/cordis':
         specifier: link:../../deepseek-harness/vendor/cordis
         version: link:../../deepseek-harness/vendor/cordis
       '@deepseek-ai/dsh-typert-protocol':
         specifier: link:../../deepseek-harness/packages/typert/protocol
         version: link:../../deepseek-harness/packages/typert/protocol
-      '@onto/core':
-        specifier: link:../core
-        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^24

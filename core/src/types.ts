@@ -25,7 +25,7 @@ export const SOURCE_TYPES: readonly SourceType[] = [
 
 export type AttributeType = 'string' | 'int' | 'float' | 'bool' | 'date' | 'enum' | 'ref'
 
-export interface OntoAttribute {
+export interface CaliberAttribute {
   name: string
   type: AttributeType
   /** type=enum 时指向 dict-<slug>。 */
@@ -40,7 +40,7 @@ export interface O1ObjectType {
   id: string
   name: string
   idRule?: string
-  attributes: OntoAttribute[]
+  attributes: CaliberAttribute[]
   lifecycle?: string[]
   description?: string
 }
@@ -50,7 +50,7 @@ export interface O1RelationType {
   name: string
   from: string
   to: string
-  attributes?: OntoAttribute[]
+  attributes?: CaliberAttribute[]
   description?: string
 }
 

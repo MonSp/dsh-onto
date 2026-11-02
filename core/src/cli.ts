@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /**
- * Onto CLI —— 业务本体建模平台命令行入口（规范 §11.1.8）。
+ * Caliber CLI —— 业务本体建模平台命令行入口（规范 §11.1.8）。
  *
- *   onto package create --name aml-analysis --version 1.0.0 --domain AML [--root <ws>]
- *   onto package list [--root <ws>]
- *   onto package fork --name N --from V --to V2 [--root <ws>]
- *   onto package review --name N --version V          # DRAFT → IN_REVIEW
- *   onto package issue --name N --version V --by <human> [--note ...]   仅人工
- *   onto package export --name N --version V --out F.json
- *   onto package import --in F.json
- *   onto validate <versionDir>                        # quality-report.json
- *   onto derive <versionDir>                          # derived/** + manifest
- *   onto gate <versionDir>                            # 加载门禁（DERIVED_DRIFT）
- *   onto run <versionDir> <scenarioId> --data run.json [--out result.json]
- *   onto knowledge upload --package P --type T --name N --file F [--root <ws>]
- *   onto knowledge parse --source <id> [--llm heuristic|deepseek] [--root <ws>]
- *   onto knowledge queue [--package P] [--root <ws>]
- *   onto knowledge review --id <cid> --action approve|reject|merge [--merge-into NAME]
- *   onto knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
+ *   caliber package create --name aml-analysis --version 1.0.0 --domain AML [--root <ws>]
+ *   caliber package list [--root <ws>]
+ *   caliber package fork --name N --from V --to V2 [--root <ws>]
+ *   caliber package review --name N --version V          # DRAFT → IN_REVIEW
+ *   caliber package issue --name N --version V --by <human> [--note ...]   仅人工
+ *   caliber package export --name N --version V --out F.json
+ *   caliber package import --in F.json
+ *   caliber validate <versionDir>                        # quality-report.json
+ *   caliber derive <versionDir>                          # derived/** + manifest
+ *   caliber gate <versionDir>                            # 加载门禁（DERIVED_DRIFT）
+ *   caliber run <versionDir> <scenarioId> --data run.json [--out result.json]
+ *   caliber knowledge upload --package P --type T --name N --file F [--root <ws>]
+ *   caliber knowledge parse --source <id> [--llm heuristic|deepseek] [--root <ws>]
+ *   caliber knowledge queue [--package P] [--root <ws>]
+ *   caliber knowledge review --id <cid> --action approve|reject|merge [--merge-into NAME]
+ *   caliber knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -65,7 +65,7 @@ function flagStr(args: Args, name: string, fallback?: string): string {
 }
 
 function fail(message: string, code = 1): never {
-  console.error(`onto: ${message}`)
+  console.error(`caliber: ${message}`)
   process.exit(code)
 }
 
@@ -116,7 +116,7 @@ function help(): void {
   console.log(USAGE)
 }
 
-const USAGE = `onto — 业务本体建模平台 CLI
+const USAGE = `caliber — 业务本体建模平台 CLI
   package create|list|fork|review|issue|export|import
   validate <versionDir>
   derive <versionDir>

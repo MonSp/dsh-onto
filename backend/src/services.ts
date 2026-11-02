@@ -1,21 +1,21 @@
 /**
- * Host half of the Onto unified backend bundle.
+ * Host half of the Caliber unified backend bundle.
  *
- * Owns every Onto wire namespace in one bundle:
- * - `ontoWorkspace` — 包管理（创建/fork/签发状态机/导入导出）
- * - `ontoModel`     — O1/O2/O3 模型读写 + YAML 源文件通道
- * - `ontoValidate`  — 校验器（quality-report）
- * - `ontoDerive`    — 派生链 + 加载门禁（DERIVED_DRIFT）
- * - `ontoKnowledge` — 知识库（原料/解析/人审队列/物化）
- * - `ontoRuntime`   — 场景执行（排除→打分→叙述→三层审计→人审字段）
+ * Owns every Caliber wire namespace in one bundle:
+ * - `caliberWorkspace` — 包管理（创建/fork/签发状态机/导入导出）
+ * - `caliberModel`     — O1/O2/O3 模型读写 + YAML 源文件通道
+ * - `caliberValidate`  — 校验器（quality-report）
+ * - `caliberDerive`    — 派生链 + 加载门禁（DERIVED_DRIFT）
+ * - `caliberKnowledge` — 知识库（原料/解析/人审队列/物化）
+ * - `caliberRuntime`   — 场景执行（排除→打分→叙述→三层审计→人审字段）
  *
  * Persistence: 业务本体包是文件系统一等交付物，工作区在
- * `<profileDir>/onto/workspace/packages/<name>/<version>/`；
- * 知识库队列在 `<profileDir>/onto/knowledge/`。
+ * `<profileDir>/caliber/workspace/packages/<name>/<version>/`；
+ * 知识库队列在 `<profileDir>/caliber/knowledge/`。
  *
  * `@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-typert-protocol` 用 `link:`
  * 指向 harness 物理路径（与宿主共享 cordis 模块实例）。
- * @module @onto/backend
+ * @module @caliber/backend
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -40,15 +40,15 @@ import {
   type RuntimeDataset,
   type ScenarioRunResult,
   type SourceType,
-} from '@onto/core'
+} from '@caliber/core'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
-    'onto/not-found': Record<string, never>
-    'onto/bad-request': Record<string, never>
-    'onto/conflict': Record<string, never>
-    'onto/readonly': Record<string, never>
-    'onto/drift': Record<string, never>
+    'caliber/not-found': Record<string, never>
+    'caliber/bad-request': Record<string, never>
+    'caliber/conflict': Record<string, never>
+    'caliber/readonly': Record<string, never>
+    'caliber/drift': Record<string, never>
   }
 }
 
@@ -58,7 +58,7 @@ interface ProfileContextLike {
 }
 
 /**
- * Resolve the profile data directory (`<profileDir>/onto`).
+ * Resolve the profile data directory (`<profileDir>/caliber`).
  * Best-effort via the root provide store; fails loud when unavailable.
  */
 export function resolveDataDir(ctx: Context): string {
@@ -70,12 +70,12 @@ export function resolveDataDir(ctx: Context): string {
   }
   const base = profile?.dir
   if (!base || typeof base !== 'string') {
-    throw new Error('profileContext.dir unavailable; cannot locate onto data directory')
+    throw new Error('profileContext.dir unavailable; cannot locate caliber data directory')
   }
-  return join(base, 'onto')
+  return join(base, 'caliber')
 }
 
-function ontoError(code: keyof RemoteErrorDetailsMap, message: string): RemoteError {
+function caliberError(code: keyof RemoteErrorDetailsMap, message: string): RemoteError {
   return new RemoteError(code, message, {})
 }
 
@@ -85,12 +85,12 @@ function toRemoteError(e: unknown): RemoteError {
   const code =
     typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : ''
   if (code === 'PACKAGE_READONLY' || code === 'PACKAGE_ISSUE_REQUIRES_HUMAN') {
-    return ontoError('onto/readonly', message)
+    return caliberError('caliber/readonly', message)
   }
-  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message)
-  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message)
-  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message)
-  return ontoError('onto/bad-request', message)
+  if (code === 'PACKAGE_EXISTS') return caliberError('caliber/conflict', message)
+  if (code === 'DERIVED_DRIFT') return caliberError('caliber/drift', message)
+  if (/not found|NOT_FOUND/.test(code + message)) return caliberError('caliber/not-found', message)
+  return caliberError('caliber/bad-request', message)
 }
 
 function guard<T>(fn: () => T): T {
@@ -110,25 +110,25 @@ async function guardAsync<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ontoWorkspace —— 包管理与签发状态机
+ * caliberWorkspace —— 包管理与签发状态机
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    ontoWorkspace: OntoWorkspace
-    ontoModel: OntoModel
-    ontoValidate: OntoValidate
-    ontoDerive: OntoDerive
-    ontoKnowledge: OntoKnowledge
-    ontoRuntime: OntoRuntime
+    caliberWorkspace: CaliberWorkspace
+    caliberModel: CaliberModel
+    caliberValidate: CaliberValidate
+    caliberDerive: CaliberDerive
+    caliberKnowledge: CaliberKnowledge
+    caliberRuntime: CaliberRuntime
   }
 }
 
-export class OntoWorkspace extends TypertRemoteService {
+export class CaliberWorkspace extends TypertRemoteService {
   readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoWorkspace')
+    super(ctx, 'caliberWorkspace')
     this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
   }
 
@@ -141,7 +141,7 @@ export class OntoWorkspace extends TypertRemoteService {
   async remoteExportCreatePackage(request: { name: string; version: string; domain: string }): Promise<{ dir: string }> {
     return guard(() => {
       if (!request?.name || !request?.version || !request?.domain) {
-        throw ontoError('onto/bad-request', 'name/version/domain required')
+        throw caliberError('caliber/bad-request', 'name/version/domain required')
       }
       return { dir: this.ws.createPackage(request) }
     })
@@ -151,7 +151,7 @@ export class OntoWorkspace extends TypertRemoteService {
   async remoteExportForkVersion(request: { name: string; fromVersion: string; toVersion: string }): Promise<{ dir: string }> {
     return guard(() => {
       if (!request?.name || !request?.fromVersion || !request?.toVersion) {
-        throw ontoError('onto/bad-request', 'name/fromVersion/toVersion required')
+        throw caliberError('caliber/bad-request', 'name/fromVersion/toVersion required')
       }
       return { dir: this.ws.forkVersion(request.name, request.fromVersion, request.toVersion) }
     })
@@ -167,7 +167,7 @@ export class OntoWorkspace extends TypertRemoteService {
   }): Promise<{ status: string }> {
     return guard(() => {
       if (!request?.name || !request?.version || !request?.to) {
-        throw ontoError('onto/bad-request', 'name/version/to required')
+        throw caliberError('caliber/bad-request', 'name/version/to required')
       }
       this.ws.transition(request.name, request.version, request.to, request.issuedBy, request.note)
       return { status: request.to }
@@ -184,21 +184,21 @@ export class OntoWorkspace extends TypertRemoteService {
     archive: { meta: PackageMeta; files: Record<string, string> }
   }): Promise<{ dir: string }> {
     return guard(() => {
-      if (!request?.archive?.meta?.name) throw ontoError('onto/bad-request', 'archive required')
+      if (!request?.archive?.meta?.name) throw caliberError('caliber/bad-request', 'archive required')
       return { dir: this.ws.importVersion(request.archive) }
     })
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ontoModel —— O1/O2/O3 模型读写（建模面底层）
+ * caliberModel —— O1/O2/O3 模型读写（建模面底层）
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-export class OntoModel extends TypertRemoteService {
+export class CaliberModel extends TypertRemoteService {
   private readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoModel')
+    super(ctx, 'caliberModel')
     this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
   }
 
@@ -236,11 +236,11 @@ export class OntoModel extends TypertRemoteService {
       const dir = this.dirOf(request.name, request.version)
       const meta = readPackageMeta(dir)
       if (meta.status === 'ISSUED') {
-        throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (read-only)`)
+        throw caliberError('caliber/readonly', `${meta.name}@${meta.version} is ISSUED (read-only)`)
       }
       // 防路径逃逸
       if (request.relPath.includes('..') || request.relPath.startsWith('/') || request.relPath.includes('\\')) {
-        throw ontoError('onto/bad-request', 'illegal relPath')
+        throw caliberError('caliber/bad-request', 'illegal relPath')
       }
       const full = join(dir, request.relPath)
       mkdirSync(dirname(full), { recursive: true })
@@ -251,14 +251,14 @@ export class OntoModel extends TypertRemoteService {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ontoValidate / ontoDerive
+ * caliberValidate / caliberDerive
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-export class OntoValidate extends TypertRemoteService {
+export class CaliberValidate extends TypertRemoteService {
   private readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoValidate')
+    super(ctx, 'caliberValidate')
     this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
   }
 
@@ -279,11 +279,11 @@ export class OntoValidate extends TypertRemoteService {
   }
 }
 
-export class OntoDerive extends TypertRemoteService {
+export class CaliberDerive extends TypertRemoteService {
   private readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoDerive')
+    super(ctx, 'caliberDerive')
     this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
   }
 
@@ -313,15 +313,15 @@ export class OntoDerive extends TypertRemoteService {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ontoKnowledge —— 知识库：原料 / 解析 / 人审 / 物化
+ * caliberKnowledge —— 知识库：原料 / 解析 / 人审 / 物化
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-export class OntoKnowledge extends TypertRemoteService {
+export class CaliberKnowledge extends TypertRemoteService {
   private readonly store: KnowledgeStore
   private readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoKnowledge')
+    super(ctx, 'caliberKnowledge')
     const dataDir = resolveDataDir(ctx)
     this.store = new KnowledgeStore(dataDir)
     this.ws = new PackageWorkspace(join(dataDir, 'workspace'))
@@ -343,7 +343,7 @@ export class OntoKnowledge extends TypertRemoteService {
     engine: 'deepseek' | 'heuristic'
   }> {
     return guardAsync(async () => {
-      const { HeuristicLlm, DeepSeekLlm } = await import('@onto/core')
+      const { HeuristicLlm, DeepSeekLlm } = await import('@caliber/core')
       const llm = request.useApi ? new DeepSeekLlm() : new HeuristicLlm()
       const { added, engine } = await this.store.parseSource(request.sourceId, llm)
       return { added, engine }
@@ -388,14 +388,14 @@ export class OntoKnowledge extends TypertRemoteService {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ontoRuntime —— 场景执行
+ * caliberRuntime —— 场景执行
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-export class OntoRuntime extends TypertRemoteService {
+export class CaliberRuntime extends TypertRemoteService {
   private readonly ws: PackageWorkspace
 
   constructor(ctx: Context) {
-    super(ctx, 'ontoRuntime')
+    super(ctx, 'caliberRuntime')
     this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
   }
 

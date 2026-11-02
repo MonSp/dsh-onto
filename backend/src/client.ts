@@ -1,14 +1,14 @@
 /**
- * Client half of @onto/backend —— 手写 Remote 贡献并挂载进 Gateway，
- * 让所有消费方 bundle 能注入 `remote.onto*` 命名空间。无 UI。
+ * Client half of @caliber/backend —— 手写 Remote 贡献并挂载进 Gateway，
+ * 让所有消费方 bundle 能注入 `remote.caliber*` 命名空间。无 UI。
  *
  * Runtime shape: dsh loads bundle clients as CLASSIC scripts, so this file
  * emits with zero runtime import/export. Descriptors are hand-written because
  * `@deepseek-ai/dsh-typert-protocol` is not a module-table seed word; `zod`
  * is a seed word and backs the codecs.
  *
- * Namespaces: ontoWorkspace, ontoModel, ontoValidate, ontoDerive,
- * ontoKnowledge, ontoRuntime.
+ * Namespaces: caliberWorkspace, caliberModel, caliberValidate, caliberDerive,
+ * caliberKnowledge, caliberRuntime.
  */
 
 type RemoteResult<T> =
@@ -72,7 +72,7 @@ interface Window {
 }
 
 window.__ModuleLoader__.load({
-  id: '@onto/backend',
+  id: '@caliber/backend',
   factory(require): PluginModule {
     const zod = require('zod')
 
@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
       description: string,
     ): InvocationDescriptorLike {
       return {
-        id: `@onto/backend#${service}/${method}`,
+        id: `@caliber/backend#${service}/${method}`,
         service,
         namespace: service,
         method,
@@ -110,44 +110,44 @@ window.__ModuleLoader__.load({
     }
 
     const allDescriptors: InvocationDescriptorLike[] = [
-      // ontoWorkspace —— 包管理与签发状态机
-      desc('ontoWorkspace', 'listVersions', false, 'WLV', 'List all package versions.'),
-      desc('ontoWorkspace', 'createPackage', true, 'WCP', 'Create a new DRAFT package version.'),
-      desc('ontoWorkspace', 'forkVersion', true, 'WFK', 'Fork a new editable version.'),
-      desc('ontoWorkspace', 'transition', true, 'WTR', 'State machine transition (issue is human-only).'),
-      desc('ontoWorkspace', 'exportVersion', true, 'WEX', 'Export a version as a JSON archive.'),
-      desc('ontoWorkspace', 'importVersion', true, 'WIM', 'Import a JSON archive.'),
-      // ontoModel —— O1/O2/O3 模型读写
-      desc('ontoModel', 'load', true, 'MLD', 'Load the ontology package model.'),
-      desc('ontoModel', 'save', true, 'MSV', 'Save the model (ISSUED refuses).'),
-      desc('ontoModel', 'readSources', true, 'MRS', 'Read raw source files.'),
-      desc('ontoModel', 'writeSource', true, 'MWS', 'Write one YAML source file.'),
-      // ontoValidate
-      desc('ontoValidate', 'validate', true, 'VVD', 'Validate and persist quality-report.json.'),
-      desc('ontoValidate', 'summary', true, 'VSM', 'Validate without writing the report.'),
-      // ontoDerive
-      desc('ontoDerive', 'derive', true, 'DDV', 'Generate derived/** + manifest.'),
-      desc('ontoDerive', 'gate', true, 'DGT', 'Load gate (DERIVED_DRIFT on mismatch).'),
-      // ontoKnowledge
-      desc('ontoKnowledge', 'uploadSource', true, 'KUS', 'Upload one knowledge source (sha256 idempotent).'),
-      desc('ontoKnowledge', 'parseSource', true, 'KPS', 'Parse into draft candidates (LLM + heuristic fallback).'),
-      desc('ontoKnowledge', 'listSources', true, 'KLS', 'List knowledge sources.'),
-      desc('ontoKnowledge', 'listCandidates', true, 'KLC', 'List draft candidates.'),
-      desc('ontoKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
-      desc('ontoKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
-      // ontoRuntime
-      desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
-      desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
+      // caliberWorkspace —— 包管理与签发状态机
+      desc('caliberWorkspace', 'listVersions', false, 'WLV', 'List all package versions.'),
+      desc('caliberWorkspace', 'createPackage', true, 'WCP', 'Create a new DRAFT package version.'),
+      desc('caliberWorkspace', 'forkVersion', true, 'WFK', 'Fork a new editable version.'),
+      desc('caliberWorkspace', 'transition', true, 'WTR', 'State machine transition (issue is human-only).'),
+      desc('caliberWorkspace', 'exportVersion', true, 'WEX', 'Export a version as a JSON archive.'),
+      desc('caliberWorkspace', 'importVersion', true, 'WIM', 'Import a JSON archive.'),
+      // caliberModel —— O1/O2/O3 模型读写
+      desc('caliberModel', 'load', true, 'MLD', 'Load the ontology package model.'),
+      desc('caliberModel', 'save', true, 'MSV', 'Save the model (ISSUED refuses).'),
+      desc('caliberModel', 'readSources', true, 'MRS', 'Read raw source files.'),
+      desc('caliberModel', 'writeSource', true, 'MWS', 'Write one YAML source file.'),
+      // caliberValidate
+      desc('caliberValidate', 'validate', true, 'VVD', 'Validate and persist quality-report.json.'),
+      desc('caliberValidate', 'summary', true, 'VSM', 'Validate without writing the report.'),
+      // caliberDerive
+      desc('caliberDerive', 'derive', true, 'DDV', 'Generate derived/** + manifest.'),
+      desc('caliberDerive', 'gate', true, 'DGT', 'Load gate (DERIVED_DRIFT on mismatch).'),
+      // caliberKnowledge
+      desc('caliberKnowledge', 'uploadSource', true, 'KUS', 'Upload one knowledge source (sha256 idempotent).'),
+      desc('caliberKnowledge', 'parseSource', true, 'KPS', 'Parse into draft candidates (LLM + heuristic fallback).'),
+      desc('caliberKnowledge', 'listSources', true, 'KLS', 'List knowledge sources.'),
+      desc('caliberKnowledge', 'listCandidates', true, 'KLC', 'List draft candidates.'),
+      desc('caliberKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
+      desc('caliberKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
+      // caliberRuntime
+      desc('caliberRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
+      desc('caliberRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
     ]
 
     return {
       inject: ['remote'],
       async apply(ctx: Ctx): Promise<void> {
         try {
-          await ctx.remote.$mount({ package: '@onto/backend', descriptors: allDescriptors })
-          console.log('[onto-backend] $mount ok, descriptors:', allDescriptors.length)
+          await ctx.remote.$mount({ package: '@caliber/backend', descriptors: allDescriptors })
+          console.log('[caliber-backend] $mount ok, descriptors:', allDescriptors.length)
         } catch (e) {
-          console.error('[onto-backend] $mount FAILED:', e)
+          console.error('[caliber-backend] $mount FAILED:', e)
           throw e
         }
       },

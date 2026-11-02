@@ -34,7 +34,7 @@ const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 /**
  * 判断字符串是否是本体 ID（`TYPE-TAG-NAME` 或 `dict-<slug>`）。
  */
-export function isOntoId(value: string): boolean {
+export function isCaliberId(value: string): boolean {
   return ID_PATTERN.test(value) || DICT_PATTERN.test(value)
 }
 

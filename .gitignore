@@ -4,3 +4,4 @@ dist/
 .devweb*.log
 .setup*.log
 result.json
+.dump*.log

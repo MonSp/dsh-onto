@@ -509,7 +509,7 @@ export class PackageWorkspace {
 
   /** 导出为单文件 JSON 归档（全部源文件 + 元数据）。 */
   exportVersion(name: string, version: string): {
-    format: 'onto-package/1'
+    format: 'caliber-package/1'
     meta: PackageMeta
     files: Record<string, string>
   } {
@@ -521,7 +521,7 @@ export class PackageWorkspace {
     for (const rel of listSourceFiles(dir)) {
       files[rel] = readSourceFile(dir, rel)
     }
-    return { format: 'onto-package/1', meta: readPackageMeta(dir), files }
+    return { format: 'caliber-package/1', meta: readPackageMeta(dir), files }
   }
 
   /** 从 JSON 归档导入（同名同版本已存在则拒绝，保持幂等）。 */
