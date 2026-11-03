@@ -45,11 +45,16 @@ function findEventsKey(value: unknown, path: string, hits: string[]): void {
 function collectDefinedIds(pkg: OntologyPackage): {
   ids: Map<string, string>
   dupes: Array<{ id: string; first: string; second: string }>
+  empty: string[]
 } {
   const ids = new Map<string, string>()
   const dupes: Array<{ id: string; first: string; second: string }> = []
+  const empty: string[] = []
   const add = (id: string, where: string): void => {
-    if (!id) return
+    if (!id) {
+      empty.push(where)
+      return
+    }
     const first = ids.get(id)
     if (first === undefined) ids.set(id, where)
     else dupes.push({ id, first, second: where })
@@ -64,7 +69,7 @@ function collectDefinedIds(pkg: OntologyPackage): {
   for (const s of pkg.scenarios) add(s.id, `o3-scenarios/${s.id}.yaml`)
   for (const f of pkg.fieldMaps) add(f.id, 'bindings/field-maps.yaml')
   for (const s of pkg.apiSources) add(s.id, 'bindings/api-sources.yaml')
-  return { ids, dupes }
+  return { ids, dupes, empty }
 }
 
 /**
@@ -89,7 +94,7 @@ export function validatePackage(
   const warnings: ValidationIssue[] = []
   const info: ValidationIssue[] = []
   const external = new Set(pkg.meta.externalRefs ?? [])
-  const { ids: defined, dupes } = collectDefinedIds(pkg)
+  const { ids: defined, dupes, empty } = collectDefinedIds(pkg)
 
   const err = (code: string, where: string, message: string): void => {
     errors.push({ level: 'error', code, where, message })
@@ -104,6 +109,9 @@ export function validatePackage(
 
   for (const d of dupes) {
     err('DUP_ID', d.second, `ID 重复: ${d.id}（已定义于 ${d.first}）`)
+  }
+  for (const where of empty) {
+    err('ID_EMPTY', where, 'ID 为空')
   }
 
   /* ── error: 引用闭合（§7.1） ─────────────────────────────────────────── */

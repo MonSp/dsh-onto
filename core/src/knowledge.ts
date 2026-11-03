@@ -72,6 +72,17 @@ export function validateDraftItem(item: unknown): string | null {
       return `bad payload.${field}`
     }
   }
+  // ScenarioCard 嵌套数值：reviewGate.threshold（NaN/Infinity 不得入库）
+  if (it['targetKind'] === 'ScenarioCard') {
+    const rg = (payload as Record<string, unknown>)['reviewGate']
+    if (rg !== undefined && rg !== null) {
+      if (typeof rg !== 'object' || Array.isArray(rg)) return 'bad payload.reviewGate'
+      const th = (rg as Record<string, unknown>)['threshold']
+      if (th !== undefined && th !== null && (typeof th !== 'number' || !Number.isFinite(th))) {
+        return 'bad payload.reviewGate.threshold'
+      }
+    }
+  }
   const conf = it['confidence']
   if (typeof conf !== 'number' || !Number.isFinite(conf) || conf < 0 || conf > 1) return 'bad confidence'
   return null
@@ -254,9 +265,11 @@ export class KnowledgeStore {
     if (patch.payload !== undefined) next.payload = patch.payload
     if (patch.name !== undefined) {
       // 改名同步 payload.name（物化侧 payload.name 优先）；仅当 payload.name 与旧名一致
-      // （解析时的自动副本）才同步，故意设了别的 payload.name 则保持不动。
+      // （解析时的自动副本）才同步。patch.payload 显式带 name 键视为故意保留，不覆盖。
+      const explicitName =
+        patch.payload !== undefined && Object.prototype.hasOwnProperty.call(patch.payload, 'name')
       const pay = next.payload
-      if (pay && typeof pay === 'object' && (pay as Record<string, unknown>)['name'] === c.name) {
+      if (!explicitName && pay && typeof pay === 'object' && (pay as Record<string, unknown>)['name'] === c.name) {
         next.payload = { ...(pay as Record<string, unknown>), name: patch.name }
       }
       next.name = patch.name
@@ -407,7 +420,9 @@ export class KnowledgeStore {
         const before = snapshotPkg(pkg)
         applyDraftToPackage(pkg, c)
         const delta = diffSnapshot(before, snapshotPkg(pkg))
-        out.push({ id, ok: true, targetKind: c.targetKind, name: c.name, element: delta.element, summary: delta.summary })
+        // Attribute 的 diff 定位到宿主对象，摘要补上属性名便于人审定位
+        const summary = c.targetKind === 'Attribute' ? `属性「${c.name}」→ ${delta.summary}` : delta.summary
+        out.push({ id, ok: true, targetKind: c.targetKind, name: c.name, element: delta.element, summary })
       } catch (e) {
         out.push({
           id,
@@ -631,9 +646,9 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         id: pickId(p, 'RULE', tag, pkg),
         name: String(p['name'] ?? c.name),
         description: typeof p['description'] === 'string' ? p['description'] : undefined,
-        weight: typeof p['weight'] === 'number' ? p['weight'] : 0,
+        weight: Number.isFinite(p['weight'] as number) ? (p['weight'] as number) : 0,
         expression: String(p['expression'] ?? '1'),
-        threshold: typeof p['threshold'] === 'number' ? p['threshold'] : undefined,
+        threshold: Number.isFinite(p['threshold'] as number) ? (p['threshold'] as number) : undefined,
         evidenceTemplate: typeof p['evidenceTemplate'] === 'string' ? p['evidenceTemplate'] : undefined,
       })
       break
@@ -643,7 +658,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         id: pickId(p, 'RULE', tag, pkg),
         name: String(p['name'] ?? c.name),
         action: p['action'] === 'downweight' ? 'downweight' : 'drop',
-        factor: typeof p['factor'] === 'number' ? p['factor'] : undefined,
+        factor: Number.isFinite(p['factor'] as number) ? (p['factor'] as number) : undefined,
         condition: String(p['condition'] ?? "tag == 'unknown'"),
       })
       break
@@ -688,7 +703,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         },
         reviewGate: {
           required: true,
-          threshold: typeof (p['reviewGate'] as { threshold?: number })?.threshold === 'number'
+          threshold: Number.isFinite((p['reviewGate'] as { threshold?: number })?.threshold)
             ? (p['reviewGate'] as { threshold: number }).threshold
             : 0.75,
         },
@@ -745,14 +760,30 @@ function pickId(p: Record<string, unknown>, prefix: string, tag: string, pkg: On
   return nextId(pkg, prefix, tag)
 }
 
+/** 字典 ID slug：ASCII 名直接 slug；CJK 等非 ASCII 名用短哈希保熵（避免全塌缩成 gen）。 */
+function dictSlug(name: string): string {
+  const ascii = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  if (ascii) return ascii
+  if (!name) return 'gen'
+  let h = 5381
+  for (let i = 0; i < name.length; i++) h = ((h * 33) ^ name.charCodeAt(i)) >>> 0
+  return `g${h.toString(16)}`
+}
+
 function pickDictId(p: Record<string, unknown>, pkg: OntologyPackage): string {
   const raw = p['id']
-  const id =
-    typeof raw === 'string' && raw.startsWith('dict-')
-      ? raw
-      : `dict-${String(p['name'] ?? 'gen').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gen'}`
-  if (idTaken(pkg, id)) {
-    throw new KnowledgeError('DUP_ID', `payload.id ${id} 与包内已有 ID 重复`)
+  // 显式 payload.id 撞车 → 拒绝（与 pickId 同语义）
+  if (typeof raw === 'string' && raw.startsWith('dict-')) {
+    if (idTaken(pkg, raw)) {
+      throw new KnowledgeError('DUP_ID', `payload.id ${raw} 与包内已有 ID 重复`)
+    }
+    return raw
   }
-  return id
+  // 自动生成路径撞车 → 加盐取空闲 ID，不硬拒（同批多本同名/同 slug 字典可共存）
+  const base = `dict-${dictSlug(String(p['name'] ?? ''))}`
+  if (!idTaken(pkg, base)) return base
+  for (let n = 2; ; n++) {
+    const cand = `${base}-${n}`
+    if (!idTaken(pkg, cand)) return cand
+  }
 }

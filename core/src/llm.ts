@@ -35,8 +35,8 @@ export function findConclusionPhrases(text: string): string[] {
 }
 
 /** 判断一条候选草案是否是结论性表述。 */
-export function isConclusionLike(item: { name: string; payload: Record<string, unknown>; rationale: string }): boolean {
-  const blob = `${item.name} ${item.rationale} ${JSON.stringify(item.payload)}`
+export function isConclusionLike(item: { name: string; payload: Record<string, unknown>; rationale?: string }): boolean {
+  const blob = `${item.name} ${item.rationale ?? ''} ${JSON.stringify(item.payload)}`
   return findConclusionPhrases(blob).length > 0
 }
 

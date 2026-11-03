@@ -145,3 +145,12 @@ test('DUP_ID：同类与跨类（score/exclusion 共用 RULE-*）ID 重复均报
   assert.ok(dups.some((e) => e.message.includes('OBJ-TST-A')))
   assert.ok(dups.some((e) => e.message.includes('RULE-TST-S1')))
 })
+
+test('ID_EMPTY：空 ID 元素报 error，不再静默逃过检查', () => {
+  const pkg = minimalPkg()
+  pkg.objects.push({ id: '', name: '空 ID 对象', attributes: [] })
+  const { errors } = validatePackage(pkg)
+  const empties = errors.filter((e) => e.code === 'ID_EMPTY')
+  assert.equal(empties.length, 1, JSON.stringify(empties))
+  assert.ok(empties[0].message.includes('为空'))
+})

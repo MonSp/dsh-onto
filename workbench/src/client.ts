@@ -94,22 +94,13 @@ window.__ModuleLoader__.load({
       exclusionRules: '排除规则',
       skillTemplates: '方法论模板',
       scenarios: '场景',
-      fieldMaps: '字段映射',
-      apiSources: '数据源',
       yamlImport: 'YAML 导入',
       yamlPath: '文件路径（如 o1-objects/object-types.yaml）',
-      yamlText: 'YAML 内容',
       yamlWrite: '写入源文件',
-      modelFiles: '源文件',
-      addScoreRule: '加打分规则',
-      addObject: '加对象类型',
-      ruleName: '规则名',
       weight: '权重',
       expression: '表达式',
       threshold: '阈值',
       evidence: '证据模板',
-      objectName: '对象名',
-      attrNames: '属性名（逗号分隔）',
       save: '保存模型',
       upload: '上传原料',
       sourceType: '原料类型',
@@ -138,7 +129,6 @@ window.__ModuleLoader__.load({
       scenario: '场景',
       dataset: '运行数据（JSON）',
       runBtn: '执行场景',
-      candidates: '候选',
       riskScore: '风险分',
       hits: '命中规则',
       evidenceChains: '证据链',
@@ -151,17 +141,12 @@ window.__ModuleLoader__.load({
       passed: '通过',
       failed: '未闭合',
       busy: '处理中…',
-      error: '错误',
       empty: '暂无数据',
       loading: '加载中…',
       edit: '编辑',
       delete: '删除',
       cancel: '取消',
       confirmDelete: '确认删除该元素？（引用闭合由校验器把关）',
-      addRelation: '加关系类型',
-      addBehavior: '加行为类型',
-      addExclusion: '加排除规则',
-      addScenario: '加场景卡',
       addElement: '新增元素',
       from: '起点对象',
       to: '终点对象',
@@ -170,10 +155,6 @@ window.__ModuleLoader__.load({
       boundary: '边界',
       pipeline: '编排步骤',
       pipelineViz: 'Pipeline（只读）',
-      stepId: '步骤',
-      stepType: '类型',
-      order: '段',
-      skillRefs: '技能',
       outputs: '输出字段',
       inputs: '输入（JSON 数组）',
       mustInclude: '契约必含',
@@ -208,13 +189,12 @@ window.__ModuleLoader__.load({
       invalidDrop: '非法丢弃',
       engine: '引擎',
       runHistory: '运行历史',
-      view: '查看',
-      noElements: '（无）',
       emptyPipeline: '（空 pipeline）',
       errFinite: '须为有限数字',
       errIdName: 'id / name 必填',
       errDuplicateId: '重复 id',
       errInvalidJson: 'JSON 非法',
+      errPatchShape: '草案 JSON 必须是对象',
       errMustBeArray: '须为 JSON 数组',
       errAttrExtra: '属性扩展 JSON 非法',
       issuedReadonly: 'ISSUED 只读',
@@ -256,22 +236,13 @@ window.__ModuleLoader__.load({
       exclusionRules: 'Exclusion rules',
       skillTemplates: 'Skill templates',
       scenarios: 'Scenarios',
-      fieldMaps: 'Field maps',
-      apiSources: 'API sources',
       yamlImport: 'YAML import',
       yamlPath: 'File path (e.g. o1-objects/object-types.yaml)',
-      yamlText: 'YAML content',
       yamlWrite: 'Write source file',
-      modelFiles: 'Source files',
-      addScoreRule: 'Add score rule',
-      addObject: 'Add object type',
-      ruleName: 'Rule name',
       weight: 'Weight',
       expression: 'Expression',
       threshold: 'Threshold',
       evidence: 'Evidence template',
-      objectName: 'Object name',
-      attrNames: 'Attribute names (comma separated)',
       save: 'Save model',
       upload: 'Upload source',
       sourceType: 'Source type',
@@ -300,7 +271,6 @@ window.__ModuleLoader__.load({
       scenario: 'Scenario',
       dataset: 'Dataset (JSON)',
       runBtn: 'Run scenario',
-      candidates: 'Candidates',
       riskScore: 'Risk score',
       hits: 'Hit rules',
       evidenceChains: 'Evidence',
@@ -313,17 +283,12 @@ window.__ModuleLoader__.load({
       passed: 'Closed',
       failed: 'Not closed',
       busy: 'Working…',
-      error: 'Error',
       empty: 'No data',
       loading: 'Loading…',
       edit: 'Edit',
       delete: 'Delete',
       cancel: 'Cancel',
       confirmDelete: 'Delete this element? (reference closure is enforced by the validator)',
-      addRelation: 'Add relation type',
-      addBehavior: 'Add behavior type',
-      addExclusion: 'Add exclusion rule',
-      addScenario: 'Add scenario card',
       addElement: 'New element',
       from: 'From object',
       to: 'To object',
@@ -332,10 +297,6 @@ window.__ModuleLoader__.load({
       boundary: 'Boundary',
       pipeline: 'Pipeline',
       pipelineViz: 'Pipeline (read-only)',
-      stepId: 'Step',
-      stepType: 'Type',
-      order: 'Phase',
-      skillRefs: 'Skills',
       outputs: 'Output fields',
       inputs: 'Inputs (JSON array)',
       mustInclude: 'Must include',
@@ -370,13 +331,12 @@ window.__ModuleLoader__.load({
       invalidDrop: 'Invalid dropped',
       engine: 'Engine',
       runHistory: 'Run history',
-      view: 'View',
-      noElements: '(none)',
       emptyPipeline: '(empty pipeline)',
       errFinite: 'must be a finite number',
       errIdName: 'id / name required',
       errDuplicateId: 'duplicate id',
       errInvalidJson: 'invalid JSON',
+      errPatchShape: 'draft JSON must be an object',
       errMustBeArray: 'must be a JSON array',
       errAttrExtra: 'bad attribute extra JSON',
       issuedReadonly: 'ISSUED read-only',
@@ -823,13 +783,34 @@ window.__ModuleLoader__.load({
         /**
          * 属性 ↔ 行文本：`name:type` 或 `name:type:{扩展 JSON}`。
          * 扩展字段（enumValuesRef/refObject/required/description 等）无损往返，编辑保存不丢字段。
+         * name/type 段转义 `\ : 换行`，含这些字符的属性名也能无损往返。
          */
+        function escapeAttrSeg(s: string): string {
+          return s.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/\r/g, '\\r').replace(/\n/g, '\\n')
+        }
+
+        function unescapeAttrSeg(s: string): string {
+          return s.replace(/\\([:\\rn])/g, (_, c: string) => (c === 'n' ? '\n' : c === 'r' ? '\r' : c))
+        }
+
+        /** 找第一个未转义的 sep 位置（\x 成对跳过）。 */
+        function splitUnescaped(s: string, sep = ':'): number {
+          for (let i = 0; i < s.length; i++) {
+            if (s[i] === '\\') {
+              i++
+              continue
+            }
+            if (s[i] === sep) return i
+          }
+          return -1
+        }
+
         function attrsToLines(attrs: unknown): string {
           return ((attrs as Array<Record<string, unknown>>) ?? [])
             .map((a) => {
               const rec = { ...(a as Record<string, unknown>) }
-              const name = String(rec['name'] ?? '')
-              const type = String(rec['type'] ?? 'string')
+              const name = escapeAttrSeg(String(rec['name'] ?? ''))
+              const type = escapeAttrSeg(String(rec['type'] ?? 'string'))
               delete rec['name']
               delete rec['type']
               return Object.keys(rec).length > 0 ? `${name}:${type}:${JSON.stringify(rec)}` : `${name}:${type}`
@@ -839,13 +820,13 @@ window.__ModuleLoader__.load({
 
         function linesToAttrs(raw: string): Array<Record<string, unknown>> {
           return lines(raw).map((line) => {
-            const i = line.indexOf(':')
-            if (i < 0) return { name: line.trim(), type: 'string' }
-            const name = line.slice(0, i).trim()
+            const i = splitUnescaped(line)
+            if (i < 0) return { name: unescapeAttrSeg(line.trim()), type: 'string' }
+            const name = unescapeAttrSeg(line.slice(0, i).trim())
             const rest = line.slice(i + 1)
-            const j = rest.indexOf(':')
-            if (j < 0) return { name, type: rest.trim() || 'string' }
-            const type = rest.slice(0, j).trim() || 'string'
+            const j = splitUnescaped(rest)
+            if (j < 0) return { name, type: unescapeAttrSeg(rest.trim()) || 'string' }
+            const type = unescapeAttrSeg(rest.slice(0, j).trim()) || 'string'
             let extra: unknown
             try {
               extra = JSON.parse(rest.slice(j + 1))
@@ -1554,6 +1535,10 @@ window.__ModuleLoader__.load({
               setError(`${t('errInvalidJson')}: ${errText(e)}`)
               return
             }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              setError(t('errPatchShape'))
+              return
+            }
             await act('saveDraft', async () => {
               unwrap(await api!.updateCandidate({ id: editId, patch: parsed }))
               setEditId('')
@@ -1561,14 +1546,14 @@ window.__ModuleLoader__.load({
             })
           }
 
-          const doPreview = async (id: string) => {
-            if (!selected) return
+          const doPreview = async (ids: string[], tag: string) => {
+            if (!selected || ids.length === 0) return
             await act('preview', async () => {
               const r = unwrap<{ previews: Array<Record<string, unknown>> }>(
-                await api!.previewMaterialize({ name: selected!.name, version: selected!.version, ids: [id] }),
+                await api!.previewMaterialize({ name: selected!.name, version: selected!.version, ids }),
               )
               setPreview(r.previews)
-              setPreviewFor(id)
+              setPreviewFor(tag)
             })
           }
 
@@ -1783,7 +1768,7 @@ window.__ModuleLoader__.load({
                           key: 'pv',
                           className: 'ow-btn ghost',
                           disabled: !!busy || !selected,
-                          onClick: () => void doPreview(id),
+                          onClick: () => void doPreview([id], id),
                         }, t('preview')))
                         if (status === 'approved') {
                           actions.push(h('button', {
@@ -1873,6 +1858,15 @@ window.__ModuleLoader__.load({
               h(
                 'button',
                 {
+                  className: 'ow-btn ghost',
+                  disabled: !!busy || picked.length === 0 || !selected,
+                  onClick: () => void doPreview(picked, 'bulk'),
+                },
+                `${t('preview')} (${picked.length})`,
+              ),
+              h(
+                'button',
+                {
                   className: 'ow-btn',
                   disabled: !!busy || picked.length === 0 || !selected,
                   onClick: () =>
@@ -1887,6 +1881,25 @@ window.__ModuleLoader__.load({
                 },
                 busy === 'materialize' ? t('busy') : `${t('materialize')} (${picked.length})`,
               ),
+              previewFor === 'bulk' && preview
+                ? h('div', { className: 'ow-diff' },
+                    h('strong', null, t('previewTitle')),
+                    ...preview.map((p) =>
+                      h('div', { key: String(p['id']) },
+                        h('p', {
+                          className: 'ow-note',
+                          style: { color: p['ok'] ? '#166534' : '#b91c1c', margin: '4px 0 0' },
+                        }, p['ok'] ? String(p['summary']) : `✗ ${String(p['error'] ?? '')}`),
+                        p['element']
+                          ? h('pre', { className: 'ow-mono' }, JSON.stringify(p['element'], null, 2))
+                          : null,
+                      )),
+                    h('button', {
+                      className: 'ow-btn ghost',
+                      onClick: () => { setPreview(null); setPreviewFor('') },
+                    }, t('cancel')),
+                  )
+                : null,
             ),
           )
         }

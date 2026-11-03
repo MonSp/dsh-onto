@@ -416,7 +416,8 @@ export interface DraftItem {
   name: string
   payload: Record<string, unknown>
   confidence: number
-  rationale: string
+  /** 可缺省；出现即须为字符串（与 validateDraftItem 同口径）。 */
+  rationale?: string
 }
 
 export interface DraftCandidate extends DraftItem {
