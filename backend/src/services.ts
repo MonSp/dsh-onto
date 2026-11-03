@@ -342,17 +342,18 @@ export class OntoKnowledge extends TypertRemoteService {
   async remoteExportUploadSources(request: {
     packageId: string
     items: Array<{ sourceType: SourceType; name: string; content: string }>
-  }): Promise<{ sources: KnowledgeSourceRecord[]; skipped: number }> {
+  }): Promise<{ sources: KnowledgeSourceRecord[]; skipped: number; invalid: number }> {
     return guard(() => {
       if (!request?.packageId || !Array.isArray(request?.items) || request.items.length === 0) {
         throw ontoError('onto/bad-request', 'packageId and non-empty items required')
       }
       const sources: KnowledgeSourceRecord[] = []
-      let skipped = 0
+      let skipped = 0 // sha256 幂等跳过
+      let invalid = 0 // 形状非法（缺 name/content 或未知 sourceType）
       let attempted = 0
       for (const item of request.items) {
         if (!item?.name || !item?.content || !SOURCE_TYPES.includes(item.sourceType)) {
-          skipped++
+          invalid++
           continue
         }
         attempted++
@@ -371,7 +372,7 @@ export class OntoKnowledge extends TypertRemoteService {
         sources.push(rec)
       }
       if (attempted === 0) throw ontoError('onto/bad-request', 'no valid items')
-      return { sources, skipped }
+      return { sources, skipped, invalid }
     })
   }
 

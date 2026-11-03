@@ -198,8 +198,8 @@ window.__ModuleLoader__.load({
       saveDraft: '保存草案',
       preview: '预览物化',
       previewTitle: '物化预览（干跑，不落盘）',
-      merge: '合并',
-      mergeInto: '合并到已有元素',
+      merge: '标记并入',
+      mergeInto: '归并到已有元素（仅记账，不写包）',
       elementName: '元素名',
       parseReport: '解析报告',
       received: '收到',
@@ -350,8 +350,8 @@ window.__ModuleLoader__.load({
       saveDraft: 'Save draft',
       preview: 'Preview materialize',
       previewTitle: 'Materialize preview (dry-run, no writes)',
-      merge: 'Merge',
-      mergeInto: 'Merge into existing element',
+      merge: 'Mark merged',
+      mergeInto: 'Into existing element (record-only, no write)',
       elementName: 'Element name',
       parseReport: 'Parse report',
       received: 'Received',
@@ -926,10 +926,10 @@ window.__ModuleLoader__.load({
           return el
         }
 
-        /** 收集全包已用 ID（跨类查重：score/exclusion 共用 RULE 前缀）。 */
+        /** 收集全包已用 ID（跨类查重：score/exclusion 共用 RULE 前缀；含全部集合，防与 SKL/FM 等撞车）。 */
         function collectAllIds(model: Record<string, Array<Record<string, unknown>>>): Set<string> {
           const taken = new Set<string>()
-          for (const kind of ['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]) {
+          for (const kind of ['objects', 'relations', 'dictionaries', 'behaviors', 'scoreRules', 'exclusionRules', 'skillTemplates', 'scenarios', 'fieldMaps', 'apiSources']) {
             for (const e of model[kind] ?? []) {
               const id = String(e['id'] ?? '')
               if (id) taken.add(id)
@@ -1445,11 +1445,11 @@ window.__ModuleLoader__.load({
               items.push({ sourceType, name: f.name, content: await f.text() })
             }
             await act('batchUpload', async () => {
-              const r = unwrap<{ sources: unknown[]; skipped: number }>(
+              const r = unwrap<{ sources: unknown[]; skipped: number; invalid: number }>(
                 await api!.uploadSources({ packageId: selected!.name, items: items as never }),
               )
               setBatchFiles([])
-              setInfo(`${t('batchUpload')}: ${t('accepted')}=${r.sources.length} ${t('idemSkip')}=${r.skipped}`)
+              setInfo(`${t('batchUpload')}: ${t('accepted')}=${r.sources.length} ${t('idemSkip')}=${r.skipped} ${t('invalidDrop')}=${r.invalid}`)
             })
           }
 
@@ -2027,7 +2027,7 @@ window.__ModuleLoader__.load({
                         )
                         setResult(out.result)
                         setViewHid('')
-                        const hid = `run-${Date.now()}`
+                        const hid = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
                         const label = `${scenarioId} @ ${new Date().toLocaleTimeString()}`
                         setHistory((hlist) => [{ hid, label, result: out.result }, ...hlist].slice(0, 10))
                       } catch (e) {

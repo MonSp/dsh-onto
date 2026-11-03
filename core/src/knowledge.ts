@@ -17,13 +17,12 @@ import { assertWritable, loadPackage, readPackageMeta, savePackage } from './sto
 import type {
   DraftCandidate,
   DraftItem,
-  DraftTargetKind,
   KnowledgeSourceRecord,
   LlmPort,
   OntologyPackage,
   SourceType,
 } from './types.js'
-import { SOURCE_TYPES } from './types.js'
+import { DRAFT_TARGET_KINDS, SOURCE_TYPES } from './types.js'
 
 /** 单源解析报告：收到/接受/幂等跳过/非法丢弃 + 引擎。 */
 export interface ParseReport {
@@ -52,15 +51,12 @@ export function validateDraftItem(item: unknown): string | null {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return 'not an object'
   const it = item as Record<string, unknown>
   if (it['layer'] !== 'O1' && it['layer'] !== 'O2' && it['layer'] !== 'O3') return 'bad layer'
-  const kinds: DraftTargetKind[] = [
-    'ObjectType', 'RelationType', 'Attribute', 'Dictionary', 'BehaviorType',
-    'ScoreRule', 'ExclusionRule', 'SkillTemplate', 'ScenarioCard', 'RedLine',
-    'FieldMap', 'ApiSource',
-  ]
-  if (!kinds.includes(it['targetKind'] as DraftTargetKind)) return 'bad targetKind'
+  if (!(DRAFT_TARGET_KINDS as readonly string[]).includes(it['targetKind'] as string)) return 'bad targetKind'
   if (typeof it['name'] !== 'string' || !it['name'].trim()) return 'bad name'
   const payload = it['payload']
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'bad payload'
+  const rationale = it['rationale']
+  if (rationale !== undefined && rationale !== null && typeof rationale !== 'string') return 'bad rationale'
   // 已知数值字段：出现即须为有限数字（null/缺省视作未填，由物化侧默认）
   const numericFields: Record<string, string[]> = {
     ScoreRule: ['weight', 'threshold'],
@@ -326,13 +322,18 @@ export class KnowledgeStore {
       if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
       return c
     })
+    const eligible: typeof targets = []
     for (const c of targets) {
+      if (c.packageId !== meta.name) {
+        skipped.push({ id: c.id, reason: `package mismatch: 候选属于 ${c.packageId}，目标包为 ${meta.name}` })
+        continue
+      }
       if (c.status !== 'approved') {
         skipped.push({ id: c.id, reason: `status=${c.status}，未经人审批准不得物化` })
         continue
       }
+      eligible.push(c)
     }
-    const eligible = targets.filter((c) => c.status === 'approved')
     if (eligible.length === 0) return { applied, skipped }
 
     // ISSUED 拒写（对 agent 路径是一等硬约束）
@@ -368,6 +369,7 @@ export class KnowledgeStore {
    * 不校验 status（批准前也要能看 diff）；不拒 ISSUED（只读预览）。
    */
   previewMaterialize(versionDir: string, candidateIds: string[]): MaterializePreviewItem[] {
+    const meta = readPackageMeta(versionDir)
     const base = loadPackage(versionDir)
     const queue = this.loadQueue()
     const out: MaterializePreviewItem[] = []
@@ -375,6 +377,17 @@ export class KnowledgeStore {
       const c = queue.find((x) => x.id === id)
       if (!c) {
         out.push({ id, ok: false, error: `candidate ${id} not found`, targetKind: '-', name: '-', summary: '' })
+        continue
+      }
+      if (c.packageId !== meta.name) {
+        out.push({
+          id,
+          ok: false,
+          error: `candidate ${id} belongs to package ${c.packageId}, not ${meta.name}`,
+          targetKind: c.targetKind,
+          name: c.name,
+          summary: '',
+        })
         continue
       }
       const pkg = structuredClone(base)
@@ -430,32 +443,44 @@ function diffSnapshot(
     fieldMaps: 'FieldMap',
     apiSources: 'ApiSource',
   }
+  const parts: string[] = []
+  const elements: unknown[] = []
   for (const key of Object.keys(before)) {
     if (before[key] === after[key]) continue
     const arr = JSON.parse(after[key]) as unknown[]
     const prev = JSON.parse(before[key]) as unknown[]
-    // 新增元素：取数组尾部差异；修改元素（RedLine 改 forbiddenPhrases）：取变化项
-    const added = arr.length > prev.length ? arr.slice(prev.length) : arr.filter((x, i) => JSON.stringify(x) !== JSON.stringify(prev[i]))
-    if (added.length === 0) return { element: null, summary: '（变更未定位）' }
-    const el = added[added.length - 1]
+    // 新增元素：取数组尾部差异；修改元素（RedLine 改 forbiddenPhrases）：取全部变化项
+    const changed = arr.length > prev.length ? arr.slice(prev.length) : arr.filter((x, i) => JSON.stringify(x) !== JSON.stringify(prev[i]))
+    if (changed.length === 0) {
+      parts.push('（变更未定位）')
+      continue
+    }
     if (key === 'scenarios') {
-      const s = el as { id?: string; outputContract?: { forbiddenPhrases?: string[] } }
-      const prevS = (prev.find((x) => (x as { id?: string }).id === s.id) ?? {}) as { outputContract?: { forbiddenPhrases?: string[] } }
-      const beforePhrases = new Set(prevS.outputContract?.forbiddenPhrases ?? [])
-      const newPhrases = (s.outputContract?.forbiddenPhrases ?? []).filter((p) => !beforePhrases.has(p))
-      if (newPhrases.length > 0) {
-        return {
-          element: { scenarioId: s.id, phrases: newPhrases },
-          summary: `→ ${labels[key]} ${s.id ?? ''} 禁语 +${newPhrases.length}: ${newPhrases.join('、')}`,
+      for (const el of changed) {
+        const s = el as { id?: string; outputContract?: { forbiddenPhrases?: string[] } }
+        const prevS = (prev.find((x) => (x as { id?: string }).id === s.id) ?? {}) as { outputContract?: { forbiddenPhrases?: string[] } }
+        const beforePhrases = new Set(prevS.outputContract?.forbiddenPhrases ?? [])
+        const newPhrases = (s.outputContract?.forbiddenPhrases ?? []).filter((p) => !beforePhrases.has(p))
+        if (newPhrases.length > 0) {
+          elements.push({ scenarioId: s.id, phrases: newPhrases })
+          parts.push(`→ ${labels[key]} ${s.id ?? ''} 禁语 +${newPhrases.length}: ${newPhrases.join('、')}`)
+        } else {
+          elements.push(el)
+          parts.push(`→ ${labels[key]} ${s.id ?? ''}（内容变更）`)
         }
       }
-      return { element: el, summary: `→ ${labels[key]} ${s.id ?? ''}（内容变更）` }
+      continue
     }
-    const id = (el as { id?: string })?.id ?? '?'
-    const name = (el as { name?: string })?.name ?? ''
-    return { element: el, summary: `→ ${labels[key]} ${id}${name ? `「${name}」` : ''}` }
+    for (const el of changed) {
+      elements.push(el)
+      const id = (el as { id?: string })?.id ?? '?'
+      const name = (el as { name?: string })?.name ?? ''
+      parts.push(`→ ${labels[key]} ${id}${name ? `「${name}」` : ''}`)
+    }
   }
-  return { element: null, summary: '（无变化）' }
+  if (parts.length === 0) return { element: null, summary: '（无变化）' }
+  // 单项保持原形状（element = 单个元素/RedLine 增量）；多项返回数组
+  return { element: elements.length === 1 ? elements[0] : elements, summary: parts.join('；') }
 }
 
 function readdirSafe(dir: string): string[] {

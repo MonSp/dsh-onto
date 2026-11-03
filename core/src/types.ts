@@ -392,19 +392,23 @@ export interface KnowledgeSourceRecord {
 
 export type DraftStatus = 'pending' | 'approved' | 'merged' | 'rejected'
 
-export type DraftTargetKind =
-  | 'ObjectType'
-  | 'RelationType'
-  | 'Attribute'
-  | 'Dictionary'
-  | 'BehaviorType'
-  | 'ScoreRule'
-  | 'ExclusionRule'
-  | 'SkillTemplate'
-  | 'ScenarioCard'
-  | 'RedLine'
-  | 'FieldMap'
-  | 'ApiSource'
+/** 草案目标类型全集（唯一事实源；类型与运行时校验共用，防双源漂移）。 */
+export const DRAFT_TARGET_KINDS = [
+  'ObjectType',
+  'RelationType',
+  'Attribute',
+  'Dictionary',
+  'BehaviorType',
+  'ScoreRule',
+  'ExclusionRule',
+  'SkillTemplate',
+  'ScenarioCard',
+  'RedLine',
+  'FieldMap',
+  'ApiSource',
+] as const
+
+export type DraftTargetKind = (typeof DRAFT_TARGET_KINDS)[number]
 
 export interface DraftItem {
   layer: 'O1' | 'O2' | 'O3'

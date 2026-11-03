@@ -252,6 +252,10 @@ test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confi
   assert.equal(validateDraftItem({ ...good, confidence: '0.8' }), 'bad confidence')
   assert.equal(validateDraftItem(null), 'not an object')
   assert.equal(validateDraftItem('x'), 'not an object')
+  // rationale：可缺省，出现即须字符串
+  assert.equal(validateDraftItem({ ...good, rationale: undefined }), null)
+  assert.equal(validateDraftItem({ ...good, rationale: 123 }), 'bad rationale')
+  assert.equal(validateDraftItem({ ...good, rationale: { a: 1 } }), 'bad rationale')
   // 数值字段：出现即须有限数字（weight/threshold/factor）
   assert.equal(validateDraftItem({ ...good, payload: { weight: 'abc' } }), 'bad payload.weight')
   assert.equal(validateDraftItem({ ...good, payload: { weight: NaN } }), 'bad payload.weight')
@@ -398,6 +402,45 @@ test('previewMaterialize：干跑返回将物化的元素，不落盘', async ()
     // 不存在的候选 → ok:false
     const miss = store.previewMaterialize(dir, ['dc-nope'])
     assert.equal(miss[0].ok, false)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('跨包候选：materialize/previewMaterialize 按 packageId 拒绝', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg() // meta.name = 'test-pkg'
+  try {
+    const otherDir = ws.createPackage({ name: 'other-pkg', version: '1.0.0', domain: 'TST' })
+    const other = minimalPkg()
+    other.meta = { ...other.meta, name: 'other-pkg' }
+    savePackage(otherDir, other)
+
+    const store = new KnowledgeStore(ws.root)
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.2 的特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    store.reviewCandidate(draft.id, 'approve')
+
+    // 预览进 other-pkg → 拒绝
+    const pvOther = store.previewMaterialize(otherDir, [draft.id])
+    assert.equal(pvOther[0].ok, false)
+    assert.match(pvOther[0].error, /other-pkg/)
+    // 物化进 other-pkg → skipped（不落盘）
+    const rOther = store.materialize(otherDir, [draft.id])
+    assert.equal(rOther.applied.length, 0)
+    assert.ok(rOther.skipped[0].reason.includes('test-pkg'), rOther.skipped[0].reason)
+    assert.equal(loadPackage(otherDir).scoreRules.length, 1)
+    // 同包预览/物化仍正常
+    const pvSame = store.previewMaterialize(dir, [draft.id])
+    assert.equal(pvSame[0].ok, true, pvSame[0].error)
+    const rSame = store.materialize(dir, [draft.id])
+    assert.deepEqual(rSame.applied, [draft.id])
   } finally {
     rmWorkspace(root)
   }
