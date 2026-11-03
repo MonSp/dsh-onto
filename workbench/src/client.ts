@@ -181,7 +181,7 @@ window.__ModuleLoader__.load({
       reviewGate: '复核门禁',
       reviewRequired: '需复核',
       auditChecks: '审计项',
-      attrs: '属性（每行 name:type）',
+      attrs: '属性（每行 name:type，可带 :扩展JSON 无损往返）',
       idRule: 'ID 规则',
       lifecycle: '生命周期（每行）',
       condition: '条件表达式',
@@ -210,6 +210,16 @@ window.__ModuleLoader__.load({
       runHistory: '运行历史',
       view: '查看',
       noElements: '（无）',
+      emptyPipeline: '（空 pipeline）',
+      errFinite: '须为有限数字',
+      errIdName: 'id / name 必填',
+      errDuplicateId: '重复 id',
+      errInvalidJson: 'JSON 非法',
+      errMustBeArray: '须为 JSON 数组',
+      errAttrExtra: '属性扩展 JSON 非法',
+      issuedReadonly: 'ISSUED 只读',
+      illegalRelPath: '非法相对路径（禁 ..、反斜杠、绝对路径）',
+      mergeFallback: '模型加载失败，merge 目标改为手输',
       readme: '建模到运行：建包 → 建模/知识库物化 → 校验 → 签发 → 派生 → 场景运行。ISSUED 只读，改需 fork。',
     }
     const en = {
@@ -333,7 +343,7 @@ window.__ModuleLoader__.load({
       reviewGate: 'Review gate',
       reviewRequired: 'Required',
       auditChecks: 'Audit checks',
-      attrs: 'Attributes (one name:type per line)',
+      attrs: 'Attributes (name:type[:extraJson] per line, lossless)',
       idRule: 'ID rule',
       lifecycle: 'Lifecycle (one per line)',
       condition: 'Condition expression',
@@ -362,6 +372,16 @@ window.__ModuleLoader__.load({
       runHistory: 'Run history',
       view: 'View',
       noElements: '(none)',
+      emptyPipeline: '(empty pipeline)',
+      errFinite: 'must be a finite number',
+      errIdName: 'id / name required',
+      errDuplicateId: 'duplicate id',
+      errInvalidJson: 'invalid JSON',
+      errMustBeArray: 'must be a JSON array',
+      errAttrExtra: 'bad attribute extra JSON',
+      issuedReadonly: 'ISSUED read-only',
+      illegalRelPath: 'illegal relPath (no .., backslash, or absolute path)',
+      mergeFallback: 'model load failed; merge target falls back to free input',
       readme: 'Flow: create → model/knowledge → validate → issue → derive → run. ISSUED is read-only; fork to edit.',
     }
 
@@ -497,9 +517,10 @@ window.__ModuleLoader__.load({
     /** 场景 pipeline 只读可视化：步骤列表展示 stepType/order/skillRefs。 */
     function PipelineView(props: {
       steps: Array<{ stepId?: string; stepType?: string; order?: string; skillRefs?: string[]; label?: string }>
+      emptyText: string
     }) {
       const steps = props.steps ?? []
-      if (steps.length === 0) return h('p', { className: 'ow-note' }, '（空 pipeline）')
+      if (steps.length === 0) return h('p', { className: 'ow-note' }, props.emptyText)
       return h(
         'ol',
         { className: 'ow-pipe' },
@@ -799,6 +820,49 @@ window.__ModuleLoader__.load({
           return v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
         }
 
+        /**
+         * 属性 ↔ 行文本：`name:type` 或 `name:type:{扩展 JSON}`。
+         * 扩展字段（enumValuesRef/refObject/required/description 等）无损往返，编辑保存不丢字段。
+         */
+        function attrsToLines(attrs: unknown): string {
+          return ((attrs as Array<Record<string, unknown>>) ?? [])
+            .map((a) => {
+              const rec = { ...(a as Record<string, unknown>) }
+              const name = String(rec['name'] ?? '')
+              const type = String(rec['type'] ?? 'string')
+              delete rec['name']
+              delete rec['type']
+              return Object.keys(rec).length > 0 ? `${name}:${type}:${JSON.stringify(rec)}` : `${name}:${type}`
+            })
+            .join('\n')
+        }
+
+        function linesToAttrs(raw: string): Array<Record<string, unknown>> {
+          return lines(raw).map((line) => {
+            const i = line.indexOf(':')
+            if (i < 0) return { name: line.trim(), type: 'string' }
+            const name = line.slice(0, i).trim()
+            const rest = line.slice(i + 1)
+            const j = rest.indexOf(':')
+            if (j < 0) return { name, type: rest.trim() || 'string' }
+            const type = rest.slice(0, j).trim() || 'string'
+            let extra: unknown
+            try {
+              extra = JSON.parse(rest.slice(j + 1))
+            } catch {
+              throw new Error(`${t('errAttrExtra')}: ${line.slice(0, 60)}`)
+            }
+            if (!extra || typeof extra !== 'object' || Array.isArray(extra)) {
+              throw new Error(`${t('errAttrExtra')}: ${line.slice(0, 60)}`)
+            }
+            const fields: Record<string, unknown> = {}
+            for (const [k, v] of Object.entries(extra as Record<string, unknown>)) {
+              if (k !== 'name' && k !== 'type') fields[k] = v
+            }
+            return { name, type, ...fields }
+          })
+        }
+
         /** 元素 → 表单字符串。 */
         function toFormData(kind: ElemKind, el: Record<string, unknown>): Record<string, string> {
           const d: Record<string, string> = {
@@ -807,13 +871,13 @@ window.__ModuleLoader__.load({
           }
           if (kind === 'objects') {
             d['idRule'] = String(el['idRule'] ?? '')
-            d['attributes'] = ((el['attributes'] as Array<{ name: string; type: string }> ) ?? [])
-              .map((a) => `${a.name}:${a.type}`).join('\n')
+            d['attributes'] = attrsToLines(el['attributes'])
             d['lifecycle'] = ((el['lifecycle'] as string[]) ?? []).join('\n')
             d['description'] = String(el['description'] ?? '')
           } else if (kind === 'relations') {
             d['from'] = String(el['from'] ?? '')
             d['to'] = String(el['to'] ?? '')
+            d['attributes'] = attrsToLines(el['attributes'])
             d['description'] = String(el['description'] ?? '')
           } else if (kind === 'behaviors') {
             d['anchor'] = String(el['anchor'] ?? '')
@@ -860,7 +924,7 @@ window.__ModuleLoader__.load({
           try {
             return JSON.parse(raw || fallback)
           } catch {
-            throw new Error(`invalid JSON: ${raw.slice(0, 80)}`)
+            throw new Error(`${t('errInvalidJson')}: ${raw.slice(0, 80)}`)
           }
         }
 
@@ -869,15 +933,14 @@ window.__ModuleLoader__.load({
           const el: Record<string, unknown> = { id: d['id']?.trim(), name: d['name']?.trim() }
           if (kind === 'objects') {
             if (d['idRule']?.trim()) el['idRule'] = d['idRule'].trim()
-            el['attributes'] = lines(d['attributes'] ?? '').map((line) => {
-              const [n, ty] = line.split(':').map((s) => s.trim())
-              return { name: n, type: ty || 'string' }
-            })
+            el['attributes'] = linesToAttrs(d['attributes'] ?? '')
             if (lines(d['lifecycle'] ?? '').length > 0) el['lifecycle'] = lines(d['lifecycle'])
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'relations') {
             el['from'] = d['from']?.trim() ?? ''
             el['to'] = d['to']?.trim() ?? ''
+            const relAttrs = linesToAttrs(d['attributes'] ?? '')
+            if (relAttrs.length > 0) el['attributes'] = relAttrs
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'behaviors') {
             el['anchor'] = d['anchor']?.trim() ?? ''
@@ -887,12 +950,12 @@ window.__ModuleLoader__.load({
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'scoreRules') {
             const weight = numOrNull(d['weight'])
-            if (weight === null) throw new Error('weight must be a finite number')
+            if (weight === null) throw new Error(`${t('weight')} ${t('errFinite')}`)
             el['weight'] = weight
             el['expression'] = d['expression'] ?? ''
             if (d['threshold'] !== '' && d['threshold'] !== undefined) {
               const th = numOrNull(d['threshold'])
-              if (th === null) throw new Error('threshold must be a finite number')
+              if (th === null) throw new Error(`${t('threshold')} ${t('errFinite')}`)
               el['threshold'] = th
             }
             if (d['evidenceTemplate']?.trim()) el['evidenceTemplate'] = d['evidenceTemplate'].trim()
@@ -901,7 +964,7 @@ window.__ModuleLoader__.load({
             el['action'] = d['action'] === 'downweight' ? 'downweight' : 'drop'
             if (d['factor'] !== '' && d['factor'] !== undefined) {
               const f = numOrNull(d['factor'])
-              if (f === null) throw new Error('factor must be a finite number')
+              if (f === null) throw new Error(`${t('factor')} ${t('errFinite')}`)
               el['factor'] = f
             }
             el['condition'] = d['condition'] ?? ''
@@ -909,14 +972,24 @@ window.__ModuleLoader__.load({
           } else if (kind === 'scenarios') {
             el['goal'] = d['goal'] ?? ''
             el['boundary'] = d['boundary'] ?? ''
-            el['inputs'] = parseJsonField(d['inputs'] ?? '', '[]')
+            const inputs = parseJsonField(d['inputs'] ?? '', '[]')
+            if (!Array.isArray(inputs)) throw new Error(`${t('inputs')} ${t('errMustBeArray')}`)
+            el['inputs'] = inputs
             el['outputs'] = { fields: csv(d['outputs'] ?? '') }
-            el['pipeline'] = parseJsonField(d['pipeline'] ?? '', '[]')
+            const pipeline = parseJsonField(d['pipeline'] ?? '', '[]')
+            if (!Array.isArray(pipeline)) throw new Error(`${t('pipeline')} ${t('errMustBeArray')}`)
+            el['pipeline'] = pipeline
             el['outputContract'] = {
               mustInclude: lines(d['mustInclude'] ?? ''),
               forbiddenPhrases: lines(d['forbiddenPhrases'] ?? ''),
             }
-            const th = numOrNull(d['reviewThreshold']) ?? 0.75
+            let th = 0.75
+            const thrRaw = d['reviewThreshold']
+            if (thrRaw !== undefined && thrRaw.trim() !== '') {
+              const thr = numOrNull(thrRaw)
+              if (thr === null) throw new Error(`${t('reviewGate')} ${t('errFinite')}`)
+              th = thr
+            }
             el['reviewGate'] = {
               required: d['reviewRequired'] !== 'no',
               threshold: th,
@@ -947,7 +1020,7 @@ window.__ModuleLoader__.load({
           while (taken.has(`${prefix}-GEN-${n}`)) n++
           const base: Record<string, string> = { id: `${prefix}-GEN-${n}`, name: '' }
           if (kind === 'objects') return { ...base, idRule: '', attributes: '', lifecycle: '', description: '' }
-          if (kind === 'relations') return { ...base, from: '', to: '', description: '' }
+          if (kind === 'relations') return { ...base, from: '', to: '', attributes: '', description: '' }
           if (kind === 'behaviors') return { ...base, anchor: '', relations: '', states: '', trigger: '', description: '' }
           if (kind === 'scoreRules') return { ...base, weight: '0.25', expression: 'min(1, f1)', threshold: '0.5', evidenceTemplate: '', description: '' }
           if (kind === 'exclusionRules') return { ...base, action: 'drop', factor: '', condition: "tag == 'unknown'", description: '' }
@@ -1032,6 +1105,8 @@ window.__ModuleLoader__.load({
           const model = (pkg ?? {}) as Record<string, Array<Record<string, unknown>>>
           const pkgStatus = String((pkg as { meta?: { status?: string } } | null)?.meta?.status ?? '')
           const readOnly = pkgStatus === 'ISSUED'
+          // 与服务端 writeSource 同一守卫口径：..、绝对路径、反斜杠
+          const badRelPath = yamlPath.includes('..') || yamlPath.startsWith('/') || yamlPath.includes('\\')
 
           const objIds = (model['objects'] ?? []).map((o) => String(o['id']))
 
@@ -1073,7 +1148,7 @@ window.__ModuleLoader__.load({
               return
             }
             if (!el['id'] || !el['name']) {
-              setError('id / name required')
+              setError(t('errIdName'))
               return
             }
             const idx = edit.idx
@@ -1084,7 +1159,7 @@ window.__ModuleLoader__.load({
               if (cur && String(cur['id']) === String(el['id'])) taken.delete(String(el['id']))
             }
             if (taken.has(String(el['id']))) {
-              setError(`duplicate id ${String(el['id'])}`)
+              setError(`${t('errDuplicateId')}: ${String(el['id'])}`)
               return
             }
             void savePkg((p) => {
@@ -1198,6 +1273,7 @@ window.__ModuleLoader__.load({
             } else if (kind === 'relations') {
               children.push(selectField('from', t('from'), ['', ...objIds]))
               children.push(selectField('to', t('to'), ['', ...objIds]))
+              children.push(areaField('attributes', t('attrs'), 'relKind:enum', 50))
               children.push(areaField('description', t('info'), '', 50))
             } else if (kind === 'behaviors') {
               children.push(selectField('anchor', t('anchor'), ['', ...objIds]))
@@ -1241,7 +1317,7 @@ window.__ModuleLoader__.load({
               children.push(
                 h(Field, { label: t('pipelineViz') },
                   h('div', { className: 'ow-diff', style: { flex: 1 } },
-                    h(PipelineView, { steps: pipeSteps }))),
+                    h(PipelineView, { steps: pipeSteps, emptyText: t('emptyPipeline') }))),
               )
             }
 
@@ -1317,11 +1393,11 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   className: 'ow-btn',
-                  disabled: !!busy || readOnly || !yamlPath.trim() || yamlPath.includes('..'),
+                  disabled: !!busy || readOnly || !yamlPath.trim() || badRelPath,
                   title: readOnly
-                    ? 'ISSUED read-only'
-                    : yamlPath.includes('..')
-                      ? 'illegal relPath'
+                    ? t('issuedReadonly')
+                    : badRelPath
+                      ? t('illegalRelPath')
                       : undefined,
                   onClick: () =>
                     void (async () => {
@@ -1415,7 +1491,8 @@ window.__ModuleLoader__.load({
                 }
                 setElementNames(names)
               } catch {
-                /* 模型加载失败不阻塞人审；merge 目标退化为手输 */
+                /* 模型加载失败不阻塞人审；merge 目标退化为手输（提示可见，不吞） */
+                setInfo(t('mergeFallback'))
               }
             })()
           }, [apis, selected])
@@ -1441,8 +1518,13 @@ window.__ModuleLoader__.load({
           const doBatchUpload = async () => {
             if (!selected || batchFiles.length === 0) return
             const items: Array<{ sourceType: string; name: string; content: string }> = []
-            for (const f of batchFiles) {
-              items.push({ sourceType, name: f.name, content: await f.text() })
+            try {
+              for (const f of batchFiles) {
+                items.push({ sourceType, name: f.name, content: await f.text() })
+              }
+            } catch (e) {
+              setError(errText(e))
+              return
             }
             await act('batchUpload', async () => {
               const r = unwrap<{ sources: unknown[]; skipped: number; invalid: number }>(
@@ -1469,7 +1551,7 @@ window.__ModuleLoader__.load({
             try {
               parsed = JSON.parse(editText)
             } catch (e) {
-              setError(`JSON: ${errText(e)}`)
+              setError(`${t('errInvalidJson')}: ${errText(e)}`)
               return
             }
             await act('saveDraft', async () => {

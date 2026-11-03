@@ -46,7 +46,11 @@ export interface MaterializePreviewItem {
   summary: string
 }
 
-/** 单条草案的结构化形状校验（DeepSeek 输出逐条过闸）。返回 null = 合法。 */
+/**
+ * 单条草案的结构化形状校验（DeepSeek 输出逐条过闸）。返回 null = 合法。
+ * 只做形状闸门（已知边界）：嵌套内容（如 RedLine.phrases 元素类型、RelationType.from/to
+ * 是否指向已有对象）不在此校验，由 applyDraftToPackage 物化兜底、validatePackage 终检。
+ */
 export function validateDraftItem(item: unknown): string | null {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return 'not an object'
   const it = item as Record<string, unknown>
@@ -247,8 +251,16 @@ export class KnowledgeStore {
       throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
     }
     const next: DraftCandidate = { ...c }
-    if (patch.name !== undefined) next.name = patch.name
     if (patch.payload !== undefined) next.payload = patch.payload
+    if (patch.name !== undefined) {
+      // 改名同步 payload.name（物化侧 payload.name 优先）；仅当 payload.name 与旧名一致
+      // （解析时的自动副本）才同步，故意设了别的 payload.name 则保持不动。
+      const pay = next.payload
+      if (pay && typeof pay === 'object' && (pay as Record<string, unknown>)['name'] === c.name) {
+        next.payload = { ...(pay as Record<string, unknown>), name: patch.name }
+      }
+      next.name = patch.name
+    }
     if (patch.rationale !== undefined) next.rationale = patch.rationale
     if (patch.confidence !== undefined) {
       if (!Number.isFinite(patch.confidence) || patch.confidence < 0 || patch.confidence > 1) {
@@ -367,10 +379,11 @@ export class KnowledgeStore {
   /**
    * 干跑预览：把候选应用到包模型副本，返回每个候选将物化成的元素/变更，不落盘。
    * 不校验 status（批准前也要能看 diff）；不拒 ISSUED（只读预览）。
+   * 与 materialize 同语义：共享一份副本按序累积应用（后条可见前条的插入）。
    */
   previewMaterialize(versionDir: string, candidateIds: string[]): MaterializePreviewItem[] {
     const meta = readPackageMeta(versionDir)
-    const base = loadPackage(versionDir)
+    const pkg = loadPackage(versionDir)
     const queue = this.loadQueue()
     const out: MaterializePreviewItem[] = []
     for (const id of candidateIds) {
@@ -390,7 +403,6 @@ export class KnowledgeStore {
         })
         continue
       }
-      const pkg = structuredClone(base)
       try {
         const before = snapshotPkg(pkg)
         applyDraftToPackage(pkg, c)
@@ -457,8 +469,15 @@ function diffSnapshot(
     }
     if (key === 'scenarios') {
       for (const el of changed) {
-        const s = el as { id?: string; outputContract?: { forbiddenPhrases?: string[] } }
-        const prevS = (prev.find((x) => (x as { id?: string }).id === s.id) ?? {}) as { outputContract?: { forbiddenPhrases?: string[] } }
+        const s = el as { id?: string; name?: string; outputContract?: { forbiddenPhrases?: string[] } }
+        const prevRaw = prev.find((x) => (x as { id?: string }).id === s.id)
+        if (prevRaw === undefined) {
+          // 新建场景卡：展示整元素（RedLine 禁语增量只适用于已存在场景的原地合并）
+          elements.push(el)
+          parts.push(`→ ${labels[key]} ${s.id ?? ''}${s.name ? `「${s.name}」` : ''}`)
+          continue
+        }
+        const prevS = prevRaw as { outputContract?: { forbiddenPhrases?: string[] } }
         const beforePhrases = new Set(prevS.outputContract?.forbiddenPhrases ?? [])
         const newPhrases = (s.outputContract?.forbiddenPhrases ?? []).filter((p) => !beforePhrases.has(p))
         if (newPhrases.length > 0) {
@@ -590,7 +609,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
     }
     case 'Dictionary': {
       pkg.dictionaries.push({
-        id: pickDictId(p),
+        id: pickDictId(p, pkg),
         name: String(p['name'] ?? c.name),
         values: Array.isArray(p['values']) ? (p['values'] as string[]).map(String) : [],
       })
@@ -699,14 +718,41 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
   }
 }
 
+function idTaken(pkg: OntologyPackage, id: string): boolean {
+  return (
+    pkg.objects.some((x) => x.id === id) ||
+    pkg.relations.some((x) => x.id === id) ||
+    pkg.dictionaries.some((x) => x.id === id) ||
+    pkg.behaviors.some((x) => x.id === id) ||
+    pkg.scoreRules.some((x) => x.id === id) ||
+    pkg.exclusionRules.some((x) => x.id === id) ||
+    pkg.skillTemplates.some((x) => x.id === id) ||
+    pkg.scenarios.some((x) => x.id === id) ||
+    pkg.fieldMaps.some((x) => x.id === id) ||
+    pkg.apiSources.some((x) => x.id === id)
+  )
+}
+
 function pickId(p: Record<string, unknown>, prefix: string, tag: string, pkg: OntologyPackage): string {
   const raw = p['id']
-  if (typeof raw === 'string' && isValidId(raw)) return raw
+  if (typeof raw === 'string' && isValidId(raw)) {
+    // 显式 payload.id 与包内已有 ID（含同批次先前插入）冲突 → 拒绝，避免造出重复 ID
+    if (idTaken(pkg, raw)) {
+      throw new KnowledgeError('DUP_ID', `payload.id ${raw} 与包内已有 ID 重复`)
+    }
+    return raw
+  }
   return nextId(pkg, prefix, tag)
 }
 
-function pickDictId(p: Record<string, unknown>): string {
+function pickDictId(p: Record<string, unknown>, pkg: OntologyPackage): string {
   const raw = p['id']
-  if (typeof raw === 'string' && raw.startsWith('dict-')) return raw
-  return `dict-${String(p['name'] ?? 'gen').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gen'}`
+  const id =
+    typeof raw === 'string' && raw.startsWith('dict-')
+      ? raw
+      : `dict-${String(p['name'] ?? 'gen').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gen'}`
+  if (idTaken(pkg, id)) {
+    throw new KnowledgeError('DUP_ID', `payload.id ${id} 与包内已有 ID 重复`)
+  }
+  return id
 }

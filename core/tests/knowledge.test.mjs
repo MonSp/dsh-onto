@@ -357,6 +357,8 @@ test('改名不破坏同源幂等：sourceName 稳定键', async () => {
     assert.equal(draft.sourceName, draft.name)
     store.updateCandidate(draft.id, { name: '改名后的规则' })
     assert.equal(store.getCandidate(draft.id).name, '改名后的规则')
+    // 改名同步 payload.name（与旧名一致的自动副本）——物化写入用的是它
+    assert.equal(store.getCandidate(draft.id).payload.name, '改名后的规则')
     // 同源二次解析仍按解析原始名去重，不再造新候选
     const r2 = await store.parseSource(src.id, new HeuristicLlm())
     assert.equal(r2.report.accepted, 0)
@@ -390,11 +392,10 @@ test('previewMaterialize：干跑返回将物化的元素，不落盘', async ()
     assert.ok(scoreP.summary.includes('ScoreRule'))
     assert.ok(scoreP.element && typeof scoreP.element === 'object')
     const redP = previews.find((p) => p.targetKind === 'RedLine')
-    if (redP) {
-      assert.ok(redP.ok, redP.error)
-      assert.ok(redP.summary.includes('禁语'))
-      assert.ok(Array.isArray(redP.element.phrases))
-    }
+    assert.ok(redP, 'RedLine 预览应存在（夹具含结论句）')
+    assert.ok(redP.ok, redP.error)
+    assert.ok(redP.summary.includes('禁语'))
+    assert.ok(Array.isArray(redP.element.phrases))
     // 干跑不落盘
     const after = loadPackage(dir)
     assert.equal(after.scoreRules.length, beforeRules)
@@ -441,6 +442,159 @@ test('跨包候选：materialize/previewMaterialize 按 packageId 拒绝', async
     assert.equal(pvSame[0].ok, true, pvSame[0].error)
     const rSame = store.materialize(dir, [draft.id])
     assert.deepEqual(rSame.applied, [draft.id])
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('updateCandidate 改名同步 payload.name；故意分叉的 payload.name 不覆盖', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    assert.equal(draft.payload.name, draft.name)
+    // 与旧名一致（自动副本）→ 改名同步
+    store.updateCandidate(draft.id, { name: '新名' })
+    assert.equal(store.getCandidate(draft.id).payload.name, '新名')
+    // 故意分叉的 payload.name 不被改名覆盖（payload.name 保持权威）
+    store.updateCandidate(draft.id, { payload: { ...store.getCandidate(draft.id).payload, name: '专用名' } })
+    store.updateCandidate(draft.id, { name: '另一个名' })
+    assert.equal(store.getCandidate(draft.id).name, '另一个名')
+    assert.equal(store.getCandidate(draft.id).payload.name, '专用名')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize：新建带禁语的 ScenarioCard 显示整元素，不误判为 RedLine 增量', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-new-scn',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O3',
+      targetKind: 'ScenarioCard',
+      name: '新场景',
+      payload: {
+        name: '新场景',
+        goal: '识别线索',
+        boundary: '只输出候选',
+        outputContract: { forbiddenPhrases: ['认定洗钱'] },
+      },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: new Date().toISOString(),
+    }], null, 2))
+    const previews = store.previewMaterialize(dir, ['dc-new-scn'])
+    assert.equal(previews.length, 1)
+    assert.ok(previews[0].ok, previews[0].error)
+    // 完整新元素（含 id/name），不是 { scenarioId, phrases } 禁语增量
+    assert.equal(previews[0].element.name, '新场景')
+    assert.ok(String(previews[0].element.id).startsWith('SCN-'))
+    assert.ok(!previews[0].summary.includes('禁语 +'), previews[0].summary)
+    // 干跑不落盘
+    assert.equal(loadPackage(dir).scenarios.length, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize 累积干跑：与 materialize 同语义，后者可见前者的插入', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    const now = new Date().toISOString()
+    writeFileSync(queuePath, JSON.stringify([
+      {
+        id: 'dc-obj-new',
+        packageId: 'test-pkg',
+        sourceId: 'src-x',
+        layer: 'O1',
+        targetKind: 'ObjectType',
+        name: '新对象',
+        payload: { name: '新对象', attributes: [] },
+        confidence: 0.9,
+        rationale: '',
+        status: 'pending',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+      {
+        id: 'dc-attr-new',
+        packageId: 'test-pkg',
+        sourceId: 'src-x',
+        layer: 'O1',
+        targetKind: 'Attribute',
+        name: '新属性',
+        payload: { ownerName: '新对象', name: '新属性', type: 'string' },
+        confidence: 0.9,
+        rationale: '',
+        status: 'pending',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+    ], null, 2))
+    // 累积：第二条（Attribute）能看到第一条刚插入的 owner
+    const previews = store.previewMaterialize(dir, ['dc-obj-new', 'dc-attr-new'])
+    assert.equal(previews[0].ok, true, previews[0].error)
+    assert.equal(previews[1].ok, true, previews[1].error)
+    // 孤立预览第二条则失败（owner 尚不存在）——对照旧的逐条独立干跑
+    const solo = store.previewMaterialize(dir, ['dc-attr-new'])
+    assert.equal(solo[0].ok, false)
+    assert.match(solo[0].error, /ATTR_OWNER|owner/)
+    // 干跑不落盘
+    assert.equal(loadPackage(dir).objects.length, 2)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('payload.id 与包内已有 ID 冲突 → 拒绝，不产生重复 ID', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-dup-id',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O1',
+      targetKind: 'ObjectType',
+      name: '撞车对象',
+      payload: { id: 'OBJ-TST-A', name: '撞车对象', attributes: [] },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: new Date().toISOString(),
+    }], null, 2))
+    const previews = store.previewMaterialize(dir, ['dc-dup-id'])
+    assert.equal(previews[0].ok, false)
+    assert.match(previews[0].error, /重复/)
+    store.reviewCandidate('dc-dup-id', 'approve')
+    const r = store.materialize(dir, ['dc-dup-id'])
+    assert.equal(r.applied.length, 0)
+    assert.equal(r.skipped.length, 1)
+    assert.match(r.skipped[0].reason, /重复/)
+    // 包内仍是原有两个对象，未产生重复 ID
+    assert.equal(loadPackage(dir).objects.length, 2)
   } finally {
     rmWorkspace(root)
   }

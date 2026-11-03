@@ -54,16 +54,16 @@ function collectDefinedIds(pkg: OntologyPackage): {
     if (first === undefined) ids.set(id, where)
     else dupes.push({ id, first, second: where })
   }
-  for (const o of pkg.objects) add(o.id, `OBJ ${o.id}`)
-  for (const r of pkg.relations) add(r.id, `REL ${r.id}`)
-  for (const d of pkg.dictionaries) add(d.id, `DICT ${d.id}`)
-  for (const b of pkg.behaviors) add(b.id, `BHV ${b.id}`)
-  for (const r of pkg.scoreRules) add(r.id, `RULE ${r.id}（scoreRules）`)
-  for (const r of pkg.exclusionRules) add(r.id, `RULE ${r.id}（exclusionRules）`)
-  for (const s of pkg.skillTemplates) add(s.id, `SKL ${s.id}`)
-  for (const s of pkg.scenarios) add(s.id, `SCN ${s.id}`)
-  for (const f of pkg.fieldMaps) add(f.id, `FM ${f.id}`)
-  for (const s of pkg.apiSources) add(s.id, `SRC ${s.id}`)
+  for (const o of pkg.objects) add(o.id, 'o1-objects/object-types.yaml')
+  for (const r of pkg.relations) add(r.id, 'o1-objects/relation-types.yaml')
+  for (const d of pkg.dictionaries) add(d.id, `o1-objects/dictionaries/${d.id}.yaml`)
+  for (const b of pkg.behaviors) add(b.id, 'o2-behavior-rules/behavior-types.yaml')
+  for (const r of pkg.scoreRules) add(r.id, 'o2-behavior-rules/rules/score-rules.yaml')
+  for (const r of pkg.exclusionRules) add(r.id, 'o2-behavior-rules/rules/exclusion-rules.yaml')
+  for (const s of pkg.skillTemplates) add(s.id, `o2-behavior-rules/skill-templates/${s.id}.yaml`)
+  for (const s of pkg.scenarios) add(s.id, `o3-scenarios/${s.id}.yaml`)
+  for (const f of pkg.fieldMaps) add(f.id, 'bindings/field-maps.yaml')
+  for (const s of pkg.apiSources) add(s.id, 'bindings/api-sources.yaml')
   return { ids, dupes }
 }
 
