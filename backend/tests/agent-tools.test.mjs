@@ -12,6 +12,8 @@ import {
   AgentToolError,
   assertRunContract,
   checkGrant,
+  grantGuardDecision,
+  grantMatches,
   loadDatasetFromArgs,
   projectByContract,
   readToolContracts,
@@ -23,7 +25,7 @@ import {
   summarizePackage,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
-import { loadPackage, runScenario } from '@dsh-onto/core'
+import { KnowledgeStore, loadPackage, runScenario } from '@dsh-onto/core'
 
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
 const AML_RUN = fileURLToPath(new URL('../../examples/aml-run.json', import.meta.url))
@@ -214,4 +216,82 @@ test('知识上传回执不回显 content', () => {
   })
   assert.equal(summary.content, undefined)
   assert.equal(summary.sha256, 'abc')
+})
+
+test('知识上传 sha256 幂等：同内容二次上传跳过', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-know-'))
+  try {
+    const store = new KnowledgeStore(tmp)
+    const req = {
+      packageId: 'aml-analysis@1.0.0',
+      sourceType: 'POLICY',
+      name: '制度摘要',
+      content: '同一份内容',
+    }
+    const first = store.uploadSource(req)
+    const before = store.listSources(req.packageId).length
+    const second = store.uploadSource(req)
+    assert.equal(store.listSources(req.packageId).length, before, '同 sha256 不应新增')
+    assert.equal(second.sha256, first.sha256)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('收权 guard：缺 name/version 与未收权对象一律拒绝（无旁路）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const reader = () => contracts
+
+  assert.equal(grantGuardDecision('bash', { objectId: 'OBJ-AML-ACCOUNT' }, reader), undefined)
+  assert.equal(grantGuardDecision('get_rule', { name: 'aml-analysis', version: '1.0.0' }, reader), undefined)
+
+  const missingArgs = grantGuardDecision(
+    'list_tool_contracts',
+    { objectId: 'OBJ-AML-ACCOUNT' },
+    reader,
+  )
+  assert.match(missingArgs, /OBJECT_NOT_GRANTED/)
+
+  const viaObjectRef = grantGuardDecision(
+    'list_tool_contracts',
+    { objectRef: 'OBJ-NOPE', name: 'aml-analysis', version: '1.0.0' },
+    reader,
+  )
+  assert.match(viaObjectRef, /OBJECT_NOT_GRANTED: OBJ-NOPE/)
+
+  assert.equal(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectId: 'OBJ-AML-ACCOUNT', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    undefined,
+  )
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectId: 'OBJ-NOPE', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    /OBJECT_NOT_GRANTED/,
+  )
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectId: 'OBJ-AML-ACCOUNT', name: 'aml-analysis', version: '1.0.0' },
+      () => {
+        throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: tampered')
+      },
+    ),
+    /拒绝加载/,
+  )
+})
+
+test('收权谓词与过滤一致：guard 放行的对象必能在清单中取到条目', () => {
+  const contracts = readToolContracts(AML_DIR)
+  for (const c of contracts) {
+    const scope = c.grantScope
+    assert.equal(checkGrant(contracts, scope), undefined, `${scope} 应放行`)
+    assert.ok(contracts.some((x) => grantMatches(x, scope)), `${scope} 过滤应命中`)
+  }
 })

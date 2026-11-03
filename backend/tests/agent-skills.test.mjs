@@ -5,13 +5,21 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
-import { pickSkillSources, renderSkillBody, skillNameFromId } from '../dist/agent-skills.js'
+import {
+  collectSkillSources,
+  pickSkillSources,
+  renderSkillBody,
+  skillNameFromId,
+} from '../dist/agent-skills.js'
 
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
+const MED_DIR = fileURLToPath(new URL('../../packages/med/1.0.0', import.meta.url))
 
 test('skill 命名：SKL id → kebab-case', () => {
   assert.equal(skillNameFromId('SKL-AML-NARRATIVE'), 'skl-aml-narrative')
   assert.match(skillNameFromId('SKL-AML-NARRATIVE'), /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  assert.equal(skillNameFromId('SKL-AML-'), 'skl-aml')
+  assert.match(skillNameFromId('SKL-AML-'), /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
 })
 
 test('版本去重：ISSUED 优先，同状态版本号降序', () => {
@@ -58,4 +66,15 @@ test('aml 包 SKL 模板可渲染成 skill', () => {
     })
     assert.match(body, /## 红线/)
   }
+})
+
+test('provider 扫描：aml/med 包均返回 skl-* skill', () => {
+  const collected = collectSkillSources([
+    { dir: AML_DIR, status: 'DRAFT', version: '1.0.0' },
+    { dir: MED_DIR, status: 'DRAFT', version: '1.0.0' },
+  ])
+  const names = [...collected.values()].map((s) => skillNameFromId(s.template.id))
+  assert.ok(names.includes('skl-aml-narrative'), `aml skill 缺失: ${names}`)
+  assert.ok(names.includes('skl-med-narrative'), `med skill 缺失: ${names}`)
+  for (const n of names) assert.match(n, /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
 })

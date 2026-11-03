@@ -206,12 +206,39 @@ export function readToolContracts(versionDir: string): ToolContractEntry[] {
 }
 
 /** grantScope 判定：objectId 必须落在收权清单内，否则拒绝。 */
+export function grantMatches(entry: ToolContractEntry, objectId: string): boolean {
+  return entry.grantScope === objectId || entry.objectId === objectId || entry.relationId === objectId
+}
+
 export function checkGrant(contracts: ToolContractEntry[], objectId: string | undefined): string | undefined {
   if (objectId === undefined) return undefined
-  const hit = contracts.some(
-    (c) => c.grantScope === objectId || c.objectId === objectId || c.relationId === objectId,
-  )
+  const hit = contracts.some((c) => grantMatches(c, objectId))
   return hit ? undefined : `OBJECT_NOT_GRANTED: ${objectId}`
+}
+
+/** guard 判定纯函数：args 带 objectId/objectRef 即须过收权；缺 name/version 一律拒绝。 */
+export function grantGuardDecision(
+  toolName: string,
+  args: unknown,
+  readContracts: (name: string, version: string) => ToolContractEntry[],
+): string | undefined {
+  if (!ONTOOL_NAMES.has(toolName)) return undefined
+  const a = isRecord(args) ? args : {}
+  const objectId =
+    typeof a.objectId === 'string'
+      ? a.objectId
+      : typeof a.objectRef === 'string'
+        ? a.objectRef
+        : undefined
+  if (objectId === undefined) return undefined
+  if (typeof a.name !== 'string' || typeof a.version !== 'string') {
+    return `OBJECT_NOT_GRANTED: ${objectId}（缺少 name/version，无法核对收权清单）`
+  }
+  try {
+    return checkGrant(readContracts(a.name, a.version), objectId)
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
 }
 
 /* ───────────────────────── 只读查询投影 ───────────────────────── */
@@ -327,18 +354,11 @@ export function apply(ctx: Context): void {
   const load = (pkgName: string, version: string): OntologyPackage =>
     loadPackage(ws.versionDir(pkgName, version))
 
-  ctx.tools.guard((execution) => {
-    if (!ONTOOL_NAMES.has(execution.name)) return undefined
-    const args = isRecord(execution.arguments) ? execution.arguments : {}
-    const objectId = typeof args.objectId === 'string' ? args.objectId : undefined
-    if (objectId === undefined) return undefined
-    if (typeof args.name !== 'string' || typeof args.version !== 'string') return undefined
-    try {
-      return checkGrant(readToolContracts(ws.versionDir(args.name, args.version)), objectId)
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e)
-    }
-  })
+  ctx.tools.guard((execution) =>
+    grantGuardDecision(execution.name, execution.arguments, (n, v) =>
+      readToolContracts(ws.versionDir(n, v)),
+    ),
+  )
 
   ctx.tools.register(
     defineTool({
@@ -441,7 +461,7 @@ export function apply(ctx: Context): void {
         const picked =
           args.objectId === undefined
             ? contracts
-            : contracts.filter((c) => c.grantScope === args.objectId)
+            : contracts.filter((c) => grantMatches(c, args.objectId as string))
         return toolOut({ contracts: picked })
       },
     }),

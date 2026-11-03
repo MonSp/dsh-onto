@@ -24,7 +24,10 @@ import { resolveDataDir } from './services.js'
 
 /** SKL id → skill 名（`SKL-AML-NARRATIVE` → `skl-aml-narrative`）。 */
 export function skillNameFromId(sklId: string): string {
-  return sklId.toLowerCase().replace(/[^a-z0-9-]+/g, '-')
+  return sklId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 /** 一个 SKL 模板的来源版本（用于跨版本去重）。 */
@@ -60,6 +63,25 @@ export function pickSkillSources(sources: SklSource[]): Map<string, SklSource> {
     if (cur === undefined || betterThan(s, cur)) best.set(s.template.id, s)
   }
   return best
+}
+
+/** 扫描一组包版本目录，收集 SKL 模板并跨版本去重。 */
+export function collectSkillSources(
+  entries: ReadonlyArray<{ dir: string; status: string; version: string }>,
+): Map<string, SklSource> {
+  const sources: SklSource[] = []
+  for (const v of entries) {
+    let pkg: OntologyPackage
+    try {
+      pkg = loadPackage(v.dir)
+    } catch {
+      continue
+    }
+    for (const template of pkg.skillTemplates) {
+      sources.push({ versionDir: v.dir, status: v.status, version: v.version, template })
+    }
+  }
+  return pickSkillSources(sources)
 }
 
 /** skill 正文：模板口径 + 红线声明。 */
@@ -110,21 +132,7 @@ export function apply(ctx: Context): void {
   const dataDir = resolveDataDir(ctx)
   const ws = new PackageWorkspace(join(dataDir, 'workspace'))
 
-  const scan = (): Map<string, SklSource> => {
-    const sources: SklSource[] = []
-    for (const v of ws.listVersions()) {
-      let pkg: OntologyPackage
-      try {
-        pkg = loadPackage(v.dir)
-      } catch {
-        continue
-      }
-      for (const template of pkg.skillTemplates) {
-        sources.push({ versionDir: v.dir, status: v.status, version: v.version, template })
-      }
-    }
-    return pickSkillSources(sources)
-  }
+  const scan = (): Map<string, SklSource> => collectSkillSources(ws.listVersions())
 
   ctx.skills.registerProvider((control) => {
     const unregister = registerSkillInvalidator(control.invalidate)
