@@ -19,6 +19,7 @@ import {
   readToolContracts,
   renderRunText,
   renderScenarioList,
+  requireExistingPackage,
   ruleDossier,
   scenarioCatalog,
   sourceSummary,
@@ -301,4 +302,49 @@ test('收权谓词与过滤一致：guard 放行的对象必能在清单中取�
     assert.equal(checkGrant(contracts, scope), undefined, `${scope} 应放行`)
     assert.ok(contracts.some((x) => grantMatches(x, scope)), `${scope} 过滤应命中`)
   }
+})
+
+test('收权：objectRef 实例段（TYPE:inst）按类型段判定，未收权类型仍拒绝', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const reader = () => contracts
+  const granted = 'OBJ-AML-ACCOUNT:x'
+  assert.equal(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectRef: granted, name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    undefined,
+  )
+  assert.ok(contracts.some((c) => grantMatches(c, granted)), '谓词须按 TYPE 段命中')
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectRef: 'OBJ-NOPE:x', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    /OBJECT_NOT_GRANTED: OBJ-NOPE:x/,
+  )
+  // 双字段：实例段与裸 ID 混用时两者都须收权
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectId: granted, objectRef: 'OBJ-NOPE:x', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    /OBJECT_NOT_GRANTED: OBJ-NOPE:x/,
+  )
+})
+
+test('知识上传：packageId 必须是工作区真实包（name@version）', () => {
+  const versions = [
+    { name: 'aml-analysis', version: '1.0.0' },
+    { name: 'med-analysis', version: '1.0.0' },
+  ]
+  requireExistingPackage(versions, 'aml-analysis@1.0.0')
+  expectCode(() => requireExistingPackage(versions, 'nope@1.0.0'), 'NOT_FOUND')
+  expectCode(() => requireExistingPackage(versions, 'aml-analysis@9.9.9'), 'NOT_FOUND')
+  expectCode(() => requireExistingPackage(versions, 'aml-analysis'), 'INVALID_ARGS')
+  expectCode(() => requireExistingPackage(versions, '@1.0.0'), 'INVALID_ARGS')
+  expectCode(() => requireExistingPackage(versions, ''), 'INVALID_ARGS')
 })

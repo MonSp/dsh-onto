@@ -26,8 +26,10 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
 `run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
 工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
-禁语扫描 0 命中（通过）、三层闭合 passed。评审两轮：首轮 2 critical + 2 major 修复后
-复审 PASS，并关死双字段 guard 残余旁路。
+禁语扫描 0 命中（通过）、三层闭合 passed。评审三轮：首轮 2 critical + 2 major 修复后
+复审 PASS，并关死双字段 guard 残余旁路；第三轮补 skill 目录失效漏 fork/transition/
+createPackage 写路径、upload_knowledge_source packageId 存在性校验、
+readToolContracts 错误包装、objectRef 实例段按类型段判定。
 
 ## [S1] Problem
 
@@ -63,7 +65,7 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 | `list_tool_contracts` | `{name, version, objectId?}` | `{contracts: [{id, objectId?, relationId?, grantScope, idRule?, inputs, outputs}]}` | 对象粒度收权清单 |
 | `list_scenarios` | `{name, version}` | `{scenarios: [{id, name, goal, boundary, inputs, outputFields}]}` | 场景发现 |
 | `run_scenario` | `{name, version, scenarioId, datasetPath?, dataset?}` | `ScenarioRunResult`（S2.3） | 场景执行 |
-| `upload_knowledge_source` | `{packageId, sourceType, name, content}` | `{source: {id, sourceType, name, sha256, parseStatus}}` | 知识原料上传（幂等） |
+| `upload_knowledge_source` | `{packageId, sourceType, name, content}` | `{source: {id, sourceType, name, sha256, parseStatus}}` | 知识原料上传（幂等；packageId 须为工作区真实包 `name@version`，否则 `INVALID_ARGS`/`NOT_FOUND`） |
 
 - 命名 snake_case、无前缀（任务书点名 `run_scenario` / `list_scenarios`，查询工具同风格）。
   注册撞名 fail-loud（dsh 注册表同层重复抛错），不做自动改名。
@@ -100,7 +102,8 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   不以空列表掩盖越权。
 - `ctx.tools.guard()`（monotonic，后置不可翻转）覆盖全部 7 工具：args 含 `objectId` /
   `objectRef` 时必须命中 tool-contracts 的 grantScope（对象或关系 ID），否则拒绝
-  （reason: `OBJECT_NOT_GRANTED`）。
+  （reason: `OBJECT_NOT_GRANTED`）。`objectRef` 允许运行时实例段（`OBJ-AML-ACCOUNT:x`），
+  按 `:` 前的类型段匹配 grantScope（收权是对象粒度）；未收权类型带不带实例段一律拒绝。
 - 输出投影 `projectByContract()`：契约类输出逐字段裁剪到 inputs/outputs/idRule/grantScope，
   防御意外扩面。
 - **签发/审阅端点永不注册为工具**：transition/issue、reviewCandidate、materialize、
@@ -118,14 +121,16 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   （叙述只回填模板、禁认定性表述、结论性表述只落 forbiddenPhrases）、使用方式
   （配合 run_scenario 的 SKILL_RUN 步骤）。
 - invocation：`modelInvocable: true`、`userInvocable: true`。
-- 失效：包写入路径（ontoModel.save/writeSource / ontoKnowledge.materialize /
-  ontoWorkspace.importVersion）调 provider control 的 `invalidate()`（模块级失效钩子），
-  目录变更无需重启会话。
+- 失效：包写入路径（ontoWorkspace.createPackage/forkVersion/transition/importVersion /
+  ontoModel.save/writeSource / ontoKnowledge.materialize）调 provider control 的
+  `invalidate()`（模块级失效钩子），目录变更无需重启会话。fork/transition 改变版本集合
+  与 ISSUED 状态、直接决定 `skl-*` 去重优胜者，与内容写入同等对待。
 
 ### [S2.6] 知识上传工具边界
 
 - `upload_knowledge_source` = `KnowledgeStore.uploadSource` 薄封装（sha256 幂等、五类
   sourceType）；只上传草稿原料，**原料永不直写包**（§5.3 硬规则不变）。
+  `packageId` 须为工作区真实包的 `name@version`（`requireExistingPackage`），避免落孤儿草稿。
 - LLM 解析（parseSource）、人审（reviewCandidate）、物化（materialize）留在工作台 wire，
   不进工具面。
 - 返回摘要不回显 content（大块敏感数据不进模型上下文，§12.3）。

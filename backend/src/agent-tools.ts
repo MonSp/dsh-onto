@@ -198,16 +198,30 @@ export function readToolContracts(versionDir: string): ToolContractEntry[] {
   if (!gate.ok) {
     throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
   }
-  const raw = loadYaml(readFileSync(join(versionDir, DERIVED_FILES.toolContracts), 'utf8')) as {
-    tools?: unknown[]
+  let tools: unknown[]
+  try {
+    const raw = loadYaml(readFileSync(join(versionDir, DERIVED_FILES.toolContracts), 'utf8')) as {
+      tools?: unknown[]
+    }
+    tools = Array.isArray(raw?.tools) ? raw.tools : []
+  } catch (e) {
+    // 门禁通过后仍失败（如 TOCTOU 删文件）：按不可加载处理，不裸抛底层错误。
+    const reason = e instanceof Error ? e.message : String(e)
+    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: tool-contracts 不可读（${reason}）`)
   }
-  const tools = Array.isArray(raw?.tools) ? raw.tools : []
   return tools.map(projectByContract)
 }
 
-/** grantScope 判定：objectId 必须落在收权清单内，否则拒绝。 */
+/** grant 判定的主体：运行时引用带实例段（`OBJ-AML-ACCOUNT:x`），收权是对象粒度，按类型段匹配。 */
+function grantSubject(objectId: string): string {
+  const i = objectId.indexOf(':')
+  return i >= 0 ? objectId.slice(0, i) : objectId
+}
+
+/** grantScope 判定：objectId（可含 `:实例` 段）必须落在收权清单内，否则拒绝。 */
 export function grantMatches(entry: ToolContractEntry, objectId: string): boolean {
-  return entry.grantScope === objectId || entry.objectId === objectId || entry.relationId === objectId
+  const subject = grantSubject(objectId)
+  return entry.grantScope === subject || entry.objectId === subject || entry.relationId === subject
 }
 
 export function checkGrant(contracts: ToolContractEntry[], objectId: string | undefined): string | undefined {
@@ -319,6 +333,22 @@ export function sourceSummary(rec: KnowledgeSourceRecord): Record<string, unknow
     sha256: rec.sha256,
     parseStatus: rec.parseStatus,
     uploadedAt: rec.uploadedAt,
+  }
+}
+
+/** packageId（`name@version`）必须是工作区真实包；格式错 → INVALID_ARGS，不存在 → NOT_FOUND。 */
+export function requireExistingPackage(
+  versions: ReadonlyArray<{ name: string; version: string }>,
+  packageId: string,
+): void {
+  const at = packageId.lastIndexOf('@')
+  const name = at > 0 ? packageId.slice(0, at) : ''
+  const version = at > 0 ? packageId.slice(at + 1) : ''
+  if (!name || !version) {
+    throw new AgentToolError('INVALID_ARGS', `packageId 须为 name@version 形式: ${packageId}`)
+  }
+  if (!versions.some((v) => v.name === name && v.version === version)) {
+    throw new AgentToolError('NOT_FOUND', `包不存在: ${packageId}`)
   }
 }
 
@@ -558,6 +588,7 @@ export function apply(ctx: Context): void {
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
       async execute(args) {
+        requireExistingPackage(ws.listVersions(), args.packageId)
         const source = knowledge.uploadSource({
           packageId: args.packageId,
           sourceType: args.sourceType as SourceType,

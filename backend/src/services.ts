@@ -145,7 +145,9 @@ export class OntoWorkspace extends TypertRemoteService {
       if (!request?.name || !request?.version || !request?.domain) {
         throw ontoError('onto/bad-request', 'name/version/domain required')
       }
-      return { dir: this.ws.createPackage(request) }
+      const dir = this.ws.createPackage(request)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 
@@ -155,7 +157,9 @@ export class OntoWorkspace extends TypertRemoteService {
       if (!request?.name || !request?.fromVersion || !request?.toVersion) {
         throw ontoError('onto/bad-request', 'name/fromVersion/toVersion required')
       }
-      return { dir: this.ws.forkVersion(request.name, request.fromVersion, request.toVersion) }
+      const dir = this.ws.forkVersion(request.name, request.fromVersion, request.toVersion)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 
@@ -172,6 +176,7 @@ export class OntoWorkspace extends TypertRemoteService {
         throw ontoError('onto/bad-request', 'name/version/to required')
       }
       this.ws.transition(request.name, request.version, request.to, request.issuedBy, request.note)
+      invalidateSkillCatalog()
       return { status: request.to }
     })
   }
