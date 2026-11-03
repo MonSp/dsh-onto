@@ -1,6 +1,6 @@
 ---
 feature: dsh-native-integration
-status: in-progress
+status: delivered
 updated: 2026-11-03
 source: feat/v0.1.2-dsh-native-integration
 ---
@@ -8,6 +8,26 @@ source: feat/v0.1.2-dsh-native-integration
 # v0.1.2 dsh 原生集成 — 生态差异化
 
 ## Report
+
+**What was built** — dsh 原生 agent 面落地在 `@dsh-onto/backend`：7 个工具
+（`list_packages` / `get_package` / `get_rule` / `list_tool_contracts` / `list_scenarios` /
+`run_scenario` / `upload_knowledge_source`）经 `ctx.tools.register(defineTool)` 注册，
+`run_scenario` 返回完整 `ScenarioRunResult`（命中规则 ID、证据链、humanReviewRequired=true、
+禁语扫描与三层闭合页脚）；对象粒度收权以派生 tool-contracts 为事实源
+（`grantGuardDecision` guard + `projectByContract` 输出投影，未收权对象一律
+`OBJECT_NOT_GRANTED`，签发/审阅端点不进工具面）；每个 SKL 模板经
+`onto-skill-templates` provider 暴露为 `skl-*` skill（版本去重 ISSUED 优先），
+知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
+
+**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 61/61 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 20/20 PASS；
+`workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
+`scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
+会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
+`run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
+工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
+禁语扫描 0 命中（通过）、三层闭合 passed。评审两轮：首轮 2 critical + 2 major 修复后
+复审 PASS，并关死双字段 guard 残余旁路。
 
 ## [S1] Problem
 
@@ -134,14 +154,14 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 
 ## Tasks
 
-- [ ] T1: backend agent-tools 插件骨架 + `list_packages` / `get_package` / `list_scenarios` — acceptance: backend build + `node --check` 通过；三工具 schema 形状由单测断言（covers: S2.1, S2.2）
-- [ ] T2: `run_scenario`（数据双通道 + 装配断言 + 合规 render）— acceptance: 单测覆盖双通道校验、断言与 render 合规页脚；对 `examples/aml-run.json` 跑出完整 `ScenarioRunResult`（covers: S2.3）
-- [ ] T3: 对象粒度收权（`list_tool_contracts` + guard + `projectByContract`）— acceptance: 未契约化 objectId 被 guard 拒；投影不漏 inputs/outputs 之外字段；漂移包拒绝（covers: S2.4）
-- [ ] T4: `get_rule` 口径工具 — acceptance: 单测断言 score/exclusion 口径字段完整（covers: S2.2）
-- [ ] T5: SKL provider（扫描 / 命名 / 版本去重 / 正文渲染 / 失效）— acceptance: 单测覆盖命名去重与正文红线段；provider `list()` 对 aml/med 包返回 `skl-*`（covers: S2.5）
-- [ ] T6: `upload_knowledge_source` — acceptance: 单测断言 sha256 幂等跳过与摘要不回显 content（covers: S2.6）
-- [ ] T7: 版本 bump 0.1.2 + 依赖 lockfile + AGENTS.md / architecture.md 模块地图更新 — acceptance: 三包 version=0.1.2；验证阶梯 1–3 全绿（covers: S2.7）
-- [ ] T8: 会话内验收（dev-web + Tabbit）：「帮我跑 AML 线索场景」→ `run_scenario` 工具结果含 ruleId / 证据链 / humanReviewRequired / 禁语扫描 — acceptance: 浏览器会话完成一次场景调用，工具结果可见合规字段，禁语零命中（covers: S2.3）
+- [x] T1: backend agent-tools 插件骨架 + `list_packages` / `get_package` / `list_scenarios` — acceptance: backend build + `node --check` 通过；三工具 schema 形状由单测断言（covers: S2.1, S2.2）
+- [x] T2: `run_scenario`（数据双通道 + 装配断言 + 合规 render）— acceptance: 单测覆盖双通道校验、断言与 render 合规页脚；对 `examples/aml-run.json` 跑出完整 `ScenarioRunResult`（covers: S2.3）
+- [x] T3: 对象粒度收权（`list_tool_contracts` + guard + `projectByContract`）— acceptance: 未契约化 objectId 被 guard 拒；投影不漏 inputs/outputs 之外字段；漂移包拒绝（covers: S2.4）
+- [x] T4: `get_rule` 口径工具 — acceptance: 单测断言 score/exclusion 口径字段完整（covers: S2.2）
+- [x] T5: SKL provider（扫描 / 命名 / 版本去重 / 正文渲染 / 失效）— acceptance: 单测覆盖命名去重与正文红线段；provider `list()` 对 aml/med 包返回 `skl-*`（covers: S2.5）
+- [x] T6: `upload_knowledge_source` — acceptance: 单测断言 sha256 幂等跳过与摘要不回显 content（covers: S2.6）
+- [x] T7: 版本 bump 0.1.2 + 依赖 lockfile + AGENTS.md / architecture.md 模块地图更新 — acceptance: 三包 version=0.1.2；验证阶梯 1–3 全绿（covers: S2.7）
+- [x] T8: 会话内验收（dev-web + Tabbit）：「帮我跑 AML 线索场景」→ `run_scenario` 工具结果含 ruleId / 证据链 / humanReviewRequired / 禁语扫描 — acceptance: 浏览器会话完成一次场景调用，工具结果可见合规字段，禁语零命中（covers: S2.3）
 
 依赖：T2/T3/T4/T5/T6 ← T1；T7 ← T2…T6；T8 ← T7。
 
@@ -150,3 +170,9 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 - Workspace 落点覆盖：默认 `.worktrees/{{slug}}` 内的 `link:../../deepseek-harness` 会断
   （harness 是 `D:\trunk\Inv\deepseek-harness` 同级目录），故在 `.worktrees/` 下补了一个
   `deepseek-harness` junction 指向物理路径，worktree 仍在默认位置。
+- 运行 dsh host 时 PATH 上的 Node 必须是纯 Node（如 `D:\nvm\v24.22.1`）；MiMo Desktop
+  自带的 node 是 Electron 内嵌运行时（V8 带 `-electron` 指纹），harness 原生插件启动即拒
+  （`unsupported Electron runtime fingerprint`），且长驻进程的 stdout 经管道/文件是块缓冲，
+  验收脚本要靠逐行落盘 + 端口轮询判断存活，不能以「日志为空」判死。
+- defineTool 的 output.schema 推断与 core 的 interface 返回类型不兼容（interface 无隐式
+  索引签名）；工具出口统一走 `toolOut` 收窄，运行时由 output.schema + 装配断言兜底。
