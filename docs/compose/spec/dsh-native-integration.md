@@ -2,7 +2,7 @@
 feature: dsh-native-integration
 status: delivered
 updated: 2026-11-03
-source: feat/v0.1.2-dsh-native-integration
+source: https://github.com/MonSp/dsh-onto/pull/2
 ---
 
 # v0.1.2 dsh 原生集成 — 生态差异化
