@@ -1030,16 +1030,20 @@ window.__ModuleLoader__.load({
 
           if (!selected) return h('div', { className: 'ow-card' }, h('p', { className: 'ow-note' }, t('none')))
           const model = (pkg ?? {}) as Record<string, Array<Record<string, unknown>>>
+          const pkgStatus = String((pkg as { meta?: { status?: string } } | null)?.meta?.status ?? '')
+          const readOnly = pkgStatus === 'ISSUED'
 
           const objIds = (model['objects'] ?? []).map((o) => String(o['id']))
 
           const startAdd = (kind: ElemKind) => {
+            if (readOnly) return
             setEdit({ kind, idx: -1, data: emptyFormData(kind, collectAllIds(model)) })
             setInfo('')
             setError('')
           }
 
           const startEdit = (kind: ElemKind, idx: number) => {
+            if (readOnly) return
             const el = (model[kind] ?? [])[idx]
             if (!el) return
             setEdit({ kind, idx, data: toFormData(kind, el) })
@@ -1048,6 +1052,7 @@ window.__ModuleLoader__.load({
           }
 
           const doDelete = (kind: ElemKind, idx: number) => {
+            if (readOnly) return
             const el = (model[kind] ?? [])[idx]
             if (!el) return
             if (!window.confirm(`${t('confirmDelete')}\n${String(el['id'])}「${String(el['name'])}」`)) return
@@ -1059,7 +1064,7 @@ window.__ModuleLoader__.load({
           }
 
           const doSaveEdit = () => {
-            if (!edit) return
+            if (!edit || readOnly) return
             let el: Record<string, unknown>
             try {
               el = fromFormData(edit.kind, edit.data)
@@ -1106,7 +1111,7 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'ow-row' },
                 h('span', { className: 'ow-stat' }, `${arr.length}`),
-                h('button', {
+                readOnly ? null : h('button', {
                   className: 'ow-btn ghost',
                   disabled: !!busy,
                   onClick: () => startAdd(kind),
@@ -1136,12 +1141,12 @@ window.__ModuleLoader__.load({
                         h('td', { className: 'ow-note' }, extra),
                         h('td', null,
                           h('span', { className: 'ow-actions' },
-                            h('button', {
+                            readOnly ? null : h('button', {
                               className: 'ow-btn ghost',
                               disabled: !!busy,
                               onClick: () => startEdit(kind, i),
                             }, t('edit')),
-                            h('button', {
+                            readOnly ? null : h('button', {
                               className: 'ow-btn ghost',
                               disabled: !!busy,
                               onClick: () => doDelete(kind, i),
@@ -1266,6 +1271,9 @@ window.__ModuleLoader__.load({
             ),
             h(ErrorBanner, { text: error }),
             h(OkBanner, { text: info }),
+            readOnly
+              ? h('p', { className: 'ow-note' }, `${t('issue')}: ISSUED — ${t('readme')}`)
+              : null,
             h(
               'div',
               { className: 'ow-row' },
@@ -1309,11 +1317,15 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   className: 'ow-btn',
-                  disabled: !!busy || !yamlPath.trim() || yamlPath.includes('..'),
-                  title: yamlPath.includes('..') ? 'illegal relPath' : undefined,
+                  disabled: !!busy || readOnly || !yamlPath.trim() || yamlPath.includes('..'),
+                  title: readOnly
+                    ? 'ISSUED read-only'
+                    : yamlPath.includes('..')
+                      ? 'illegal relPath'
+                      : undefined,
                   onClick: () =>
                     void (async () => {
-                      if (!api || !selected) return
+                      if (!api || !selected || readOnly) return
                       setBusy('yaml')
                       setError('')
                       setInfo('')

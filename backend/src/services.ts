@@ -410,11 +410,6 @@ export class OntoKnowledge extends TypertRemoteService {
     }))
   }
 
-  @Remote('getCandidate')
-  async remoteExportGetCandidate(request: { id: string }): Promise<{ candidate: unknown }> {
-    return guard(() => ({ candidate: this.store.getCandidate(request.id) }))
-  }
-
   @Remote('updateCandidate')
   async remoteExportUpdateCandidate(request: {
     id: string

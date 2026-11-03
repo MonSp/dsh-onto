@@ -134,7 +134,6 @@ window.__ModuleLoader__.load({
       desc('ontoKnowledge', 'parseSource', true, 'KPS', 'Parse into draft candidates (LLM + heuristic fallback).'),
       desc('ontoKnowledge', 'listSources', true, 'KLS', 'List knowledge sources.'),
       desc('ontoKnowledge', 'listCandidates', true, 'KLC', 'List draft candidates.'),
-      desc('ontoKnowledge', 'getCandidate', true, 'KGC', 'Get one draft candidate.'),
       desc('ontoKnowledge', 'updateCandidate', true, 'KUP', 'Edit a pending draft before approval.'),
       desc('ontoKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
       desc('ontoKnowledge', 'previewMaterialize', true, 'KPV', 'Dry-run materialize: show what would be written.'),
