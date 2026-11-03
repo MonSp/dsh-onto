@@ -1,213 +1,215 @@
-<svg viewBox="0 0 920 1020" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 940 1040" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <marker id="a1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
       <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="#4A6FA5" stroke-width="1.2"/>
     </marker>
   </defs>
   <style>
-    .hd { font: 17px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .tt { font: 13px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .bd { font: 11px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#3A4A5C; }
-    .sm { font: 11px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#6B7B8C; }
+    .hd { font: 16px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
+    .tt { font: 12.5px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
+    .bd { font: 10.5px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#3A4A5C; }
+    .sm { font: 10.5px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#6B7B8C; }
     .kw { font: 12px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#FFFFFF; }
     .chip { font: 10px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#FFFFFF; }
-    .lgT { font: 12px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .lgB { font: 10.5px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#4A5B6D; }
+    .lgT { font: 11.5px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
+    .lgB { font: 10px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#4A5B6D; }
   </style>
 
-  <text x="24" y="30" class="hd">Universal: Knowledge → Ontology → Platform assembly → Decision support</text>
-  <text x="24" y="50" class="sm">Works in any domain: Finance / Hospitals / Research / Logistics / Manufacturing…   Purple = raw material   Blue = rules   Orange = executors</text>
+  <text x="24" y="30" class="hd">Universal: Knowledge → Ontology → Platform → Decision support</text>
+  <text x="24" y="50" class="sm">Any domain: Finance / Hospitals / Research / Logistics / Manufacturing…  ·  Purple = raw  ·  Blue = rules  ·  Orange = executors</text>
 
   <!-- Left column -->
-  <rect x="24" y="72" width="220" height="540" rx="10" fill="#EDE4F5" stroke="#B799D4" stroke-width="1"/>
+  <rect x="24" y="72" width="236" height="600" rx="10" fill="#EDE4F5" stroke="#B799D4" stroke-width="1"/>
   <text x="38" y="98" class="tt">LLM parsing</text>
-  <text x="38" y="116" class="sm">Read legacy sediment → draft with confidence</text>
+  <text x="38" y="116" class="sm">Read legacy → draft + confidence</text>
 
-  <rect x="36" y="132" width="196" height="96" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
+  <rect x="36" y="132" width="212" height="100" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
   <text x="48" y="152" class="lgT">Legacy business systems</text>
   <rect x="48" y="162" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="173" class="chip" text-anchor="middle">O2</text>
   <rect x="78" y="162" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="173" class="chip" text-anchor="middle">O3</text>
-  <text x="112" y="173" class="lgB">Extract: rules in algorithms</text>
-  <text x="48" y="194" class="sm">Features / algorithms / label logic</text>
-  <text x="48" y="210" class="sm">Implicit “how risk/anomaly is judged”</text>
+  <text x="48" y="194" class="lgB">Extract: rules in algorithms</text>
+  <text x="48" y="210" class="sm">Features / algorithms / labels</text>
+  <text x="48" y="224" class="sm">Implicit risk / anomaly logic</text>
 
-  <rect x="36" y="240" width="196" height="84" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="260" class="lgT">Historical cases / samples</text>
-  <rect x="48" y="270" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="281" class="chip" text-anchor="middle">O1</text>
-  <rect x="78" y="270" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="281" class="chip" text-anchor="middle">O2</text>
-  <text x="112" y="281" class="lgB">Extract: objects / behaviors</text>
-  <text x="48" y="302" class="sm">Entities, actions, metric criteria</text>
+  <rect x="36" y="244" width="212" height="88" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
+  <text x="48" y="264" class="lgT">Historical cases / samples</text>
+  <rect x="48" y="274" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="285" class="chip" text-anchor="middle">O1</text>
+  <rect x="78" y="274" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="285" class="chip" text-anchor="middle">O2</text>
+  <text x="48" y="308" class="lgB">Extract: objects / behaviors</text>
+  <text x="48" y="324" class="sm">Entities, actions, metrics</text>
 
-  <rect x="36" y="336" width="196" height="84" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="356" class="lgT">Policies / standards / criteria</text>
-  <rect x="48" y="366" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="377" class="chip" text-anchor="middle">O2</text>
-  <rect x="78" y="366" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="377" class="chip" text-anchor="middle">O3</text>
-  <text x="112" y="377" class="lgB">Extract: rules + red lines</text>
-  <text x="48" y="398" class="sm">Thresholds, weights, forbidden phrases</text>
+  <rect x="36" y="344" width="212" height="88" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
+  <text x="48" y="364" class="lgT">Policies / standards</text>
+  <rect x="48" y="374" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="385" class="chip" text-anchor="middle">O2</text>
+  <rect x="78" y="374" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="385" class="chip" text-anchor="middle">O3</text>
+  <text x="48" y="408" class="lgB">Extract: rules + red lines</text>
+  <text x="48" y="424" class="sm">Thresholds, weights, ban list</text>
 
-  <rect x="36" y="432" width="196" height="72" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="452" class="lgT">Schema / API docs</text>
-  <rect x="48" y="462" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="473" class="chip" text-anchor="middle">O1</text>
-  <text x="82" y="473" class="lgB">Extract: attributes / field maps</text>
-  <text x="48" y="494" class="sm">For data-source binding</text>
+  <rect x="36" y="444" width="212" height="90" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
+  <text x="48" y="464" class="lgT">Schema / API docs</text>
+  <rect x="48" y="474" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="485" class="chip" text-anchor="middle">O1</text>
+  <text x="48" y="508" class="lgB">Extract: attributes / fields</text>
+  <text x="48" y="524" class="sm">For data-source binding</text>
 
-  <rect x="36" y="516" width="196" height="72" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="536" class="lgT">Work orders / task tickets</text>
-  <rect x="48" y="546" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="557" class="chip" text-anchor="middle">O3</text>
-  <text x="82" y="557" class="lgB">Extract: scenarios / outputs</text>
-  <text x="48" y="578" class="sm">What to query, what to deliver</text>
+  <rect x="36" y="546" width="212" height="90" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
+  <text x="48" y="566" class="lgT">Work orders / tasks</text>
+  <rect x="48" y="576" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="587" class="chip" text-anchor="middle">O3</text>
+  <text x="48" y="610" class="lgB">Extract: scenarios / outputs</text>
+  <text x="48" y="626" class="sm">What to query, what to return</text>
 
-  <text x="38" y="606" class="sm">Humans only: confirm / merge / reject</text>
+  <text x="38" y="654" class="sm">Humans only: confirm / merge / reject</text>
 
   <!-- Middle column -->
-  <text x="453" y="62" class="tt" text-anchor="middle">Main flow</text>
+  <text x="470" y="62" class="tt" text-anchor="middle">Main flow</text>
 
-  <rect x="250" y="72" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="260" y="87" class="kw" text-anchor="middle">1</text>
-  <rect x="278" y="78" width="350" height="88" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="292" y="102" class="tt">Experts explain “how the business runs”</text>
-  <text x="292" y="122" class="bd">Spoken, or fed as knowledge-base documents</text>
-  <text x="292" y="140" class="bd">What exists, what it does, how to judge, what cannot be said</text>
-  <rect x="292" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="162" class="chip" text-anchor="middle">O1</text>
-  <rect x="322" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="335" y="162" class="chip" text-anchor="middle">O2</text>
-  <rect x="352" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="365" y="162" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="72" width="20" height="20" rx="5" fill="#5B7CFA"/>
+  <text x="280" y="87" class="kw" text-anchor="middle">1</text>
+  <rect x="298" y="78" width="344" height="88" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <text x="312" y="102" class="tt">Experts explain how the business runs</text>
+  <text x="312" y="122" class="bd">Spoken, or fed as knowledge-base docs</text>
+  <text x="312" y="140" class="bd">What exists / does / judges / cannot say</text>
+  <rect x="312" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="162" class="chip" text-anchor="middle">O1</text>
+  <rect x="342" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="162" class="chip" text-anchor="middle">O2</text>
+  <rect x="372" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="162" class="chip" text-anchor="middle">O3</text>
 
-  <line x1="453" y1="166" x2="453" y2="186" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="166" x2="470" y2="186" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="202" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="260" y="217" class="kw" text-anchor="middle">2</text>
-  <rect x="278" y="198" width="350" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="292" y="220" class="tt">AI drafts a first cut — advises, never decides</text>
-  <text x="292" y="238" class="bd">Guesses objects / rules / scenarios with confidence scores</text>
-  <text x="292" y="254" class="bd">Humans confirm / merge / reject</text>
-  <rect x="292" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="274" class="chip" text-anchor="middle">O1</text>
-  <rect x="322" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="335" y="274" class="chip" text-anchor="middle">O2</text>
-  <rect x="352" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="365" y="274" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="202" width="20" height="20" rx="5" fill="#5B7CFA"/>
+  <text x="280" y="217" class="kw" text-anchor="middle">2</text>
+  <rect x="298" y="198" width="344" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <text x="312" y="220" class="tt">AI drafts — advises, never decides</text>
+  <text x="312" y="238" class="bd">Guesses objects / rules / scenarios</text>
+  <text x="312" y="254" class="bd">With confidence · humans confirm / merge</text>
+  <rect x="312" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="274" class="chip" text-anchor="middle">O1</text>
+  <rect x="342" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="274" class="chip" text-anchor="middle">O2</text>
+  <rect x="372" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="274" class="chip" text-anchor="middle">O3</text>
 
-  <line x1="453" y1="278" x2="453" y2="298" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="278" x2="470" y2="298" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="314" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="260" y="329" class="kw" text-anchor="middle">3</text>
-  <rect x="278" y="310" width="350" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="292" y="332" class="tt">Human stamp takes effect (issue)</text>
-  <text x="292" y="350" class="bd">Machine validation + human issue = rules go live</text>
-  <text x="292" y="366" class="bd">After issue, nobody may tamper</text>
-  <rect x="292" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="386" class="chip" text-anchor="middle">O1</text>
-  <rect x="322" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="335" y="386" class="chip" text-anchor="middle">O2</text>
-  <rect x="352" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="365" y="386" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="314" width="20" height="20" rx="5" fill="#5B7CFA"/>
+  <text x="280" y="329" class="kw" text-anchor="middle">3</text>
+  <rect x="298" y="310" width="344" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <text x="312" y="332" class="tt">Human stamp takes effect (issue)</text>
+  <text x="312" y="350" class="bd">Machine validation + human issue = live</text>
+  <text x="312" y="366" class="bd">After issue, nobody may tamper</text>
+  <rect x="312" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="386" class="chip" text-anchor="middle">O1</text>
+  <rect x="342" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="386" class="chip" text-anchor="middle">O2</text>
+  <rect x="372" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="386" class="chip" text-anchor="middle">O3</text>
 
-  <line x1="453" y1="390" x2="453" y2="410" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="390" x2="470" y2="410" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="426" width="20" height="20" rx="5" fill="#2E9E6B"/>
-  <text x="260" y="441" class="kw" text-anchor="middle">4</text>
-  <rect x="278" y="422" width="350" height="86" rx="9" fill="#F0FAF6" stroke="#BFE5D4" stroke-width="0.8"/>
-  <text x="292" y="444" class="tt">System auto-derives the “work guide”</text>
-  <text x="292" y="462" class="bd">O-layer rules compile into L-layer executors</text>
-  <text x="292" y="478" class="bd">Read-only; hand edits refuse to run (O→L translation layer)</text>
-  <rect x="292" y="488" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="500" class="chip" text-anchor="middle">O3</text>
-  <rect x="322" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="335" y="500" class="chip" text-anchor="middle">L2</text>
-  <rect x="352" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="365" y="500" class="chip" text-anchor="middle">L3</text>
-  <rect x="382" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="395" y="500" class="chip" text-anchor="middle">L4</text>
+  <rect x="270" y="426" width="20" height="20" rx="5" fill="#2E9E6B"/>
+  <text x="280" y="441" class="kw" text-anchor="middle">4</text>
+  <rect x="298" y="422" width="344" height="86" rx="9" fill="#F0FAF6" stroke="#BFE5D4" stroke-width="0.8"/>
+  <text x="312" y="444" class="tt">System auto-derives the work guide</text>
+  <text x="312" y="462" class="bd">O-layer rules compile to L-layer executors</text>
+  <text x="312" y="478" class="bd">Read-only; hand edits refuse to run</text>
+  <rect x="312" y="488" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="500" class="chip" text-anchor="middle">O3</text>
+  <rect x="342" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="355" y="500" class="chip" text-anchor="middle">L2</text>
+  <rect x="372" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="385" y="500" class="chip" text-anchor="middle">L3</text>
+  <rect x="402" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="415" y="500" class="chip" text-anchor="middle">L4</text>
 
-  <text x="453" y="532" class="sm" text-anchor="middle">── Rules built · below is execution ──</text>
+  <text x="470" y="532" class="sm" text-anchor="middle">── Rules built · below is execution ──</text>
 
-  <rect x="250" y="552" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="260" y="567" class="kw" text-anchor="middle">5</text>
-  <rect x="278" y="548" width="350" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="292" y="570" class="tt">Frontline staff raise a request</text>
-  <text x="292" y="588" class="bd">“Help me look at this customer / case / order…”</text>
-  <text x="292" y="604" class="bd">Enters via the assistant or the business-system entry</text>
-  <rect x="292" y="612" width="26" height="16" rx="4" fill="#E8933A"/><text x="305" y="624" class="chip" text-anchor="middle">L5</text>
-  <rect x="322" y="612" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="335" y="624" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="552" width="20" height="20" rx="5" fill="#E8933A"/>
+  <text x="280" y="567" class="kw" text-anchor="middle">5</text>
+  <rect x="298" y="548" width="344" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <text x="312" y="570" class="tt">Frontline staff raise a request</text>
+  <text x="312" y="588" class="bd">“Help me look at this customer / case / order…”</text>
+  <text x="312" y="604" class="bd">Enters via assistant or business system</text>
+  <rect x="312" y="612" width="26" height="16" rx="4" fill="#E8933A"/><text x="325" y="624" class="chip" text-anchor="middle">L5</text>
+  <rect x="342" y="612" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="624" class="chip" text-anchor="middle">O3</text>
 
-  <line x1="453" y1="628" x2="453" y2="648" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="628" x2="470" y2="648" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="664" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="260" y="679" class="kw" text-anchor="middle">6</text>
-  <rect x="278" y="660" width="350" height="86" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="292" y="682" class="tt">AI experts with tools dig for clues</text>
-  <text x="292" y="700" class="bd">Query data, compute features, find associations</text>
-  <text x="292" y="716" class="bd">Produces “candidate list + reasons”</text>
-  <rect x="292" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="305" y="738" class="chip" text-anchor="middle">L4</text>
-  <rect x="322" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="335" y="738" class="chip" text-anchor="middle">L3</text>
-  <rect x="352" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="365" y="738" class="chip" text-anchor="middle">L2</text>
-  <rect x="382" y="726" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="395" y="738" class="chip" text-anchor="middle">O1</text>
+  <rect x="270" y="664" width="20" height="20" rx="5" fill="#E8933A"/>
+  <text x="280" y="679" class="kw" text-anchor="middle">6</text>
+  <rect x="298" y="660" width="344" height="86" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <text x="312" y="682" class="tt">AI experts with tools dig for clues</text>
+  <text x="312" y="700" class="bd">Query data, compute features, find links</text>
+  <text x="312" y="716" class="bd">Produces “candidate list + reasons”</text>
+  <rect x="312" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="325" y="738" class="chip" text-anchor="middle">L4</text>
+  <rect x="342" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="355" y="738" class="chip" text-anchor="middle">L3</text>
+  <rect x="372" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="385" y="738" class="chip" text-anchor="middle">L2</text>
+  <rect x="402" y="726" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="415" y="738" class="chip" text-anchor="middle">O1</text>
 
-  <line x1="453" y1="746" x2="453" y2="766" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="746" x2="470" y2="766" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="782" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="260" y="797" class="kw" text-anchor="middle">7</text>
-  <rect x="278" y="778" width="350" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="292" y="800" class="tt">Machine scores by formula + checks red lines</text>
-  <text x="292" y="818" class="bd">Every score maps to a rule; out-of-bounds phrasing is rejected</text>
-  <text x="292" y="834" class="bd">AI must not score itself, must not issue verdicts</text>
-  <rect x="292" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="854" class="chip" text-anchor="middle">O2</text>
-  <rect x="322" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="335" y="854" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="782" width="20" height="20" rx="5" fill="#E8933A"/>
+  <text x="280" y="797" class="kw" text-anchor="middle">7</text>
+  <rect x="298" y="778" width="344" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <text x="312" y="800" class="tt">Machine scores + checks red lines</text>
+  <text x="312" y="818" class="bd">Every score maps to a rule</text>
+  <text x="312" y="834" class="bd">Bad phrasing rejected · AI never scores</text>
+  <rect x="312" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="854" class="chip" text-anchor="middle">O2</text>
+  <rect x="342" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="854" class="chip" text-anchor="middle">O3</text>
 
-  <line x1="453" y1="858" x2="453" y2="878" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
+  <line x1="470" y1="858" x2="470" y2="878" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
 
-  <rect x="250" y="894" width="20" height="20" rx="5" fill="#D64545"/>
-  <text x="260" y="909" class="kw" text-anchor="middle">8</text>
-  <rect x="278" y="890" width="350" height="80" rx="9" fill="#FDF0F0" stroke="#F0C4C4" stroke-width="0.8"/>
-  <text x="292" y="912" class="tt">Finally, humans decide</text>
-  <text x="292" y="930" class="bd">Delivers “candidates + scores + evidence + pending checks”</text>
-  <text x="292" y="946" class="bd">Determination / approval / disposal — only humans decide</text>
-  <rect x="292" y="954" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="305" y="966" class="chip" text-anchor="middle">O3</text>
+  <rect x="270" y="894" width="20" height="20" rx="5" fill="#D64545"/>
+  <text x="280" y="909" class="kw" text-anchor="middle">8</text>
+  <rect x="298" y="890" width="344" height="80" rx="9" fill="#FDF0F0" stroke="#F0C4C4" stroke-width="0.8"/>
+  <text x="312" y="912" class="tt">Finally, humans decide</text>
+  <text x="312" y="930" class="bd">Candidates + scores + evidence + pending</text>
+  <text x="312" y="946" class="bd">Determination / approval — humans only</text>
+  <rect x="312" y="954" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="966" class="chip" text-anchor="middle">O3</text>
 
   <!-- Right column -->
-  <line x1="656" y1="68" x2="656" y2="980" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="670" y="88" class="hd">Legend</text>
-  <text x="670" y="106" class="sm">Swap domain — only words change, not the skeleton</text>
+  <line x1="668" y1="68" x2="668" y2="1000" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="682" y="88" class="hd">Legend</text>
+  <text x="682" y="106" class="sm">Swap domain: words change, skeleton stays</text>
 
-  <rect x="666" y="120" width="230" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="678" y="132" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="691" y="144" class="chip" text-anchor="middle">O1</text>
-  <text x="712" y="144" class="lgT">Object layer · What exists</text>
-  <text x="678" y="164" class="lgB">Entities / relations / dictionaries</text>
-  <text x="678" y="182" class="sm">Unified identity &amp; data criteria</text>
+  <rect x="678" y="120" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <rect x="690" y="132" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="144" class="chip" text-anchor="middle">O1</text>
+  <text x="724" y="144" class="lgT">Object layer · What exists</text>
+  <text x="690" y="164" class="lgB">Entities / relations / dicts</text>
+  <text x="690" y="182" class="sm">Unified identity &amp; metrics</text>
 
-  <rect x="666" y="200" width="230" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="678" y="212" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="691" y="224" class="chip" text-anchor="middle">O2</text>
-  <text x="712" y="224" class="lgT">Rule layer · How to judge</text>
-  <text x="678" y="244" class="lgB">Behaviors / scoring / exclusions</text>
-  <text x="678" y="262" class="sm">Sole scoring basis; auditable</text>
+  <rect x="678" y="200" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <rect x="690" y="212" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="224" class="chip" text-anchor="middle">O2</text>
+  <text x="724" y="224" class="lgT">Rule layer · How to judge</text>
+  <text x="690" y="244" class="lgB">Behaviors / scoring / exclusions</text>
+  <text x="690" y="262" class="sm">Sole scoring basis; auditable</text>
 
-  <rect x="666" y="280" width="230" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="678" y="292" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="691" y="304" class="chip" text-anchor="middle">O3</text>
-  <text x="712" y="304" class="lgT">Scenario layer · Boundaries</text>
-  <text x="678" y="324" class="lgB">Scenarios / contracts / review</text>
-  <text x="678" y="342" class="sm">Candidates only — no verdicts</text>
+  <rect x="678" y="280" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
+  <rect x="690" y="292" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="304" class="chip" text-anchor="middle">O3</text>
+  <text x="724" y="304" class="lgT">Scenario layer · Bounds</text>
+  <text x="690" y="324" class="lgB">Scenarios / contracts / review</text>
+  <text x="690" y="342" class="sm">Candidates only — no verdicts</text>
 
-  <rect x="666" y="360" width="230" height="52" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="678" y="370" width="26" height="16" rx="4" fill="#E8933A"/><text x="691" y="382" class="chip" text-anchor="middle">L1</text>
-  <text x="712" y="382" class="lgT">Application · Entry point</text>
-  <text x="678" y="402" class="sm">Entry embedded in business systems</text>
+  <rect x="678" y="360" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <rect x="690" y="372" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="384" class="chip" text-anchor="middle">L1</text>
+  <text x="724" y="384" class="lgT">Application · Entry point</text>
+  <text x="690" y="406" class="sm">Entry in business systems</text>
 
-  <rect x="666" y="420" width="230" height="52" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="678" y="430" width="26" height="16" rx="4" fill="#E8933A"/><text x="691" y="442" class="chip" text-anchor="middle">L2</text>
-  <text x="712" y="442" class="lgT">Tool pool · The gear</text>
-  <text x="678" y="462" class="sm">Query / compute / API integration</text>
+  <rect x="678" y="428" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <rect x="690" y="440" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="452" class="chip" text-anchor="middle">L2</text>
+  <text x="724" y="452" class="lgT">Tool pool · The gear</text>
+  <text x="690" y="474" class="sm">Query / compute / APIs</text>
 
-  <rect x="666" y="480" width="230" height="52" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="678" y="490" width="26" height="16" rx="4" fill="#E8933A"/><text x="691" y="502" class="chip" text-anchor="middle">L3</text>
-  <text x="712" y="502" class="lgT">Skills · How to combine</text>
-  <text x="678" y="522" class="sm">Tool-calling methodology</text>
+  <rect x="678" y="496" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <rect x="690" y="508" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="520" class="chip" text-anchor="middle">L3</text>
+  <text x="724" y="520" class="lgT">Skills · How to combine</text>
+  <text x="690" y="542" class="sm">Tool-calling methodology</text>
 
-  <rect x="666" y="540" width="230" height="52" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="678" y="550" width="26" height="16" rx="4" fill="#E8933A"/><text x="691" y="562" class="chip" text-anchor="middle">L4</text>
-  <text x="712" y="562" class="lgT">Experts · Who does the work</text>
-  <text x="678" y="582" class="sm">Holds multiple skills + explores links</text>
+  <rect x="678" y="564" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <rect x="690" y="576" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="588" class="chip" text-anchor="middle">L4</text>
+  <text x="724" y="588" class="lgT">Experts · Who does work</text>
+  <text x="690" y="610" class="sm">Multi-skill + explores links</text>
 
-  <rect x="666" y="600" width="230" height="52" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="678" y="610" width="26" height="16" rx="4" fill="#E8933A"/><text x="691" y="622" class="chip" text-anchor="middle">L5</text>
-  <text x="712" y="622" class="lgT">Assistant · Facade</text>
-  <text x="678" y="642" class="sm">Persona / anchors / chat entry</text>
+  <rect x="678" y="632" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
+  <rect x="690" y="644" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="656" class="chip" text-anchor="middle">L5</text>
+  <text x="724" y="656" class="lgT">Assistant · Facade</text>
+  <text x="690" y="678" class="sm">Persona / anchors / chat</text>
 
-  <rect x="666" y="666" width="230" height="72" rx="8" fill="#F5F0FA" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="678" y="688" class="lgT">Knowledge base · Legacy sediment</text>
-  <text x="678" y="708" class="lgB">Algorithms / labels = implicit rules</text>
-  <text x="678" y="726" class="sm">LLM parse → draft → human review</text>
+  <rect x="678" y="700" width="238" height="76" rx="8" fill="#F5F0FA" stroke="#D4C4E8" stroke-width="0.8"/>
+  <text x="690" y="722" class="lgT">Knowledge · Legacy sediment</text>
+  <text x="690" y="742" class="lgB">Algorithms / labels = rules</text>
+  <text x="690" y="760" class="sm">LLM parse → draft → review</text>
 
-  <text x="666" y="768" class="sm">Swap domain = swap package content, not grammar:</text>
-  <text x="666" y="786" class="sm">Finance swaps accounts/txns; hospitals swap patients/orders</text>
-  <text x="666" y="804" class="sm">Logistics swaps goods/warehouses/waybills — skeleton runs as-is</text>
+  <text x="678" y="804" class="sm">Swap domain = package, not grammar:</text>
+  <text x="678" y="824" class="sm">Finance: accounts / txns</text>
+  <text x="678" y="844" class="sm">Hospitals: patients / orders</text>
+  <text x="678" y="864" class="sm">Logistics: goods / waybills</text>
+  <text x="678" y="884" class="sm">— skeleton runs as-is</text>
 </svg>
