@@ -61,6 +61,17 @@ export function validateDraftItem(item: unknown): string | null {
   if (typeof it['name'] !== 'string' || !it['name'].trim()) return 'bad name'
   const payload = it['payload']
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'bad payload'
+  // 已知数值字段：出现即须为有限数字（null/缺省视作未填，由物化侧默认）
+  const numericFields: Record<string, string[]> = {
+    ScoreRule: ['weight', 'threshold'],
+    ExclusionRule: ['factor'],
+  }
+  for (const field of numericFields[it['targetKind'] as string] ?? []) {
+    const v = (payload as Record<string, unknown>)[field]
+    if (v !== undefined && v !== null && (typeof v !== 'number' || !Number.isFinite(v))) {
+      return `bad payload.${field}`
+    }
+  }
   const conf = it['confidence']
   if (typeof conf !== 'number' || !Number.isFinite(conf) || conf < 0 || conf > 1) return 'bad confidence'
   return null
@@ -178,7 +189,8 @@ export class KnowledgeStore {
       }
       const item = raw as DraftItem
       const key = `${src.packageId}|${item.layer}|${item.targetKind}|${item.name}`
-      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.name}` === key)) {
+      // 幂等键用 sourceName（解析原始名）；人审改 name 不影响同源去重
+      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key)) {
         idempotentSkipped++
         continue
       }
@@ -188,6 +200,7 @@ export class KnowledgeStore {
         id: draftCandidateId(key),
         packageId: src.packageId,
         sourceId,
+        sourceName: item.name,
         status: 'pending',
         forcedReview: item.confidence < 0.75,
         conclusionLike,
@@ -225,7 +238,7 @@ export class KnowledgeStore {
 
   /**
    * 批准前编辑草案载荷（人审动作的一部分；仅 pending 可改）。
-   * 改 confidence 会重算 forcedReview；改内容会重算 conclusionLike。
+   * 改 confidence 会重算 forcedReview；改内容会重算 conclusionLike；合入后整条复检非法即拒存。
    */
   updateCandidate(
     id: string,
@@ -237,17 +250,22 @@ export class KnowledgeStore {
     if (c.status !== 'pending') {
       throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
     }
-    if (patch.name !== undefined) c.name = patch.name
-    if (patch.payload !== undefined) c.payload = patch.payload
-    if (patch.rationale !== undefined) c.rationale = patch.rationale
+    const next: DraftCandidate = { ...c }
+    if (patch.name !== undefined) next.name = patch.name
+    if (patch.payload !== undefined) next.payload = patch.payload
+    if (patch.rationale !== undefined) next.rationale = patch.rationale
     if (patch.confidence !== undefined) {
       if (!Number.isFinite(patch.confidence) || patch.confidence < 0 || patch.confidence > 1) {
         throw new KnowledgeError('BAD_CONFIDENCE', 'confidence must be a number in [0,1]')
       }
-      c.confidence = patch.confidence
+      next.confidence = patch.confidence
     }
-    c.forcedReview = c.confidence < 0.75
-    c.conclusionLike = isConclusionLike(c)
+    // 合入后整条复检（空 name / 非对象 payload / 非数值 weight 等一律拒存）
+    const bad = validateDraftItem(next)
+    if (bad) throw new KnowledgeError('BAD_DRAFT', `draft invalid after edit: ${bad}`)
+    next.forcedReview = next.confidence < 0.75
+    next.conclusionLike = isConclusionLike(next)
+    Object.assign(c, next)
     this.saveQueue(queue)
     return c
   }
@@ -416,9 +434,10 @@ function diffSnapshot(
     if (before[key] === after[key]) continue
     const arr = JSON.parse(after[key]) as unknown[]
     const prev = JSON.parse(before[key]) as unknown[]
-    // 新增元素：取数组尾部差异；修改元素（RedLine 改 forbiddenPhrases）：取最后一个变化项
+    // 新增元素：取数组尾部差异；修改元素（RedLine 改 forbiddenPhrases）：取变化项
     const added = arr.length > prev.length ? arr.slice(prev.length) : arr.filter((x, i) => JSON.stringify(x) !== JSON.stringify(prev[i]))
-    const el = added.length > 0 ? added[added.length - 1] : arr[arr.length - 1]
+    if (added.length === 0) return { element: null, summary: '（变更未定位）' }
+    const el = added[added.length - 1]
     if (key === 'scenarios') {
       const s = el as { id?: string; outputContract?: { forbiddenPhrases?: string[] } }
       const prevS = (prev.find((x) => (x as { id?: string }).id === s.id) ?? {}) as { outputContract?: { forbiddenPhrases?: string[] } }

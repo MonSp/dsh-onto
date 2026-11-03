@@ -2051,15 +2051,16 @@ window.__ModuleLoader__.load({
               ? h(
                   Row,
                   { label: t('runHistory') },
-                  ...history.map((x) =>
-                    h('button', {
+                  ...history.map((x) => {
+                    const isCurrent = viewHid ? viewHid === x.hid : x === history[0]
+                    return h('button', {
                       key: x.hid,
-                      className: viewHid === x.hid || (!viewHid && x === history[0]) ? 'ow-btn ghost' : 'ow-btn ghost',
-                      style: viewHid === x.hid ? { outline: '2px solid var(--dsw-alias-brand,#3b6fd4)' } : undefined,
+                      className: 'ow-btn ghost',
+                      style: isCurrent ? { outline: '2px solid var(--dsw-alias-brand,#3b6fd4)' } : undefined,
                       disabled: !!busy,
                       onClick: () => setViewHid(x.hid === viewHid ? '' : x.hid),
-                    }, x.label),
-                  ),
+                    }, x.label)
+                  }),
                 )
               : null,
             res

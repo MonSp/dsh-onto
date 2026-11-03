@@ -419,6 +419,8 @@ export interface DraftCandidate extends DraftItem {
   id: string
   packageId: string
   sourceId: string
+  /** 解析时的原始 name，幂等键用它而非可编辑的 name（人审改名不破坏同源去重）。 */
+  sourceName?: string
   status: DraftStatus
   /** confidence < 0.75 强制人审（§5.3）。 */
   forcedReview: boolean

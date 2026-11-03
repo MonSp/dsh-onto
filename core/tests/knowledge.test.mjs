@@ -240,7 +240,7 @@ test('LLM 失败回落词面启发（parseWithFallback 语义）', async () => {
   }
 })
 
-test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confidence', () => {
+test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confidence + 数值字段', () => {
   const good = { layer: 'O2', targetKind: 'ScoreRule', name: '规则', payload: { weight: 0.1 }, confidence: 0.8, rationale: 'r' }
   assert.equal(validateDraftItem(good), null)
   assert.equal(validateDraftItem({ ...good, layer: 'O9' }), 'bad layer')
@@ -252,6 +252,16 @@ test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confi
   assert.equal(validateDraftItem({ ...good, confidence: '0.8' }), 'bad confidence')
   assert.equal(validateDraftItem(null), 'not an object')
   assert.equal(validateDraftItem('x'), 'not an object')
+  // 数值字段：出现即须有限数字（weight/threshold/factor）
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 'abc' } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: NaN } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: Infinity } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 0.1, threshold: '0.5' } }), 'bad payload.threshold')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 0.1, threshold: null } }), null)
+  assert.equal(validateDraftItem({ ...good, payload: {} }), null)
+  const ex = { layer: 'O2', targetKind: 'ExclusionRule', name: '排除', payload: {}, confidence: 0.8, rationale: 'r' }
+  assert.equal(validateDraftItem({ ...ex, payload: { factor: 'x' } }), 'bad payload.factor')
+  assert.equal(validateDraftItem({ ...ex, payload: { factor: 0.3 } }), null)
 })
 
 test('parseSource 报告：received/accepted/idempotentSkipped/invalidDropped + engine', async () => {
@@ -266,22 +276,23 @@ test('parseSource 报告：received/accepted/idempotentSkipped/invalidDropped + 
             { layer: 'O2', targetKind: 'ScoreRule', name: '', payload: {}, confidence: 0.9, rationale: 'bad name' },
             { layer: 'OX', targetKind: 'ScoreRule', name: '坏层', payload: {}, confidence: 0.5, rationale: 'bad layer' },
             { layer: 'O1', targetKind: 'ObjectType', name: '样本对象', payload: { name: '样本对象' }, confidence: 'high', rationale: 'bad conf' },
+            { layer: 'O2', targetKind: 'ScoreRule', name: '坏权重', payload: { weight: 'abc' }, confidence: 0.9, rationale: 'bad weight' },
           ],
         }
       },
     }
     const src = store.uploadSource({ packageId: 'pkg-x', sourceType: 'LEGACY_SYS', name: 'algo', content: '权重 0.2 的特征。' })
     const r1 = await store.parseSource(src.id, mixed)
-    assert.equal(r1.report.received, 4)
+    assert.equal(r1.report.received, 5)
     assert.equal(r1.report.accepted, 1)
-    assert.equal(r1.report.invalidDropped, 3)
+    assert.equal(r1.report.invalidDropped, 4)
     assert.equal(r1.report.idempotentSkipped, 0)
     assert.equal(r1.report.engine, 'heuristic') // 假 LLM 非 DeepSeek 实例 → heuristic 标注
     // 二次解析：同名幂等跳过
     const r2 = await store.parseSource(src.id, mixed)
     assert.equal(r2.report.accepted, 0)
     assert.equal(r2.report.idempotentSkipped, 1)
-    assert.equal(r2.report.invalidDropped, 3)
+    assert.equal(r2.report.invalidDropped, 4)
     // heuristic 引擎也带报告
     const r3 = await store.parseSource(src.id, new HeuristicLlm())
     assert.ok(r3.report.engine === 'heuristic' || r3.report.engine === 'deepseek')
@@ -312,9 +323,41 @@ test('updateCandidate：批准前可编辑载荷；finalized 拒绝；confidence
     assert.equal(updated.forcedReview, false)
     // 非法 confidence 拒绝
     assert.throws(() => store.updateCandidate(draft.id, { confidence: 2 }), /confidence/)
+    // 合入后复检：空 name / 非法数值字段 / 非对象 payload 拒存
+    assert.throws(() => store.updateCandidate(draft.id, { name: '  ' }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { name: 'x', payload: { weight: 'abc' } }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { payload: { weight: NaN } }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { payload: null }), /invalid/)
+    // 拒存后原草案不动
+    assert.equal(store.getCandidate(draft.id).payload.weight, 0.35)
     // 批准后不可再改
     store.reviewCandidate(draft.id, 'approve')
     assert.throws(() => store.updateCandidate(draft.id, { name: 'x' }), /already/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('改名不破坏同源幂等：sourceName 稳定键', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    assert.equal(draft.sourceName, draft.name)
+    store.updateCandidate(draft.id, { name: '改名后的规则' })
+    assert.equal(store.getCandidate(draft.id).name, '改名后的规则')
+    // 同源二次解析仍按解析原始名去重，不再造新候选
+    const r2 = await store.parseSource(src.id, new HeuristicLlm())
+    assert.equal(r2.report.accepted, 0)
+    assert.ok(r2.report.idempotentSkipped >= 1)
+    assert.equal(store.listCandidates({ packageId: 'pkg-x' }).length, added.length)
   } finally {
     rmWorkspace(root)
   }
