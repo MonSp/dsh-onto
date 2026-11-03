@@ -257,5 +257,5 @@ scenario:
 | `core/src/scenario.ts` `audit.ts` | 场景派发、三层审计、禁语扫描 | `tests/scenario.test.mjs` |
 | `core/src/knowledge.ts` `llm.ts` | 五类原料解析、人审队列、物化 | `tests/knowledge.test.mjs` |
 | `core/src/cli.ts` | `dsh-onto package/validate/derive/gate/run/knowledge` | — |
-| `backend/` | dsh-onto* wire 服务（唯一后端落点） | — |
+| `backend/` | dsh-onto* wire 服务 + agent 工具/skill 面（`run_scenario` 等 7 工具、SKL provider） | `tests/agent-*.test.mjs` |
 | `workbench/` | Web UI 五 tab | — |

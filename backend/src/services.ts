@@ -42,6 +42,7 @@ import {
   type ScenarioRunResult,
   type SourceType,
 } from '@dsh-onto/core'
+import { invalidateSkillCatalog } from './agent-hooks.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -186,7 +187,9 @@ export class OntoWorkspace extends TypertRemoteService {
   }): Promise<{ dir: string }> {
     return guard(() => {
       if (!request?.archive?.meta?.name) throw ontoError('onto/bad-request', 'archive required')
-      return { dir: this.ws.importVersion(request.archive) }
+      const dir = this.ws.importVersion(request.archive)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 }
@@ -216,6 +219,7 @@ export class OntoModel extends TypertRemoteService {
   async remoteExportSave(request: { name: string; version: string; pkg: OntologyPackage }): Promise<{ ok: true }> {
     return guard(() => {
       savePackage(this.dirOf(request.name, request.version), request.pkg)
+      invalidateSkillCatalog()
       return { ok: true as const }
     })
   }
@@ -246,6 +250,7 @@ export class OntoModel extends TypertRemoteService {
       const full = join(dir, request.relPath)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, request.text, 'utf8')
+      invalidateSkillCatalog()
       return { ok: true as const }
     })
   }
@@ -458,9 +463,11 @@ export class OntoKnowledge extends TypertRemoteService {
     applied: string[]
     skipped: Array<{ id: string; reason: string }>
   }> {
-    return guard(() =>
-      this.store.materialize(this.ws.versionDir(request.name, request.version), request.ids ?? []),
-    )
+    return guard(() => {
+      const out = this.store.materialize(this.ws.versionDir(request.name, request.version), request.ids ?? [])
+      invalidateSkillCatalog()
+      return out
+    })
   }
 }
 
