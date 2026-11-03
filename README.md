@@ -9,6 +9,15 @@ O1 objects / O2 behavior rules / O3 scenario cards. One line to remember:
 
 > **Judgment lives in the rule engine; determination lives with humans.**
 
+## Overview
+
+Universal pipeline: **Knowledge → Ontology → Platform assembly → Decision support**.
+Any domain swaps package content only — the skeleton stays the same.
+
+![Universal pipeline: Knowledge → Ontology → Platform assembly → Decision support](docs/overview-pipeline.en.svg)
+
+> Chinese original: [README.zh.md](README.zh.md) · [docs/overview-pipeline.zh.svg](docs/overview-pipeline.zh.svg)
+
 ## Why
 
 Business judgment criteria usually scatter across code, configs, and individual experts'
@@ -42,6 +51,7 @@ dsh-onto/
   examples/   scenario run fixtures (aml-run.json / med-run.json)
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
   docs/       architecture.md — self-contained concepts & rules (Chinese)
+              overview-pipeline.{zh,en}.svg — end-to-end pipeline diagrams
 ```
 
 ## Requirements
