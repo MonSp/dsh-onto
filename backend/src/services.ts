@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path'
 import {
   KnowledgeStore,
   PackageWorkspace,
+  SOURCE_TYPES,
   buildQualityReport,
   derivePackage,
   loadPackage,
@@ -337,16 +338,61 @@ export class OntoKnowledge extends TypertRemoteService {
     return guard(() => ({ source: this.store.uploadSource(request) }))
   }
 
+  @Remote('uploadSources')
+  async remoteExportUploadSources(request: {
+    packageId: string
+    items: Array<{ sourceType: SourceType; name: string; content: string }>
+  }): Promise<{ sources: KnowledgeSourceRecord[]; skipped: number; invalid: number }> {
+    return guard(() => {
+      if (!request?.packageId || !Array.isArray(request?.items) || request.items.length === 0) {
+        throw ontoError('onto/bad-request', 'packageId and non-empty items required')
+      }
+      const sources: KnowledgeSourceRecord[] = []
+      let skipped = 0 // sha256 幂等跳过
+      let invalid = 0 // 形状非法（缺 name/content 或未知 sourceType）
+      let attempted = 0
+      for (const item of request.items) {
+        if (!item?.name || !item?.content || !SOURCE_TYPES.includes(item.sourceType)) {
+          invalid++
+          continue
+        }
+        attempted++
+        const before = this.store.listSources(request.packageId).length
+        const rec = this.store.uploadSource({
+          packageId: request.packageId,
+          sourceType: item.sourceType,
+          name: item.name,
+          content: item.content,
+        })
+        // sha256 幂等：未新增则只计 skipped，不进 sources（避免接受/跳过双计）
+        if (this.store.listSources(request.packageId).length === before) {
+          skipped++
+          continue
+        }
+        sources.push(rec)
+      }
+      if (attempted === 0) throw ontoError('onto/bad-request', 'no valid items')
+      return { sources, skipped, invalid }
+    })
+  }
+
   @Remote('parseSource')
   async remoteExportParseSource(request: { sourceId: string; useApi?: boolean }): Promise<{
     added: unknown[]
     engine: 'deepseek' | 'heuristic'
+    report: {
+      received: number
+      accepted: number
+      idempotentSkipped: number
+      invalidDropped: number
+      engine: 'deepseek' | 'heuristic'
+    }
   }> {
     return guardAsync(async () => {
       const { HeuristicLlm, DeepSeekLlm } = await import('@dsh-onto/core')
       const llm = request.useApi ? new DeepSeekLlm() : new HeuristicLlm()
-      const { added, engine } = await this.store.parseSource(request.sourceId, llm)
-      return { added, engine }
+      const { added, engine, report } = await this.store.parseSource(request.sourceId, llm)
+      return { added, engine, report }
     })
   }
 
@@ -365,6 +411,17 @@ export class OntoKnowledge extends TypertRemoteService {
     }))
   }
 
+  @Remote('updateCandidate')
+  async remoteExportUpdateCandidate(request: {
+    id: string
+    patch: { name?: string; payload?: Record<string, unknown>; rationale?: string; confidence?: number }
+  }): Promise<{ candidate: unknown }> {
+    return guard(() => {
+      if (!request?.id || !request?.patch) throw ontoError('onto/bad-request', 'id and patch required')
+      return { candidate: this.store.updateCandidate(request.id, request.patch) }
+    })
+  }
+
   @Remote('reviewCandidate')
   async remoteExportReviewCandidate(request: {
     id: string
@@ -374,6 +431,26 @@ export class OntoKnowledge extends TypertRemoteService {
     return guard(() => ({
       candidate: this.store.reviewCandidate(request.id, request.action, { mergeIntoName: request.mergeIntoName }),
     }))
+  }
+
+  @Remote('previewMaterialize')
+  async remoteExportPreviewMaterialize(request: { name: string; version: string; ids: string[] }): Promise<{
+    previews: Array<{
+      id: string
+      ok: boolean
+      error?: string
+      targetKind: string
+      name: string
+      element?: unknown
+      summary: string
+    }>
+  }> {
+    return guard(() => {
+      if (!request?.name || !request?.version || !Array.isArray(request?.ids)) {
+        throw ontoError('onto/bad-request', 'name/version/ids required')
+      }
+      return { previews: this.store.previewMaterialize(this.ws.versionDir(request.name, request.version), request.ids) }
+    })
   }
 
   @Remote('materialize')

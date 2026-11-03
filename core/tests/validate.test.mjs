@@ -1,7 +1,7 @@
 /** 校验器验收（规范 §7 / §11.3）：引用闭合 / 权重 / 字典 / 事件口径 / 质量分。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildQualityReport, validatePackageDir, savePackage } from '../dist/index.js'
+import { buildQualityReport, validatePackage, validatePackageDir, savePackage } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, writeRaw, rmWorkspace } from './helpers.mjs'
 
 test('合法包：0 error', () => {
@@ -131,4 +131,26 @@ test('info 覆盖统计不扣分', () => {
   } finally {
     rmWorkspace(root)
   }
+})
+
+test('DUP_ID：同类与跨类（score/exclusion 共用 RULE-*）ID 重复均报 error', () => {
+  const pkg = minimalPkg()
+  // 同类重复：两个对象同 ID
+  pkg.objects.push({ id: 'OBJ-TST-A', name: '重复对象', attributes: [] })
+  // 跨类重复：exclusionRules 与 scoreRules 撞 RULE-TST-S1
+  pkg.exclusionRules[0].id = 'RULE-TST-S1'
+  const { errors } = validatePackage(pkg)
+  const dups = errors.filter((e) => e.code === 'DUP_ID')
+  assert.equal(dups.length, 2, JSON.stringify(dups))
+  assert.ok(dups.some((e) => e.message.includes('OBJ-TST-A')))
+  assert.ok(dups.some((e) => e.message.includes('RULE-TST-S1')))
+})
+
+test('ID_EMPTY：空 ID 元素报 error，不再静默逃过检查', () => {
+  const pkg = minimalPkg()
+  pkg.objects.push({ id: '', name: '空 ID 对象', attributes: [] })
+  const { errors } = validatePackage(pkg)
+  const empties = errors.filter((e) => e.code === 'ID_EMPTY')
+  assert.equal(empties.length, 1, JSON.stringify(empties))
+  assert.ok(empties[0].message.includes('为空'))
 })

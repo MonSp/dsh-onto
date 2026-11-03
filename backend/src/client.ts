@@ -130,10 +130,13 @@ window.__ModuleLoader__.load({
       desc('ontoDerive', 'gate', true, 'DGT', 'Load gate (DERIVED_DRIFT on mismatch).'),
       // ontoKnowledge
       desc('ontoKnowledge', 'uploadSource', true, 'KUS', 'Upload one knowledge source (sha256 idempotent).'),
+      desc('ontoKnowledge', 'uploadSources', true, 'KUB', 'Batch-upload knowledge sources in one call.'),
       desc('ontoKnowledge', 'parseSource', true, 'KPS', 'Parse into draft candidates (LLM + heuristic fallback).'),
       desc('ontoKnowledge', 'listSources', true, 'KLS', 'List knowledge sources.'),
       desc('ontoKnowledge', 'listCandidates', true, 'KLC', 'List draft candidates.'),
+      desc('ontoKnowledge', 'updateCandidate', true, 'KUP', 'Edit a pending draft before approval.'),
       desc('ontoKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
+      desc('ontoKnowledge', 'previewMaterialize', true, 'KPV', 'Dry-run materialize: show what would be written.'),
       desc('ontoKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
       // ontoRuntime
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),

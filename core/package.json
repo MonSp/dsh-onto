@@ -1,12 +1,12 @@
 {
   "name": "@dsh-onto/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "dsh-onto 业务本体建模平台核心引擎：O1/O2/O3 模型、校验、派生、规则引擎、场景执行、知识库管线 + CLI",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test tests/"
+    "test": "node --test tests/*.test.mjs"
   },
   "exports": {
     ".": "./dist/index.js",

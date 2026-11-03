@@ -6,6 +6,14 @@
 > 把专家的业务口径写成机器可校验、可签发、可派生的结构；**判定在规则引擎，认定在人工**。
 > 概念、规则与结构的完整定义见 [docs/architecture.md](docs/architecture.md)（自包含）。
 
+## 总览
+
+通用链路：**知识库 → 本体 → 平台装配 → 辅助决策**。任意领域只换包内容，不换骨架。
+
+![通用版：知识库 → 本体 → 平台装配 → 辅助决策](docs/overview-pipeline.zh.svg)
+
+> 英文版见 [README.md](README.md) / [docs/overview-pipeline.en.svg](docs/overview-pipeline.en.svg)。
+
 ## 能力
 
 | 能力 | 入口 |
@@ -30,6 +38,7 @@ dsh-onto/
   examples/   场景运行样例数据（aml-run.json / med-run.json）
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
   docs/       architecture.md（自包含架构与规则）
+              overview-pipeline.{zh,en}.svg（端到端链路图）
 ```
 
 ## 快速开始

@@ -41,11 +41,23 @@ function findEventsKey(value: unknown, path: string, hits: string[]): void {
   }
 }
 
-/** 收集包内全部定义的 Schema ID。 */
-function collectDefinedIds(pkg: OntologyPackage): Map<string, string> {
+/** 收集包内全部定义的 Schema ID；跨类/同类重复记入 dupes（§3.3：ID 全包唯一）。 */
+function collectDefinedIds(pkg: OntologyPackage): {
+  ids: Map<string, string>
+  dupes: Array<{ id: string; first: string; second: string }>
+  empty: string[]
+} {
   const ids = new Map<string, string>()
+  const dupes: Array<{ id: string; first: string; second: string }> = []
+  const empty: string[] = []
   const add = (id: string, where: string): void => {
-    if (id) ids.set(id, where)
+    if (!id) {
+      empty.push(where)
+      return
+    }
+    const first = ids.get(id)
+    if (first === undefined) ids.set(id, where)
+    else dupes.push({ id, first, second: where })
   }
   for (const o of pkg.objects) add(o.id, 'o1-objects/object-types.yaml')
   for (const r of pkg.relations) add(r.id, 'o1-objects/relation-types.yaml')
@@ -57,7 +69,7 @@ function collectDefinedIds(pkg: OntologyPackage): Map<string, string> {
   for (const s of pkg.scenarios) add(s.id, `o3-scenarios/${s.id}.yaml`)
   for (const f of pkg.fieldMaps) add(f.id, 'bindings/field-maps.yaml')
   for (const s of pkg.apiSources) add(s.id, 'bindings/api-sources.yaml')
-  return ids
+  return { ids, dupes, empty }
 }
 
 /**
@@ -82,7 +94,7 @@ export function validatePackage(
   const warnings: ValidationIssue[] = []
   const info: ValidationIssue[] = []
   const external = new Set(pkg.meta.externalRefs ?? [])
-  const defined = collectDefinedIds(pkg)
+  const { ids: defined, dupes, empty } = collectDefinedIds(pkg)
 
   const err = (code: string, where: string, message: string): void => {
     errors.push({ level: 'error', code, where, message })
@@ -92,6 +104,15 @@ export function validatePackage(
   }
 
   const resolved = (id: string): boolean => defined.has(id) || external.has(id)
+
+  /* ── error: ID 全包唯一（§3.3；score/exclusion 共用 RULE-* 也算重复） ── */
+
+  for (const d of dupes) {
+    err('DUP_ID', d.second, `ID 重复: ${d.id}（已定义于 ${d.first}）`)
+  }
+  for (const where of empty) {
+    err('ID_EMPTY', where, 'ID 为空')
+  }
 
   /* ── error: 引用闭合（§7.1） ─────────────────────────────────────────── */
 

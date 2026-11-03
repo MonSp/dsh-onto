@@ -392,19 +392,23 @@ export interface KnowledgeSourceRecord {
 
 export type DraftStatus = 'pending' | 'approved' | 'merged' | 'rejected'
 
-export type DraftTargetKind =
-  | 'ObjectType'
-  | 'RelationType'
-  | 'Attribute'
-  | 'Dictionary'
-  | 'BehaviorType'
-  | 'ScoreRule'
-  | 'ExclusionRule'
-  | 'SkillTemplate'
-  | 'ScenarioCard'
-  | 'RedLine'
-  | 'FieldMap'
-  | 'ApiSource'
+/** 草案目标类型全集（唯一事实源；类型与运行时校验共用，防双源漂移）。 */
+export const DRAFT_TARGET_KINDS = [
+  'ObjectType',
+  'RelationType',
+  'Attribute',
+  'Dictionary',
+  'BehaviorType',
+  'ScoreRule',
+  'ExclusionRule',
+  'SkillTemplate',
+  'ScenarioCard',
+  'RedLine',
+  'FieldMap',
+  'ApiSource',
+] as const
+
+export type DraftTargetKind = (typeof DRAFT_TARGET_KINDS)[number]
 
 export interface DraftItem {
   layer: 'O1' | 'O2' | 'O3'
@@ -412,13 +416,16 @@ export interface DraftItem {
   name: string
   payload: Record<string, unknown>
   confidence: number
-  rationale: string
+  /** 可缺省；出现即须为字符串（与 validateDraftItem 同口径）。 */
+  rationale?: string
 }
 
 export interface DraftCandidate extends DraftItem {
   id: string
   packageId: string
   sourceId: string
+  /** 解析时的原始 name，幂等键用它而非可编辑的 name（人审改名不破坏同源去重）。 */
+  sourceName?: string
   status: DraftStatus
   /** confidence < 0.75 强制人审（§5.3）。 */
   forcedReview: boolean

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, loadPackage, savePackage, readPackageMeta } from '../dist/index.js'
+import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, mkWorkspace } from './helpers.mjs'
 
 const llm = new HeuristicLlm()
@@ -235,6 +235,464 @@ test('LLM 失败回落词面启发（parseWithFallback 语义）', async () => {
     })
     const { added } = await store.parseSource(src.id, broken)
     assert.ok(added.length > 0, 'heuristic fallback yields candidates')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confidence + 数值字段', () => {
+  const good = { layer: 'O2', targetKind: 'ScoreRule', name: '规则', payload: { weight: 0.1 }, confidence: 0.8, rationale: 'r' }
+  assert.equal(validateDraftItem(good), null)
+  assert.equal(validateDraftItem({ ...good, layer: 'O9' }), 'bad layer')
+  assert.equal(validateDraftItem({ ...good, targetKind: 'Nope' }), 'bad targetKind')
+  assert.equal(validateDraftItem({ ...good, name: '  ' }), 'bad name')
+  assert.equal(validateDraftItem({ ...good, payload: null }), 'bad payload')
+  assert.equal(validateDraftItem({ ...good, payload: [] }), 'bad payload')
+  assert.equal(validateDraftItem({ ...good, confidence: 1.5 }), 'bad confidence')
+  assert.equal(validateDraftItem({ ...good, confidence: '0.8' }), 'bad confidence')
+  assert.equal(validateDraftItem(null), 'not an object')
+  assert.equal(validateDraftItem('x'), 'not an object')
+  // rationale：可缺省，出现即须字符串
+  assert.equal(validateDraftItem({ ...good, rationale: undefined }), null)
+  assert.equal(validateDraftItem({ ...good, rationale: 123 }), 'bad rationale')
+  assert.equal(validateDraftItem({ ...good, rationale: { a: 1 } }), 'bad rationale')
+  // 数值字段：出现即须有限数字（weight/threshold/factor）
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 'abc' } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: NaN } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: Infinity } }), 'bad payload.weight')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 0.1, threshold: '0.5' } }), 'bad payload.threshold')
+  assert.equal(validateDraftItem({ ...good, payload: { weight: 0.1, threshold: null } }), null)
+  assert.equal(validateDraftItem({ ...good, payload: {} }), null)
+  const ex = { layer: 'O2', targetKind: 'ExclusionRule', name: '排除', payload: {}, confidence: 0.8, rationale: 'r' }
+  assert.equal(validateDraftItem({ ...ex, payload: { factor: 'x' } }), 'bad payload.factor')
+  assert.equal(validateDraftItem({ ...ex, payload: { factor: 0.3 } }), null)
+  // ScenarioCard 嵌套数值：reviewGate.threshold 出现即须有限数字
+  const sc = { layer: 'O3', targetKind: 'ScenarioCard', name: '场景', payload: {}, confidence: 0.8, rationale: 'r' }
+  assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: { threshold: NaN } } }), 'bad payload.reviewGate.threshold')
+  assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: { threshold: Infinity } } }), 'bad payload.reviewGate.threshold')
+  assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: 'x' } }), 'bad payload.reviewGate')
+  assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: { threshold: 0.5 } } }), null)
+  assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: {} } }), null)
+})
+
+test('parseSource 报告：received/accepted/idempotentSkipped/invalidDropped + engine', async () => {
+  const { store, root } = mkStore()
+  try {
+    // 合法 + 非法混杂的假 LLM
+    const mixed = {
+      async parseSource() {
+        return {
+          items: [
+            { layer: 'O2', targetKind: 'ScoreRule', name: '有效规则', payload: { weight: 0.2, expression: '1' }, confidence: 0.9, rationale: 'ok' },
+            { layer: 'O2', targetKind: 'ScoreRule', name: '', payload: {}, confidence: 0.9, rationale: 'bad name' },
+            { layer: 'OX', targetKind: 'ScoreRule', name: '坏层', payload: {}, confidence: 0.5, rationale: 'bad layer' },
+            { layer: 'O1', targetKind: 'ObjectType', name: '样本对象', payload: { name: '样本对象' }, confidence: 'high', rationale: 'bad conf' },
+            { layer: 'O2', targetKind: 'ScoreRule', name: '坏权重', payload: { weight: 'abc' }, confidence: 0.9, rationale: 'bad weight' },
+          ],
+        }
+      },
+    }
+    const src = store.uploadSource({ packageId: 'pkg-x', sourceType: 'LEGACY_SYS', name: 'algo', content: '权重 0.2 的特征。' })
+    const r1 = await store.parseSource(src.id, mixed)
+    assert.equal(r1.report.received, 5)
+    assert.equal(r1.report.accepted, 1)
+    assert.equal(r1.report.invalidDropped, 4)
+    assert.equal(r1.report.idempotentSkipped, 0)
+    assert.equal(r1.report.engine, 'heuristic') // 假 LLM 非 DeepSeek 实例 → heuristic 标注
+    // 二次解析：同名幂等跳过
+    const r2 = await store.parseSource(src.id, mixed)
+    assert.equal(r2.report.accepted, 0)
+    assert.equal(r2.report.idempotentSkipped, 1)
+    assert.equal(r2.report.invalidDropped, 4)
+    // heuristic 引擎也带报告
+    const r3 = await store.parseSource(src.id, new HeuristicLlm())
+    assert.equal(r3.report.engine, 'heuristic')
+    assert.equal(typeof r3.report.received, 'number')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('updateCandidate：批准前可编辑载荷；finalized 拒绝；confidence 重算 forcedReview', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    const updated = store.updateCandidate(draft.id, {
+      payload: { ...draft.payload, weight: 0.35, expression: 'min(1, f1)' },
+      confidence: 0.9,
+    })
+    assert.equal(updated.payload.weight, 0.35)
+    assert.equal(updated.confidence, 0.9)
+    assert.equal(updated.forcedReview, false)
+    // 非法 confidence 拒绝
+    assert.throws(() => store.updateCandidate(draft.id, { confidence: 2 }), /confidence/)
+    // 合入后复检：空 name / 非法数值字段 / 非对象 payload 拒存
+    assert.throws(() => store.updateCandidate(draft.id, { name: '  ' }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { name: 'x', payload: { weight: 'abc' } }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { payload: { weight: NaN } }), /invalid/)
+    assert.throws(() => store.updateCandidate(draft.id, { payload: null }), /invalid/)
+    // 拒存后原草案不动
+    assert.equal(store.getCandidate(draft.id).payload.weight, 0.35)
+    // 批准后不可再改
+    store.reviewCandidate(draft.id, 'approve')
+    assert.throws(() => store.updateCandidate(draft.id, { name: 'x' }), /already/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('改名不破坏同源幂等：sourceName 稳定键', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    assert.equal(draft.sourceName, draft.name)
+    store.updateCandidate(draft.id, { name: '改名后的规则' })
+    assert.equal(store.getCandidate(draft.id).name, '改名后的规则')
+    // 改名同步 payload.name（与旧名一致的自动副本）——物化写入用的是它
+    assert.equal(store.getCandidate(draft.id).payload.name, '改名后的规则')
+    // 同源二次解析仍按解析原始名去重，不再造新候选
+    const r2 = await store.parseSource(src.id, new HeuristicLlm())
+    assert.equal(r2.report.accepted, 0)
+    assert.ok(r2.report.idempotentSkipped >= 1)
+    assert.equal(store.listCandidates({ packageId: 'pkg-x' }).length, added.length)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize：干跑返回将物化的元素，不落盘', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const before = loadPackage(dir)
+    const beforeRules = before.scoreRules.length
+    const beforePhrases = before.scenarios[0].outputContract.forbiddenPhrases.length
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '夜间交易权重 0.2。\n该账户认定洗钱。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const ids = added.map((c) => c.id)
+    const previews = store.previewMaterialize(dir, ids)
+    assert.equal(previews.length, added.length)
+    // 未批准也能预览
+    const scoreP = previews.find((p) => p.targetKind === 'ScoreRule')
+    assert.ok(scoreP && scoreP.ok, scoreP?.error)
+    assert.ok(scoreP.summary.includes('ScoreRule'))
+    assert.ok(scoreP.element && typeof scoreP.element === 'object')
+    const redP = previews.find((p) => p.targetKind === 'RedLine')
+    assert.ok(redP, 'RedLine 预览应存在（夹具含结论句）')
+    assert.ok(redP.ok, redP.error)
+    assert.ok(redP.summary.includes('禁语'))
+    assert.ok(Array.isArray(redP.element.phrases))
+    // 干跑不落盘
+    const after = loadPackage(dir)
+    assert.equal(after.scoreRules.length, beforeRules)
+    assert.equal(after.scenarios[0].outputContract.forbiddenPhrases.length, beforePhrases)
+    // 不存在的候选 → ok:false
+    const miss = store.previewMaterialize(dir, ['dc-nope'])
+    assert.equal(miss[0].ok, false)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('跨包候选：materialize/previewMaterialize 按 packageId 拒绝', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg() // meta.name = 'test-pkg'
+  try {
+    const otherDir = ws.createPackage({ name: 'other-pkg', version: '1.0.0', domain: 'TST' })
+    const other = minimalPkg()
+    other.meta = { ...other.meta, name: 'other-pkg' }
+    savePackage(otherDir, other)
+
+    const store = new KnowledgeStore(ws.root)
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.2 的特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    store.reviewCandidate(draft.id, 'approve')
+
+    // 预览进 other-pkg → 拒绝
+    const pvOther = store.previewMaterialize(otherDir, [draft.id])
+    assert.equal(pvOther[0].ok, false)
+    assert.match(pvOther[0].error, /other-pkg/)
+    // 物化进 other-pkg → skipped（不落盘）
+    const rOther = store.materialize(otherDir, [draft.id])
+    assert.equal(rOther.applied.length, 0)
+    assert.ok(rOther.skipped[0].reason.includes('test-pkg'), rOther.skipped[0].reason)
+    assert.equal(loadPackage(otherDir).scoreRules.length, 1)
+    // 同包预览/物化仍正常
+    const pvSame = store.previewMaterialize(dir, [draft.id])
+    assert.equal(pvSame[0].ok, true, pvSame[0].error)
+    const rSame = store.materialize(dir, [draft.id])
+    assert.deepEqual(rSame.applied, [draft.id])
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('updateCandidate 改名同步 payload.name；故意分叉的 payload.name 不覆盖', async () => {
+  const { store, root } = mkStore()
+  try {
+    const src = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '权重 0.4 的归集特征。',
+    })
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    const draft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(draft)
+    assert.equal(draft.payload.name, draft.name)
+    // 与旧名一致（自动副本）→ 改名同步
+    store.updateCandidate(draft.id, { name: '新名' })
+    assert.equal(store.getCandidate(draft.id).payload.name, '新名')
+    // 故意分叉的 payload.name 不被改名覆盖（payload.name 保持权威）
+    store.updateCandidate(draft.id, { payload: { ...store.getCandidate(draft.id).payload, name: '专用名' } })
+    store.updateCandidate(draft.id, { name: '另一个名' })
+    assert.equal(store.getCandidate(draft.id).name, '另一个名')
+    assert.equal(store.getCandidate(draft.id).payload.name, '专用名')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize：新建带禁语的 ScenarioCard 显示整元素，不误判为 RedLine 增量', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-new-scn',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O3',
+      targetKind: 'ScenarioCard',
+      name: '新场景',
+      payload: {
+        name: '新场景',
+        goal: '识别线索',
+        boundary: '只输出候选',
+        outputContract: { forbiddenPhrases: ['认定洗钱'] },
+      },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: new Date().toISOString(),
+    }], null, 2))
+    const previews = store.previewMaterialize(dir, ['dc-new-scn'])
+    assert.equal(previews.length, 1)
+    assert.ok(previews[0].ok, previews[0].error)
+    // 完整新元素（含 id/name），不是 { scenarioId, phrases } 禁语增量
+    assert.equal(previews[0].element.name, '新场景')
+    assert.ok(String(previews[0].element.id).startsWith('SCN-'))
+    assert.ok(!previews[0].summary.includes('禁语 +'), previews[0].summary)
+    // 干跑不落盘
+    assert.equal(loadPackage(dir).scenarios.length, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('previewMaterialize 累积干跑：与 materialize 同语义，后者可见前者的插入', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    const now = new Date().toISOString()
+    writeFileSync(queuePath, JSON.stringify([
+      {
+        id: 'dc-obj-new',
+        packageId: 'test-pkg',
+        sourceId: 'src-x',
+        layer: 'O1',
+        targetKind: 'ObjectType',
+        name: '新对象',
+        payload: { name: '新对象', attributes: [] },
+        confidence: 0.9,
+        rationale: '',
+        status: 'pending',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+      {
+        id: 'dc-attr-new',
+        packageId: 'test-pkg',
+        sourceId: 'src-x',
+        layer: 'O1',
+        targetKind: 'Attribute',
+        name: '新属性',
+        payload: { ownerName: '新对象', name: '新属性', type: 'string' },
+        confidence: 0.9,
+        rationale: '',
+        status: 'pending',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+    ], null, 2))
+    // 累积：第二条（Attribute）能看到第一条刚插入的 owner
+    const previews = store.previewMaterialize(dir, ['dc-obj-new', 'dc-attr-new'])
+    assert.equal(previews[0].ok, true, previews[0].error)
+    assert.equal(previews[1].ok, true, previews[1].error)
+    // 孤立预览第二条则失败（owner 尚不存在）——对照旧的逐条独立干跑
+    const solo = store.previewMaterialize(dir, ['dc-attr-new'])
+    assert.equal(solo[0].ok, false)
+    assert.match(solo[0].error, /ATTR_OWNER|owner/)
+    // 干跑不落盘
+    assert.equal(loadPackage(dir).objects.length, 2)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('payload.id 与包内已有 ID 冲突 → 拒绝，不产生重复 ID', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-dup-id',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O1',
+      targetKind: 'ObjectType',
+      name: '撞车对象',
+      payload: { id: 'OBJ-TST-A', name: '撞车对象', attributes: [] },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: new Date().toISOString(),
+    }], null, 2))
+    const previews = store.previewMaterialize(dir, ['dc-dup-id'])
+    assert.equal(previews[0].ok, false)
+    assert.match(previews[0].error, /重复/)
+    store.reviewCandidate('dc-dup-id', 'approve')
+    const r = store.materialize(dir, ['dc-dup-id'])
+    assert.equal(r.applied.length, 0)
+    assert.equal(r.skipped.length, 1)
+    assert.match(r.skipped[0].reason, /重复/)
+    // 包内仍是原有两个对象，未产生重复 ID
+    assert.equal(loadPackage(dir).objects.length, 2)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('物化侧数值兜底：reviewGate.threshold/weight 的 NaN 不入库，回退默认', () => {
+  const pkg = minimalPkg()
+  applyDraftToPackage(pkg, {
+    layer: 'O3', targetKind: 'ScenarioCard', name: '新场景',
+    payload: { name: '新场景', reviewGate: { threshold: NaN } },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.equal(pkg.scenarios[pkg.scenarios.length - 1].reviewGate.threshold, 0.75)
+  applyDraftToPackage(pkg, {
+    layer: 'O2', targetKind: 'ScoreRule', name: '新规则',
+    payload: { weight: NaN, expression: '1', threshold: Infinity },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  const rule = pkg.scoreRules[pkg.scoreRules.length - 1]
+  assert.equal(rule.weight, 0)
+  assert.equal(rule.threshold, undefined)
+})
+
+test('字典 ID 自动生成加盐：同名 CJK 字典同批可共存；显式 payload.id 撞车仍拒绝', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    const dictCand = (id, name, values, payloadId) => ({
+      id,
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O1',
+      targetKind: 'Dictionary',
+      name,
+      payload: payloadId ? { id: payloadId, name, values } : { name, values },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    })
+    writeFileSync(queuePath, JSON.stringify([
+      dictCand('dc-dict-1', '状态字典', ['a']),
+      dictCand('dc-dict-2', '状态字典', ['b']),
+      dictCand('dc-dict-3', '显式撞车', ['c'], 'dict-tst-k'),
+    ], null, 2))
+    for (const id of ['dc-dict-1', 'dc-dict-2', 'dc-dict-3']) store.reviewCandidate(id, 'approve')
+    const r = store.materialize(dir, ['dc-dict-1', 'dc-dict-2', 'dc-dict-3'])
+    assert.equal(r.applied.length, 2)
+    assert.equal(r.skipped.length, 1)
+    assert.match(r.skipped[0].reason, /重复/)
+    const dicts = loadPackage(dir).dictionaries
+    assert.equal(dicts.length, 3) // 原 dict-tst-k + 两本同名新字典
+    assert.equal(new Set(dicts.map((d) => d.id)).size, 3)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('updateCandidate：patch.payload 显式带 name 键时视为故意保留，不被改名同步覆盖', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-rename',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O2',
+      targetKind: 'ScoreRule',
+      name: '旧名',
+      payload: { name: '旧名', weight: 0.2, expression: '1' },
+      confidence: 0.9,
+      rationale: '',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    }], null, 2))
+    // 显式 payload.name 恰与旧名一致 → 故意保留，不随 name 同步
+    store.updateCandidate('dc-rename', {
+      name: '新名',
+      payload: { name: '旧名', weight: 0.3, expression: '1' },
+    })
+    const c = store.getCandidate('dc-rename')
+    assert.equal(c.name, '新名')
+    assert.equal(c.payload.name, '旧名')
   } finally {
     rmWorkspace(root)
   }
