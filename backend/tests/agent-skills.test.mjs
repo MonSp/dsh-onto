@@ -7,10 +7,12 @@ import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
 import {
   collectSkillSources,
+  locatorInWorkspace,
   pickSkillSources,
   renderSkillBody,
   skillNameFromId,
 } from '../dist/agent-skills.js'
+import { invalidateSkillCatalog, registerSkillInvalidator } from '../dist/agent-hooks.js'
 
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
 const MED_DIR = fileURLToPath(new URL('../../packages/med/1.0.0', import.meta.url))
@@ -85,4 +87,49 @@ test('版本去重：预发布版本排在同号正式版之前（1.0.0-rc1 < 1.
   const rel = { versionDir: '/a/1.0.0', status: 'DRAFT', version: '1.0.0', template: tpl('SKL-AML-N') }
   assert.equal(pickSkillSources([pre, rel]).get('SKL-AML-N').version, '1.0.0')
   assert.equal(pickSkillSources([rel, pre]).get('SKL-AML-N').version, '1.0.0')
+})
+
+test('版本去重：预发布标识符按数值序（rc.10 > rc.2）', () => {
+  const tpl = (id) => ({ id, name: id, weights: {} })
+  const rc2 = { versionDir: '/a/1.0.0-rc.2', status: 'DRAFT', version: '1.0.0-rc.2', template: tpl('SKL-AML-N') }
+  const rc10 = { versionDir: '/a/1.0.0-rc.10', status: 'DRAFT', version: '1.0.0-rc.10', template: tpl('SKL-AML-N') }
+  assert.equal(pickSkillSources([rc2, rc10]).get('SKL-AML-N').version, '1.0.0-rc.10')
+  assert.equal(pickSkillSources([rc10, rc2]).get('SKL-AML-N').version, '1.0.0-rc.10')
+  // 数字段低于字母段（semver）
+  const rcA = { versionDir: '/a/1.0.0-alpha', status: 'DRAFT', version: '1.0.0-alpha', template: tpl('SKL-AML-N') }
+  const rc1 = { versionDir: '/a/1.0.0-1', status: 'DRAFT', version: '1.0.0-1', template: tpl('SKL-AML-N') }
+  assert.equal(pickSkillSources([rcA, rc1]).get('SKL-AML-N').version, '1.0.0-alpha')
+})
+
+test('skill 命名：空/全非法 id 返回空串（调用方跳过）', () => {
+  assert.equal(skillNameFromId(''), '')
+  assert.equal(skillNameFromId('___'), '')
+  assert.equal(skillNameFromId('---'), '')
+  assert.match(skillNameFromId('SKL-AML-NARRATIVE'), /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+})
+
+test('locator：versionDir 必须落在 workspace 内', () => {
+  assert.equal(locatorInWorkspace('/ws/pkg/1.0.0', '/ws'), true)
+  assert.equal(locatorInWorkspace('/ws', '/ws'), false)
+  assert.equal(locatorInWorkspace('/other/pkg', '/ws'), false)
+  assert.equal(locatorInWorkspace('/ws/../etc', '/ws'), false)
+  assert.equal(locatorInWorkspace('/wsfoo/pkg', '/ws'), false)
+})
+
+test('失效钩子：注册/注销生命周期（dispose 后不泄漏、不再触发）', () => {
+  let n = 0
+  const un1 = registerSkillInvalidator(() => {
+    n += 1
+  })
+  const un2 = registerSkillInvalidator(() => {
+    n += 1
+  })
+  invalidateSkillCatalog()
+  assert.equal(n, 2)
+  un1()
+  invalidateSkillCatalog()
+  assert.equal(n, 3)
+  un2()
+  invalidateSkillCatalog()
+  assert.equal(n, 3)
 })

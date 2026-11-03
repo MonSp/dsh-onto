@@ -20,16 +20,20 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
 **Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 61/61 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 26/26 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 36/36 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
 `run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
 工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
-禁语扫描 0 命中（通过）、三层闭合 passed。评审三轮：首轮 2 critical + 2 major 修复后
+禁语扫描 0 命中（通过）、三层闭合 passed。评审五轮：首轮 2 critical + 2 major 修复后
 复审 PASS，并关死双字段 guard 残余旁路；第三轮补 skill 目录失效漏 fork/transition/
 createPackage 写路径、upload_knowledge_source packageId 存在性校验、
-readToolContracts 错误包装、objectRef 实例段按类型段判定。
+readToolContracts 错误包装、objectRef 实例段按类型段判定；第四轮补 list_packages
+输出投影、空 subject 授权匹配、prerelease 版本序、加载错误路径回显；第五轮清零
+9 项 minor（guard 非法参数拒绝、装配断言类型锐度、错误路径回显口径统一、
+guard 保留 DERIVED_DRIFT 码、回执字段对齐 S2.2、prerelease 标识符数值序、
+skillNameFromId 空 id 兜底、locator workspace 包容断言）并补测试缺口。
 
 ## [S1] Problem
 

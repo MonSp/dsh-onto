@@ -90,20 +90,20 @@ export function loadDatasetFromArgs(args: { datasetPath?: string; dataset?: unkn
     throw new AgentToolError('INVALID_ARGS', 'datasetPath 与 dataset 必须且只能提供一个')
   }
   if (hasPath) {
-    const path = isAbsolute(args.datasetPath as string)
-      ? (args.datasetPath as string)
-      : resolve(args.datasetPath as string)
+    // 错误回显调用方原文，不回显 resolve() 后的绝对路径（不泄露进程 cwd）。
+    const raw = args.datasetPath as string
+    const path = isAbsolute(raw) ? raw : resolve(raw)
     let text: string
     try {
       text = readFileSync(path, 'utf8')
     } catch {
-      throw new AgentToolError('INVALID_ARGS', `无法读取 dataset 文件: ${path}`)
+      throw new AgentToolError('INVALID_ARGS', `无法读取 dataset 文件: ${raw}`)
     }
     let parsed: unknown
     try {
       parsed = JSON.parse(text)
     } catch {
-      throw new AgentToolError('INVALID_ARGS', `dataset 文件不是合法 JSON: ${path}`)
+      throw new AgentToolError('INVALID_ARGS', `dataset 文件不是合法 JSON: ${raw}`)
     }
     return validateDatasetShape(parsed)
   }
@@ -118,9 +118,12 @@ export function assertRunContract(result: ScenarioRunResult): void {
     throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: candidates 不是数组')
   }
   for (const c of result.candidates) {
-    for (const key of ['riskScore', 'hitRuleIds', 'evidenceChains', 'pendingChecks'] as const) {
-      if (c[key] === undefined) {
-        throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} 缺少 ${key}`)
+    if (typeof c.riskScore !== 'number') {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} riskScore 不是数字`)
+    }
+    for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks'] as const) {
+      if (!Array.isArray(c[key])) {
+        throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} ${key} 不是数组`)
       }
     }
   }
@@ -205,9 +208,13 @@ export function readToolContracts(versionDir: string): ToolContractEntry[] {
     }
     tools = Array.isArray(raw?.tools) ? raw.tools : []
   } catch (e) {
-    // 门禁通过后仍失败（如 TOCTOU 删文件）：按不可加载处理，不裸抛底层错误。
-    const reason = e instanceof Error ? e.message : String(e)
-    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: tool-contracts 不可读（${reason}）`)
+    // 门禁通过后仍失败（如 TOCTOU 删文件）：按不可加载处理；只回错误码，
+    // 不拼 e.message（ENOENT 的 message 含全路径）。
+    const code =
+      e instanceof Error && 'code' in e && typeof (e as { code?: unknown }).code === 'string'
+        ? (e as { code: string }).code
+        : ''
+    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: tool-contracts 不可读${code ? `（${code}）` : ''}`)
   }
   return tools.map(projectByContract)
 }
@@ -239,9 +246,17 @@ export function grantGuardDecision(
 ): string | undefined {
   if (!ONTOOL_NAMES.has(toolName)) return undefined
   const a = isRecord(args) ? args : {}
-  const scoped = [a.objectId, a.objectRef].filter(
-    (v): v is string => typeof v === 'string' && v.length > 0,
-  )
+  // args 含 objectId/objectRef 即须过收权（S2.4）：非字符串/空串一律拒绝，
+  // 不静默跳过；null/undefined 视为未提供。
+  const scoped: string[] = []
+  for (const key of ['objectId', 'objectRef'] as const) {
+    const v = a[key]
+    if (v === undefined || v === null) continue
+    if (typeof v !== 'string' || v.length === 0) {
+      return `OBJECT_NOT_GRANTED: ${key} 非法（须为非空字符串）`
+    }
+    scoped.push(v)
+  }
   if (scoped.length === 0) return undefined
   if (typeof a.name !== 'string' || typeof a.version !== 'string') {
     return `OBJECT_NOT_GRANTED: ${scoped.join(', ')}（缺少 name/version，无法核对收权清单）`
@@ -254,6 +269,8 @@ export function grantGuardDecision(
     }
     return undefined
   } catch (e) {
+    // 保留机器可读错误码（如 DERIVED_DRIFT），拒绝语义不丢码。
+    if (e instanceof AgentToolError) return `${e.code}: ${e.message}`
     return e instanceof Error ? e.message : String(e)
   }
 }
@@ -331,16 +348,14 @@ export function scenarioCatalog(pkg: OntologyPackage): Record<string, unknown> {
   }
 }
 
-/** 上传回执摘要：不回显 content（§12.3 大块数据不进模型上下文）。 */
+/** 上传回执摘要：只保留 S2.2 规范字段，不回显 content（§12.3 大块数据不进模型上下文）。 */
 export function sourceSummary(rec: KnowledgeSourceRecord): Record<string, unknown> {
   return {
     id: rec.id,
-    packageId: rec.packageId,
     sourceType: rec.sourceType,
     name: rec.name,
     sha256: rec.sha256,
     parseStatus: rec.parseStatus,
-    uploadedAt: rec.uploadedAt,
   }
 }
 

@@ -399,3 +399,105 @@ test('包加载：失败不回显底层路径，统一 NOT_FOUND', () => {
     assert.ok(!e.message.includes('D:\\secret'), `不应泄露底层路径: ${e.message}`)
   }
 })
+
+test('收权：非字符串与空串 objectId/objectRef 一律拒绝（无静默跳过）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const reader = () => contracts
+  const base = { name: 'aml-analysis', version: '1.0.0' }
+  assert.match(
+    grantGuardDecision('list_tool_contracts', { ...base, objectId: 123 }, reader),
+    /OBJECT_NOT_GRANTED: objectId 非法/,
+  )
+  assert.match(
+    grantGuardDecision('list_tool_contracts', { ...base, objectRef: true }, reader),
+    /OBJECT_NOT_GRANTED: objectRef 非法/,
+  )
+  assert.match(
+    grantGuardDecision('list_tool_contracts', { ...base, objectId: '' }, reader),
+    /OBJECT_NOT_GRANTED: objectId 非法/,
+  )
+  // null/undefined 视为未提供，不触发收权
+  assert.equal(
+    grantGuardDecision('list_tool_contracts', { ...base, objectId: null }, reader),
+    undefined,
+  )
+})
+
+test('收权：contracts 读取失败时拒绝原因保留 DERIVED_DRIFT 码', () => {
+  const denial = grantGuardDecision(
+    'list_tool_contracts',
+    { objectId: 'OBJ-AML-ACCOUNT', name: 'aml-analysis', version: '1.0.0' },
+    () => {
+      throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: missing manifest (never derived)')
+    },
+  )
+  assert.match(denial, /^DERIVED_DRIFT: /)
+})
+
+test('收权：多级实例段 TYPE:a:b 按首个冒号前类型段判定', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const reader = () => contracts
+  const entry = projectByContract({ id: 'TOOL-X', grantScope: 'OBJ-AML-ACCOUNT' })
+  assert.equal(grantMatches(entry, 'OBJ-AML-ACCOUNT:a:b'), true)
+  assert.equal(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectRef: 'OBJ-AML-ACCOUNT:a:b', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    undefined,
+  )
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectRef: 'OBJ-NOPE:a:b', name: 'aml-analysis', version: '1.0.0' },
+      reader,
+    ),
+    /OBJECT_NOT_GRANTED: OBJ-NOPE:a:b/,
+  )
+})
+
+test('装配断言：null/错型字段拒绝，不产出残缺结果', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  assert.doesNotThrow(() => assertRunContract(good))
+
+  const nullHit = { ...good, candidates: [{ ...good.candidates[0], hitRuleIds: null }] }
+  expectCode(() => assertRunContract(nullHit), 'INVALID_TOOL_OUTPUT')
+
+  const nullScore = { ...good, candidates: [{ ...good.candidates[0], riskScore: null }] }
+  expectCode(() => assertRunContract(nullScore), 'INVALID_TOOL_OUTPUT')
+
+  const nullChains = { ...good, candidates: [{ ...good.candidates[0], evidenceChains: null }] }
+  expectCode(() => assertRunContract(nullChains), 'INVALID_TOOL_OUTPUT')
+})
+
+test('知识上传回执：仅 S2.2 规范字段，不回显 content/packageId/uploadedAt', () => {
+  const summary = sourceSummary({
+    id: 'src-1',
+    packageId: 'aml-analysis@1.0.0',
+    sourceType: 'POLICY',
+    name: '制度',
+    content: '超敏感正文',
+    sha256: 'abc',
+    parseStatus: 'uploaded',
+    uploadedAt: '2026-11-03T00:00:00.000Z',
+  })
+  assert.deepEqual(Object.keys(summary).sort(), ['id', 'name', 'parseStatus', 'sha256', 'sourceType'])
+  assert.equal('content' in summary, false)
+  assert.equal('packageId' in summary, false)
+  assert.equal('uploadedAt' in summary, false)
+})
+
+test('dataset 错误回显调用方原文，不回显 resolve 后绝对路径', () => {
+  const rel = 'no-such-relative-dataset.json'
+  try {
+    loadDatasetFromArgs({ datasetPath: rel })
+    assert.fail('期望 INVALID_ARGS')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError, `期望 AgentToolError，得到 ${e}`)
+    assert.equal(e.code, 'INVALID_ARGS')
+    assert.ok(e.message.includes(rel), `应回显调用方原文: ${e.message}`)
+    assert.ok(!/^[A-Za-z]:\\/.test(e.message.split(': ').pop()), `不应含盘符绝对路径: ${e.message}`)
+  }
+})

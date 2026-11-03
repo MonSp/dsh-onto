@@ -5,7 +5,7 @@
  * 优先 ISSUED，再按版本号降序取一条。包写入路径经 agent-hooks 失效目录。
  * @module @dsh-onto/backend/agent-skills
  */
-import { join } from 'node:path'
+import { join, isAbsolute, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   SkillCandidate,
@@ -22,7 +22,7 @@ import {
 import { registerSkillInvalidator } from './agent-hooks.js'
 import { resolveDataDir } from './services.js'
 
-/** SKL id → skill 名（`SKL-AML-NARRATIVE` → `skl-aml-narrative`）。 */
+/** SKL id → skill 名（`SKL-AML-NARRATIVE` → `skl-aml-narrative`）；不可用 id 返回空串。 */
 export function skillNameFromId(sklId: string): string {
   return sklId
     .toLowerCase()
@@ -43,6 +43,27 @@ function splitPrerelease(version: string): [core: string, prerelease: string] {
   return i < 0 ? [version, ''] : [version.slice(0, i), version.slice(i + 1)]
 }
 
+/** semver 式预发布标识符比较：数字段按数值，数字段低于字母段，逐段直到分出胜负。 */
+function comparePrerelease(a: string, b: string): number {
+  const pa = a.split('.')
+  const pb = b.split('.')
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i += 1) {
+    const x = pa[i]
+    const y = pb[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    const nx = /^\d+$/.test(x) ? Number.parseInt(x, 10) : Number.NaN
+    const ny = /^\d+$/.test(y) ? Number.parseInt(y, 10) : Number.NaN
+    if (!Number.isNaN(nx) && !Number.isNaN(ny)) return nx - ny
+    if (!Number.isNaN(nx)) return -1
+    if (!Number.isNaN(ny)) return 1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+
 function compareVersions(a: string, b: string): number {
   const [aCore, aPre] = splitPrerelease(a)
   const [bCore, bPre] = splitPrerelease(b)
@@ -55,7 +76,7 @@ function compareVersions(a: string, b: string): number {
   if (aPre === bPre) return 0
   if (aPre === '') return 1
   if (bPre === '') return -1
-  return aPre < bPre ? -1 : 1
+  return comparePrerelease(aPre, bPre)
 }
 
 function betterThan(a: SklSource, b: SklSource): boolean {
@@ -92,6 +113,13 @@ export function collectSkillSources(
     }
   }
   return pickSkillSources(sources)
+}
+
+/** locator.versionDir 必须落在 workspace 内（防御纵深：registry 回放契约之外再拦一层）。 */
+export function locatorInWorkspace(versionDir: string, wsRoot: string): boolean {
+  const rel = relative(resolve(wsRoot), resolve(versionDir))
+  if (rel === '' || isAbsolute(rel)) return false
+  return rel.split(/[\\/]/)[0] !== '..'
 }
 
 /** skill 正文：模板口径 + 红线声明。 */
@@ -140,7 +168,8 @@ export const inject = ['skills']
 
 export function apply(ctx: Context): void {
   const dataDir = resolveDataDir(ctx)
-  const ws = new PackageWorkspace(join(dataDir, 'workspace'))
+  const wsRoot = join(dataDir, 'workspace')
+  const ws = new PackageWorkspace(wsRoot)
 
   const scan = (): Map<string, SklSource> => collectSkillSources(ws.listVersions())
 
@@ -150,18 +179,25 @@ export function apply(ctx: Context): void {
     const provider: SkillProvider = {
       name: 'onto-skill-templates',
       async list(_options: SkillLookupOptions): Promise<SkillCandidate[]> {
-        return [...scan().values()].map((s) => ({
-          name: skillNameFromId(s.template.id),
-          description: s.template.description ?? s.template.name,
-          invocation: { modelInvocable: true, userInvocable: true },
-          source: 'runtime',
-          provider: 'onto-skill-templates',
-          rank: 350,
-          locator: { versionDir: s.versionDir, sklId: s.template.id },
-        }))
+        const out: SkillCandidate[] = []
+        for (const s of scan().values()) {
+          const name = skillNameFromId(s.template.id)
+          if (name === '') continue // 空/全非法 id 的坏模板不进目录
+          out.push({
+            name,
+            description: s.template.description ?? s.template.name,
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'runtime',
+            provider: 'onto-skill-templates',
+            rank: 350,
+            locator: { versionDir: s.versionDir, sklId: s.template.id },
+          })
+        }
+        return out
       },
       async get(candidate: SkillCandidate): Promise<SkillDefinition | undefined> {
         const locator = candidate.locator as { versionDir: string; sklId: string }
+        if (!locatorInWorkspace(locator.versionDir, wsRoot)) return undefined
         let pkg: OntologyPackage
         try {
           pkg = loadPackage(locator.versionDir)
