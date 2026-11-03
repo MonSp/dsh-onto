@@ -224,18 +224,20 @@ export function grantGuardDecision(
 ): string | undefined {
   if (!ONTOOL_NAMES.has(toolName)) return undefined
   const a = isRecord(args) ? args : {}
-  const objectId =
-    typeof a.objectId === 'string'
-      ? a.objectId
-      : typeof a.objectRef === 'string'
-        ? a.objectRef
-        : undefined
-  if (objectId === undefined) return undefined
+  const scoped = [a.objectId, a.objectRef].filter(
+    (v): v is string => typeof v === 'string' && v.length > 0,
+  )
+  if (scoped.length === 0) return undefined
   if (typeof a.name !== 'string' || typeof a.version !== 'string') {
-    return `OBJECT_NOT_GRANTED: ${objectId}（缺少 name/version，无法核对收权清单）`
+    return `OBJECT_NOT_GRANTED: ${scoped.join(', ')}（缺少 name/version，无法核对收权清单）`
   }
   try {
-    return checkGrant(readContracts(a.name, a.version), objectId)
+    const contracts = readContracts(a.name, a.version)
+    for (const objectId of scoped) {
+      const denial = checkGrant(contracts, objectId)
+      if (denial !== undefined) return denial
+    }
+    return undefined
   } catch (e) {
     return e instanceof Error ? e.message : String(e)
   }

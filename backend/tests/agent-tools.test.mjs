@@ -259,6 +259,13 @@ test('收权 guard：缺 name/version 与未收权对象一律拒绝（无旁路
   )
   assert.match(viaObjectRef, /OBJECT_NOT_GRANTED: OBJ-NOPE/)
 
+  const bothFields = grantGuardDecision(
+    'list_tool_contracts',
+    { objectId: 'OBJ-AML-ACCOUNT', objectRef: 'OBJ-NOPE', name: 'aml-analysis', version: '1.0.0' },
+    reader,
+  )
+  assert.match(bothFields, /OBJECT_NOT_GRANTED: OBJ-NOPE/, '双字段时两者都必须收权')
+
   assert.equal(
     grantGuardDecision(
       'list_tool_contracts',
