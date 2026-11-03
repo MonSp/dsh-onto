@@ -849,7 +849,22 @@ window.__ModuleLoader__.load({
           return d
         }
 
-        /** 表单字符串 → 元素对象（不含 id/name 之外的既有字段保留由调用方处理）。 */
+        /** 解析非空有限数字；非法返回 null（调用方报错拒绝保存）。 */
+        function numOrNull(raw: string | undefined): number | null {
+          if (raw === undefined || raw.trim() === '') return null
+          const n = Number(raw)
+          return Number.isFinite(n) ? n : null
+        }
+
+        function parseJsonField(raw: string, fallback: string): unknown {
+          try {
+            return JSON.parse(raw || fallback)
+          } catch {
+            throw new Error(`invalid JSON: ${raw.slice(0, 80)}`)
+          }
+        }
+
+        /** 表单字符串 → 元素对象；校验失败 throw，由 doSaveEdit 展示。 */
         function fromFormData(kind: ElemKind, d: Record<string, string>): Record<string, unknown> {
           const el: Record<string, unknown> = { id: d['id']?.trim(), name: d['name']?.trim() }
           if (kind === 'objects') {
@@ -871,50 +886,64 @@ window.__ModuleLoader__.load({
             if (d['trigger']?.trim()) el['trigger'] = d['trigger'].trim()
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'scoreRules') {
-            el['weight'] = Number(d['weight']) || 0
+            const weight = numOrNull(d['weight'])
+            if (weight === null) throw new Error('weight must be a finite number')
+            el['weight'] = weight
             el['expression'] = d['expression'] ?? ''
-            if (d['threshold'] !== '' && d['threshold'] !== undefined) el['threshold'] = Number(d['threshold'])
+            if (d['threshold'] !== '' && d['threshold'] !== undefined) {
+              const th = numOrNull(d['threshold'])
+              if (th === null) throw new Error('threshold must be a finite number')
+              el['threshold'] = th
+            }
             if (d['evidenceTemplate']?.trim()) el['evidenceTemplate'] = d['evidenceTemplate'].trim()
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'exclusionRules') {
             el['action'] = d['action'] === 'downweight' ? 'downweight' : 'drop'
-            if (d['factor'] !== '' && d['factor'] !== undefined) el['factor'] = Number(d['factor'])
+            if (d['factor'] !== '' && d['factor'] !== undefined) {
+              const f = numOrNull(d['factor'])
+              if (f === null) throw new Error('factor must be a finite number')
+              el['factor'] = f
+            }
             el['condition'] = d['condition'] ?? ''
             if (d['description']?.trim()) el['description'] = d['description'].trim()
           } else if (kind === 'scenarios') {
             el['goal'] = d['goal'] ?? ''
             el['boundary'] = d['boundary'] ?? ''
-            try {
-              el['inputs'] = JSON.parse(d['inputs'] || '[]')
-            } catch {
-              el['inputs'] = []
-            }
+            el['inputs'] = parseJsonField(d['inputs'] ?? '', '[]')
             el['outputs'] = { fields: csv(d['outputs'] ?? '') }
-            try {
-              el['pipeline'] = JSON.parse(d['pipeline'] || '[]')
-            } catch {
-              el['pipeline'] = []
-            }
+            el['pipeline'] = parseJsonField(d['pipeline'] ?? '', '[]')
             el['outputContract'] = {
               mustInclude: lines(d['mustInclude'] ?? ''),
               forbiddenPhrases: lines(d['forbiddenPhrases'] ?? ''),
             }
+            const th = numOrNull(d['reviewThreshold']) ?? 0.75
             el['reviewGate'] = {
               required: d['reviewRequired'] !== 'no',
-              threshold: Number(d['reviewThreshold']) || 0.75,
+              threshold: th,
             }
             el['auditChecks'] = lines(d['auditChecks'] ?? '')
           }
           return el
         }
 
-        function emptyFormData(kind: ElemKind, existing: Array<{ id: string }>): Record<string, string> {
+        /** 收集全包已用 ID（跨类查重：score/exclusion 共用 RULE 前缀）。 */
+        function collectAllIds(model: Record<string, Array<Record<string, unknown>>>): Set<string> {
+          const taken = new Set<string>()
+          for (const kind of ['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]) {
+            for (const e of model[kind] ?? []) {
+              const id = String(e['id'] ?? '')
+              if (id) taken.add(id)
+            }
+          }
+          return taken
+        }
+
+        function emptyFormData(kind: ElemKind, taken: Set<string>): Record<string, string> {
           const prefix = {
             objects: 'OBJ', relations: 'REL', behaviors: 'BHV',
             scoreRules: 'RULE', exclusionRules: 'RULE', scenarios: 'SCN',
           }[kind]
           let n = 1
-          const taken = new Set(existing.map((e) => e.id))
           while (taken.has(`${prefix}-GEN-${n}`)) n++
           const base: Record<string, string> = { id: `${prefix}-GEN-${n}`, name: '' }
           if (kind === 'objects') return { ...base, idRule: '', attributes: '', lifecycle: '', description: '' }
@@ -979,8 +1008,8 @@ window.__ModuleLoader__.load({
             void reload()
           }, [reload])
 
-          const savePkg = async (mutate: (p: Record<string, unknown>) => void, label: string) => {
-            if (!api || !selected || !pkg) return
+          const savePkg = async (mutate: (p: Record<string, unknown>) => void, label: string): Promise<boolean> => {
+            if (!api || !selected || !pkg) return false
             setBusy(label)
             setError('')
             setInfo('')
@@ -990,8 +1019,10 @@ window.__ModuleLoader__.load({
               unwrap(await api.save({ name: selected.name, version: selected.version, pkg: next }))
               await reload()
               setInfo(`✓ ${label}`)
+              return true
             } catch (e) {
               setError(errText(e))
+              return false
             } finally {
               setBusy('')
             }
@@ -1003,8 +1034,7 @@ window.__ModuleLoader__.load({
           const objIds = (model['objects'] ?? []).map((o) => String(o['id']))
 
           const startAdd = (kind: ElemKind) => {
-            const existing = (model[kind] ?? []) as Array<{ id: string }>
-            setEdit({ kind, idx: -1, data: emptyFormData(kind, existing) })
+            setEdit({ kind, idx: -1, data: emptyFormData(kind, collectAllIds(model)) })
             setInfo('')
             setError('')
           }
@@ -1030,23 +1060,40 @@ window.__ModuleLoader__.load({
 
           const doSaveEdit = () => {
             if (!edit) return
-            const el = fromFormData(edit.kind, edit.data)
+            let el: Record<string, unknown>
+            try {
+              el = fromFormData(edit.kind, edit.data)
+            } catch (e) {
+              setError(errText(e))
+              return
+            }
             if (!el['id'] || !el['name']) {
               setError('id / name required')
               return
             }
             const idx = edit.idx
+            // 跨类查重（score/exclusion 共用 RULE-*）；编辑时排除自身原位
+            const taken = collectAllIds(model)
+            if (idx >= 0) {
+              const cur = (model[edit.kind] ?? [])[idx]
+              if (cur && String(cur['id']) === String(el['id'])) taken.delete(String(el['id']))
+            }
+            if (taken.has(String(el['id']))) {
+              setError(`duplicate id ${String(el['id'])}`)
+              return
+            }
             void savePkg((p) => {
               const arr = (p[edit.kind] as Array<Record<string, unknown>>) ?? []
               if (idx < 0) {
-                if (arr.some((x) => x['id'] === el['id'])) throw new Error(`duplicate id ${String(el['id'])}`)
                 arr.push(el)
               } else {
-                // 保留 id 不变时原地替换；允许改 id（引用闭合交给校验器）
+                // 保留 id 不变时原地替换；改 id 已在上方跨类查重；引用闭合交给校验器
                 arr[idx] = el
               }
               p[edit.kind] = arr
-            }, idx < 0 ? `add ${edit.kind}` : `edit ${edit.kind}`).then(() => setEdit(null))
+            }, idx < 0 ? `add ${edit.kind}` : `edit ${edit.kind}`).then((ok) => {
+              if (ok) setEdit(null)
+            })
           }
 
           function elemTable(kind: ElemKind) {

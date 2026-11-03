@@ -314,7 +314,7 @@ export function buildPrompt(request: LlmParseRequest): { system: string; user: s
     '只输出一个 JSON 对象，不要 markdown 代码块、不要解释文字。',
     '格式：{"items":[{"layer":"O1|O2|O3","targetKind":"...","name":"非空字符串","payload":{...},"confidence":0到1的数字,"rationale":"依据"}]}',
     '逐条硬约束：layer 必须是 O1/O2/O3 之一；targetKind ∈ ObjectType|RelationType|Attribute|Dictionary|BehaviorType|ScoreRule|ExclusionRule|SkillTemplate|ScenarioCard|RedLine|FieldMap|ApiSource；name 非空字符串；payload 必须是对象；confidence 必须是 0..1 的数字。',
-    '任一字段不合法整条会被丢弃——宁可少报不要乱报。items 可以为空数组。',
+    '任一字段不合法整条会被丢弃——宁可少报不要乱报。若无可信草案，返回 {"items":[]}（系统会回落词面启发）。',
     '含「认定/确定为/已构成/确诊/证明了」等结论性表述时：targetKind=RedLine，payload.phrases 给出短语。',
     focus[request.sourceType],
   ].join('\n')

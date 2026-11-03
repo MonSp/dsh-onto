@@ -349,11 +349,13 @@ export class OntoKnowledge extends TypertRemoteService {
       }
       const sources: KnowledgeSourceRecord[] = []
       let skipped = 0
+      let attempted = 0
       for (const item of request.items) {
         if (!item?.name || !item?.content || !SOURCE_TYPES.includes(item.sourceType)) {
           skipped++
           continue
         }
+        attempted++
         const before = this.store.listSources(request.packageId).length
         const rec = this.store.uploadSource({
           packageId: request.packageId,
@@ -361,10 +363,14 @@ export class OntoKnowledge extends TypertRemoteService {
           name: item.name,
           content: item.content,
         })
-        if (this.store.listSources(request.packageId).length === before) skipped++
+        // sha256 幂等：未新增则只计 skipped，不进 sources（避免接受/跳过双计）
+        if (this.store.listSources(request.packageId).length === before) {
+          skipped++
+          continue
+        }
         sources.push(rec)
       }
-      if (sources.length === 0) throw ontoError('onto/bad-request', 'no valid items')
+      if (attempted === 0) throw ontoError('onto/bad-request', 'no valid items')
       return { sources, skipped }
     })
   }
