@@ -221,6 +221,7 @@ function grantSubject(objectId: string): string {
 /** grantScope 判定：objectId（可含 `:实例` 段）必须落在收权清单内，否则拒绝。 */
 export function grantMatches(entry: ToolContractEntry, objectId: string): boolean {
   const subject = grantSubject(objectId)
+  if (subject === '') return false
   return entry.grantScope === subject || entry.objectId === subject || entry.relationId === subject
 }
 
@@ -279,6 +280,13 @@ export function summarizePackage(pkg: OntologyPackage): Record<string, unknown> 
     ruleIds: [...pkg.scoreRules.map((r) => r.id), ...pkg.exclusionRules.map((r) => r.id)],
     scenarioIds: pkg.scenarios.map((s) => s.id),
   }
+}
+
+/** list_packages 输出投影：只保留四字段，不回显 dir 等服务端路径（S2.2 规范值）。 */
+export function projectPackageList(
+  versions: ReadonlyArray<{ name: string; version: string; status: string; domain: string; dir?: string }>,
+): Array<{ name: string; version: string; status: string; domain: string }> {
+  return versions.map((v) => ({ name: v.name, version: v.version, status: v.status, domain: v.domain }))
 }
 
 export function ruleDossier(pkg: OntologyPackage, ruleId?: string): Record<string, unknown> {
@@ -352,6 +360,19 @@ export function requireExistingPackage(
   }
 }
 
+/** 包加载（工具面）：失败不回显底层路径，统一 NOT_FOUND。 */
+export function loadToolPackage(
+  ws: { versionDir(name: string, version: string): string },
+  pkgName: string,
+  version: string,
+): OntologyPackage {
+  try {
+    return loadPackage(ws.versionDir(pkgName, version))
+  } catch {
+    throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${pkgName}@${version}`)
+  }
+}
+
 /* ───────────────────────── 工具注册 ───────────────────────── */
 
 function textBlock(text: string): Array<{ type: 'text'; text: string }> {
@@ -384,7 +405,7 @@ export function apply(ctx: Context): void {
   const knowledge = new KnowledgeStore(dataDir)
 
   const load = (pkgName: string, version: string): OntologyPackage =>
-    loadPackage(ws.versionDir(pkgName, version))
+    loadToolPackage(ws, pkgName, version)
 
   ctx.tools.guard((execution) =>
     grantGuardDecision(execution.name, execution.arguments, (n, v) =>
@@ -426,7 +447,7 @@ export function apply(ctx: Context): void {
           ),
       },
       async execute() {
-        return { packages: ws.listVersions() }
+        return { packages: projectPackageList(ws.listVersions()) }
       },
     }),
   )

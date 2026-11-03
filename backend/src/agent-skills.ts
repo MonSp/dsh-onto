@@ -38,14 +38,24 @@ export interface SklSource {
   template: O2SkillTemplate
 }
 
+function splitPrerelease(version: string): [core: string, prerelease: string] {
+  const i = version.indexOf('-')
+  return i < 0 ? [version, ''] : [version.slice(0, i), version.slice(i + 1)]
+}
+
 function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map((s) => Number.parseInt(s, 10) || 0)
-  const pb = b.split('.').map((s) => Number.parseInt(s, 10) || 0)
+  const [aCore, aPre] = splitPrerelease(a)
+  const [bCore, bPre] = splitPrerelease(b)
+  const pa = aCore.split('.').map((s) => Number.parseInt(s, 10) || 0)
+  const pb = bCore.split('.').map((s) => Number.parseInt(s, 10) || 0)
   for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0)
     if (d !== 0) return d
   }
-  return 0
+  if (aPre === bPre) return 0
+  if (aPre === '') return 1
+  if (bPre === '') return -1
+  return aPre < bPre ? -1 : 1
 }
 
 function betterThan(a: SklSource, b: SklSource): boolean {

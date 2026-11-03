@@ -15,7 +15,9 @@ import {
   grantGuardDecision,
   grantMatches,
   loadDatasetFromArgs,
+  loadToolPackage,
   projectByContract,
+  projectPackageList,
   readToolContracts,
   renderRunText,
   renderScenarioList,
@@ -347,4 +349,53 @@ test('知识上传：packageId 必须是工作区真实包（name@version）', (
   expectCode(() => requireExistingPackage(versions, 'aml-analysis'), 'INVALID_ARGS')
   expectCode(() => requireExistingPackage(versions, '@1.0.0'), 'INVALID_ARGS')
   expectCode(() => requireExistingPackage(versions, ''), 'INVALID_ARGS')
+})
+
+test('list_packages 输出投影：不回显 dir 等服务端路径', () => {
+  const projected = projectPackageList([
+    {
+      name: 'aml-analysis',
+      version: '1.0.0',
+      status: 'ISSUED',
+      domain: 'AML',
+      dir: 'D:\\secret\\workspace\\aml\\1.0.0',
+    },
+    { name: 'med-analysis', version: '1.0.0', status: 'DRAFT', domain: 'MED', dir: '/srv/ws/med/1.0.0' },
+  ])
+  assert.deepEqual(projected, [
+    { name: 'aml-analysis', version: '1.0.0', status: 'ISSUED', domain: 'AML' },
+    { name: 'med-analysis', version: '1.0.0', status: 'DRAFT', domain: 'MED' },
+  ])
+  for (const p of projected) assert.equal('dir' in p, false)
+})
+
+test('收权：空类型段（:inst）与空串永不命中，即使条目 grantScope 缺省', () => {
+  const malformed = projectByContract({ id: 'TOOL-X', grantScope: '', objectId: '' })
+  assert.equal(grantMatches(malformed, ':inst'), false)
+  assert.equal(grantMatches(malformed, ''), false)
+  const ok = projectByContract({ id: 'TOOL-Y', grantScope: 'OBJ-AML-ACCOUNT' })
+  assert.equal(grantMatches(ok, 'OBJ-AML-ACCOUNT:x'), true)
+  assert.equal(grantMatches(ok, 'OBJ-NOPE:x'), false)
+
+  const contracts = readToolContracts(AML_DIR)
+  assert.match(
+    grantGuardDecision(
+      'list_tool_contracts',
+      { objectRef: ':x', name: 'aml-analysis', version: '1.0.0' },
+      () => contracts,
+    ),
+    /OBJECT_NOT_GRANTED/,
+  )
+})
+
+test('包加载：失败不回显底层路径，统一 NOT_FOUND', () => {
+  const ws = { versionDir: (n, v) => `D:\\secret\\workspace\\${n}\\${v}` }
+  try {
+    loadToolPackage(ws, 'no-such', '9.9.9')
+    assert.fail('期望抛出 NOT_FOUND')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError, `期望 AgentToolError，得到 ${e}`)
+    assert.equal(e.code, 'NOT_FOUND')
+    assert.ok(!e.message.includes('D:\\secret'), `不应泄露底层路径: ${e.message}`)
+  }
 })

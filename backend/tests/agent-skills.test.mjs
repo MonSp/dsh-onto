@@ -78,3 +78,11 @@ test('provider 扫描：aml/med 包均返回 skl-* skill', () => {
   assert.ok(names.includes('skl-med-narrative'), `med skill 缺失: ${names}`)
   for (const n of names) assert.match(n, /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
 })
+
+test('版本去重：预发布版本排在同号正式版之前（1.0.0-rc1 < 1.0.0）', () => {
+  const tpl = (id) => ({ id, name: id, weights: {} })
+  const pre = { versionDir: '/a/1.0.0-rc1', status: 'DRAFT', version: '1.0.0-rc1', template: tpl('SKL-AML-N') }
+  const rel = { versionDir: '/a/1.0.0', status: 'DRAFT', version: '1.0.0', template: tpl('SKL-AML-N') }
+  assert.equal(pickSkillSources([pre, rel]).get('SKL-AML-N').version, '1.0.0')
+  assert.equal(pickSkillSources([rel, pre]).get('SKL-AML-N').version, '1.0.0')
+})

@@ -20,7 +20,7 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
 **Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 61/61 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 20/20 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 26/26 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
