@@ -69,10 +69,16 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
   }
   // 元素级形状：下游 assertDatasetGranted 与 core 会解引用 id/type/from/to——
   // 畸形元素必须落 INVALID_ARGS 受控错误面，不得裸抛 TypeError。
+  // 实例 id 重复会使收权解析歧义（同 id 异型可伪托已收权类型），一律拒绝。
+  const seenObjectIds = new Set<string>()
   for (const o of objects) {
     if (!isRecord(o) || typeof o.id !== 'string' || typeof o.type !== 'string') {
       throw new AgentToolError('INVALID_ARGS', 'object 需要字符串 id 与 type')
     }
+    if (seenObjectIds.has(o.id)) {
+      throw new AgentToolError('INVALID_ARGS', `object 实例 ID 重复: ${o.id}`)
+    }
+    seenObjectIds.add(o.id)
   }
   for (const r of relations) {
     if (
@@ -148,8 +154,9 @@ export function assertRunContract(result: ScenarioRunResult): void {
     throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: candidates 不是数组')
   }
   for (const c of result.candidates) {
-    if (typeof c.riskScore !== 'number') {
-      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} riskScore 不是数字`)
+    // Number.isFinite 同时拒 NaN/Infinity 与非数字（typeof NaN === 'number'，纯 typeof 拦不住）。
+    if (!Number.isFinite(c.riskScore)) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} riskScore 非有限数`)
     }
     for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks', 'narrative'] as const) {
       if (!Array.isArray(c[key])) {
@@ -198,11 +205,19 @@ export function renderRunText(result: ScenarioRunResult): string {
   const hits = result.audit.forbiddenPhraseHits
   lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
   for (const h of hits) {
-    // 命中短语本身是禁语——渲染文本不得回显（S2.3），只给位置；完整短语在结构化 audit 里供人审。
+    // 命中清单只给位置；完整短语在结构化 audit 里供人审。
     lines.push(`  禁语命中 @ ${h.where}`)
   }
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
-  return lines.join('\n')
+  let text = lines.join('\n')
+  // 命中短语本身是禁语——渲染文本（模型可见面）整体脱敏（S2.3），只留位置；
+  // 叙述/证据/待核实等任何行都不得回显短语本体。
+  for (const h of hits) {
+    if (h.phrase) {
+      text = text.split(h.phrase).join('【禁语已脱敏】')
+    }
+  }
+  return text
 }
 
 /* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */
@@ -339,17 +354,38 @@ export function grantGuardDecision(
 
 /**
  * dataset 收权（run_scenario 双通道解析后、`runScenario` 之前）：
- * `candidates[].objectRef` 先解析到类型（实例 id → `objects[].type`，否则按 `:` 前类型段），
- * 逐条过 grantScope；无法解析或未收权一律拒绝（deny-by-default，不以放行掩盖越权）。
+ * `candidates[].objectRef` 逐条解析到类型后过 grantScope——
+ * - 实例 id（无 `:`）→ `objects[].type`；裸 ref 不在图中按自身匹配（未命中即拒）；
+ * - `TYPE:inst` 形态：实例在图中时**以声明类型为准**，与类型段不符即拒（防伪托）；
+ *   实例不在图中才回退 `:` 前类型段匹配（运行时实例段，如 `OBJ-AML-ACCOUNT:x`）；
+ * - 实例 id 重复（无论同型异型）→ 解析歧义，一律拒绝；
+ * - 无法解析或未收权一律 OBJECT_NOT_GRANTED（deny-by-default，不以放行掩盖越权）。
  * 顶层 args 由 guard 收口、dataset 由本函数收口，两层覆盖全部入参面。
  */
 export function assertDatasetGranted(
   dataset: RuntimeDataset,
   contracts: ToolContractEntry[],
 ): void {
-  const typeByInstanceId = new Map(dataset.objects.map((o) => [o.id, o.type]))
+  // 实例 id → 类型；重复 id 视为解析歧义（同 id 异型可伪托已收权类型），从解析表剔除。
+  const typeByInstanceId = new Map<string, string>()
+  const ambiguousIds = new Set<string>()
+  for (const o of dataset.objects) {
+    if (ambiguousIds.has(o.id)) continue
+    if (typeByInstanceId.has(o.id)) {
+      typeByInstanceId.delete(o.id)
+      ambiguousIds.add(o.id)
+      continue
+    }
+    typeByInstanceId.set(o.id, o.type)
+  }
   for (const c of dataset.candidates) {
-    const subject = typeByInstanceId.get(c.objectRef) ?? grantSubject(c.objectRef)
+    const subject = resolveDatasetSubject(c.objectRef, typeByInstanceId, ambiguousIds)
+    if (subject === undefined) {
+      throw new AgentToolError(
+        'OBJECT_NOT_GRANTED',
+        `dataset 候选 ${c.candidateId} 的 objectRef ${c.objectRef} 解析歧义或类型段与实例声明不符`,
+      )
+    }
     if (checkGrant(contracts, subject) !== undefined) {
       throw new AgentToolError(
         'OBJECT_NOT_GRANTED',
@@ -357,6 +393,33 @@ export function assertDatasetGranted(
       )
     }
   }
+}
+
+/** objectRef → 收权主体；无法安全解析返回 undefined（调用方 deny-by-default）。 */
+function resolveDatasetSubject(
+  objectRef: string,
+  typeByInstanceId: ReadonlyMap<string, string>,
+  ambiguousIds: ReadonlySet<string>,
+): string | undefined {
+  // 完整 ref 命中实例表 → 声明类型（裸实例 id 形态，examples 的 ACCT-001 同此）。
+  const direct = typeByInstanceId.get(objectRef)
+  if (direct !== undefined) return direct
+  if (ambiguousIds.has(objectRef)) return undefined
+  const colon = objectRef.indexOf(':')
+  if (colon >= 0) {
+    const typeSeg = objectRef.slice(0, colon)
+    const inst = objectRef.slice(colon + 1)
+    if (ambiguousIds.has(inst)) return undefined
+    const declared = typeByInstanceId.get(inst)
+    if (declared !== undefined) {
+      // 实例在图中：声明类型是唯一事实；类型段不符即拒（不以放行掩盖越权）。
+      return declared === typeSeg ? declared : undefined
+    }
+    // 实例不在图中：回退类型段匹配（运行时实例段 OBJ-AML-ACCOUNT:x；空类型段永不命中）。
+    return typeSeg === '' ? undefined : typeSeg
+  }
+  // 裸 ref 不在图中：按自身匹配 grantScope（未命中即 deny-by-default）。
+  return objectRef === '' ? undefined : objectRef
 }
 
 /* ───────────────────────── 只读查询投影 ───────────────────────── */

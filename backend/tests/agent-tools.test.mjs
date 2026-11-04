@@ -515,6 +515,14 @@ test('装配断言：null/错型字段拒绝，不产出残缺结果', () => {
 
   const nullNarrative = { ...good, candidates: [{ ...good.candidates[0], narrative: null }] }
   expectCode(() => assertRunContract(nullNarrative), 'INVALID_TOOL_OUTPUT')
+
+  // typeof NaN === 'number'，纯 typeof 拦不住——非有限数一律拒绝（防核心回归）
+  for (const bad of [NaN, Infinity, -Infinity, '0.5', null, undefined]) {
+    expectCode(
+      () => assertRunContract({ ...good, candidates: [{ ...good.candidates[0], riskScore: bad }] }),
+      'INVALID_TOOL_OUTPUT',
+    )
+  }
 })
 
 test('知识上传回执：仅 S2.2 规范字段，不回显 content/packageId/uploadedAt', () => {
@@ -771,6 +779,100 @@ test('dataset 收权：验收样例 aml-run.json 引用全部在收权面内（�
   assertDatasetGranted(dataset, contracts)
 })
 
+// ── 终审修复回归：dataset 收权双旁路（重复 id / 类型段伪托） / NaN 分数 / 禁语整体脱敏 ──
+
+test('dataset 收权：重复实例 id 一律拒绝（同 id 异型不可伪托已收权类型）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const ds = (objects, refs) => ({
+    objects,
+    relations: [],
+    candidates: refs.map((objectRef, i) => ({
+      candidateId: `c${i + 1}`,
+      objectRef,
+      features: {},
+      tags: [],
+    })),
+  })
+  // 同 id 异型：首条未收权、复制品收权——旧实现 Map 后者覆盖前者会放行
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds(
+          [
+            { id: 'g1', type: 'OBJ-NOPE', attrs: {} },
+            { id: 'g1', type: 'OBJ-AML-ACCOUNT', attrs: {} },
+          ],
+          ['g1'],
+        ),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 复制品带类型段形态同样拒绝
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds(
+          [
+            { id: 'g1', type: 'OBJ-NOPE', attrs: {} },
+            { id: 'g1', type: 'OBJ-AML-ACCOUNT', attrs: {} },
+          ],
+          ['OBJ-AML-ACCOUNT:g1'],
+        ),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 单一声明且类型未收权仍拒绝（原行为不回退）
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds([{ id: 'g1', type: 'OBJ-NOPE', attrs: {} }], ['OBJ-AML-ACCOUNT:g1']),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+})
+
+test('dataset 收权：类型段伪托拒绝——实例在图中以声明类型为准，与前缀不符即拒', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const ds = (objects, refs) => ({
+    objects,
+    relations: [],
+    candidates: refs.map((objectRef, i) => ({
+      candidateId: `c${i + 1}`,
+      objectRef,
+      features: {},
+      tags: [],
+    })),
+  })
+  // 实例声明为未收权类型，ref 带已收权类型前缀——伪托放行（旧实现按前缀匹配）
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds([{ id: 'c1', type: 'OBJ-NOPE', attrs: {} }], ['OBJ-AML-ACCOUNT:c1']),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 实例声明为已收权类型但前缀指向另一类型——不一致即拒（不以放行掩盖越权）
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds([{ id: 'c1', type: 'OBJ-AML-CUSTOMER', attrs: {} }], ['OBJ-AML-ACCOUNT:c1']),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 声明类型与前缀一致且已收权——放行
+  assertDatasetGranted(
+    ds([{ id: 'c1', type: 'OBJ-AML-ACCOUNT', attrs: {} }], ['OBJ-AML-ACCOUNT:c1']),
+    contracts,
+  )
+  // 实例不在图中：回退类型段匹配（运行时实例段既有口径）
+  assertDatasetGranted(ds([], ['OBJ-AML-ACCOUNT:x']), contracts)
+})
+
 // ── 第 10 轮修复回归：dataset 元素形状 / excluded 契约 / 禁语渲染脱敏 / 内联 e2e ──
 
 test('dataset 形状：objects/relations/behaviors 畸形元素落 INVALID_ARGS（不裸抛 TypeError）', () => {
@@ -800,6 +902,34 @@ test('dataset 形状：objects/relations/behaviors 畸形元素落 INVALID_ARGS�
   assert.equal(ok.objects.length, 1)
 })
 
+test('dataset 形状：object 实例 ID 重复一律拒绝（收权解析歧义，INVALID_ARGS）', () => {
+  expectCode(
+    () =>
+      validateDatasetShape({
+        objects: [
+          { id: 'g1', type: 'OBJ-NOPE' },
+          { id: 'g1', type: 'OBJ-AML-ACCOUNT' },
+        ],
+        relations: [],
+        candidates: [],
+      }),
+    'INVALID_ARGS',
+  )
+  // 同型重复同样拒绝（图中 id 必须唯一）
+  expectCode(
+    () =>
+      validateDatasetShape({
+        objects: [
+          { id: 'g1', type: 'OBJ-AML-ACCOUNT' },
+          { id: 'g1', type: 'OBJ-AML-ACCOUNT' },
+        ],
+        relations: [],
+        candidates: [],
+      }),
+    'INVALID_ARGS',
+  )
+})
+
 test('装配断言：excluded 形状校验（非数组/畸形条目即 INVALID_TOOL_OUTPUT）', () => {
   const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
@@ -809,7 +939,7 @@ test('装配断言：excluded 形状校验（非数组/畸形条目即 INVALID_T
   expectCode(() => assertRunContract({ ...good, excluded: [{ candidateId: 'x' }] }), 'INVALID_TOOL_OUTPUT')
 })
 
-test('renderRunText：禁语命中时渲染文本脱敏（不回显短语），排除行在场', () => {
+test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行），排除行在场', () => {
   const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
   const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   const text = renderRunText(result)
@@ -819,20 +949,42 @@ test('renderRunText：禁语命中时渲染文本脱敏（不回显短语），�
     assert.ok(text.includes(`排除: ${x.candidateId}（${x.ruleId}）`), `渲染应含排除行: ${x.candidateId}`)
   }
   assert.ok(result.excluded.some((x) => x.candidateId === 'CAND-003'), '验收样例应排除 CAND-003')
-  // 命中>0：渲染脱敏（不回显短语），命中数与位置在场；结构化 audit 保留完整短语供人审
+  // 真实命中形态：短语在 narrative/evidence 里（特征插值/模板回填），命中登记指向这些位置——
+  // 渲染文本（模型可见面）必须整体脱敏，结构化结果保留原文供人审。
   const hitPhrase = '确定为洗钱'
   const hit = {
     ...result,
+    candidates: result.candidates.map((c, i) =>
+      i === 0
+        ? {
+            ...c,
+            narrative: [...c.narrative, `本条叙述${hitPhrase}`],
+            evidenceChains: [
+              ...c.evidenceChains,
+              { ruleId: 'RULE-AML-SCORE-FANOUT', score: 0.5, evidence: `证据${hitPhrase}` },
+            ],
+          }
+        : c,
+    ),
     audit: {
       ...result.audit,
-      forbiddenPhraseHits: [{ phrase: hitPhrase, where: 'candidates[0].narrative[0]' }],
+      forbiddenPhraseHits: [
+        { phrase: hitPhrase, where: 'candidates[0].narrative[0]' },
+        { phrase: hitPhrase, where: 'candidates[0].evidenceChains[0].evidence' },
+      ],
     },
   }
   const hitText = renderRunText(hit)
-  assert.ok(!hitText.includes(hitPhrase), '渲染文本不得回显禁语短语')
-  assert.match(hitText, /禁语扫描: 1 命中/)
+  assert.ok(!hitText.includes(hitPhrase), '渲染文本不得回显禁语短语（叙述/证据行也须脱敏）')
+  assert.ok(hitText.includes('【禁语已脱敏】'), '脱敏标记在场')
+  assert.match(hitText, /禁语扫描: 2 命中/)
   assert.match(hitText, /禁语命中 @ candidates\[0\]\.narrative\[0\]/)
+  // 结构化侧保留完整短语与原文供人审（S2.3：完整短语在 structured audit 里）
   assert.equal(hit.audit.forbiddenPhraseHits[0].phrase, hitPhrase)
+  assert.ok(
+    hit.candidates[0].narrative.some((n) => n.includes(hitPhrase)),
+    '结构化 narrative 保留原文供人审',
+  )
 })
 
 test('端到端：内联 dataset 走 runScenario 与 datasetPath 同契约', () => {
