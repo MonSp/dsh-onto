@@ -16,6 +16,7 @@ import {
   grantMatches,
   loadDatasetFromArgs,
   loadToolPackage,
+  pickContracts,
   projectByContract,
   projectPackageList,
   readToolContracts,
@@ -26,9 +27,19 @@ import {
   scenarioCatalog,
   sourceSummary,
   summarizePackage,
+  uploadKnowledgeForPkg,
   validateDatasetShape,
+  wrapRunError,
 } from '../dist/agent-tools.js'
-import { KnowledgeStore, loadPackage, runScenario } from '@dsh-onto/core'
+import {
+  HeuristicLlm,
+  KnowledgeStore,
+  dumpYaml,
+  loadPackage,
+  loadYaml,
+  runScenario,
+  sha256Text,
+} from '@dsh-onto/core'
 
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
 const AML_RUN = fileURLToPath(new URL('../../examples/aml-run.json', import.meta.url))
@@ -338,12 +349,13 @@ test('收权：objectRef 实例段（TYPE:inst）按类型段判定，未收权�
   )
 })
 
-test('知识上传：packageId 必须是工作区真实包（name@version）', () => {
+test('知识上传：packageId 必须是工作区真实包（name@version），返回裸包名', () => {
   const versions = [
     { name: 'aml-analysis', version: '1.0.0' },
     { name: 'med-analysis', version: '1.0.0' },
   ]
-  requireExistingPackage(versions, 'aml-analysis@1.0.0')
+  assert.equal(requireExistingPackage(versions, 'aml-analysis@1.0.0'), 'aml-analysis')
+  assert.equal(requireExistingPackage(versions, 'med-analysis@1.0.0'), 'med-analysis')
   expectCode(() => requireExistingPackage(versions, 'nope@1.0.0'), 'NOT_FOUND')
   expectCode(() => requireExistingPackage(versions, 'aml-analysis@9.9.9'), 'NOT_FOUND')
   expectCode(() => requireExistingPackage(versions, 'aml-analysis'), 'INVALID_ARGS')
@@ -434,6 +446,18 @@ test('收权：contracts 读取失败时拒绝原因保留 DERIVED_DRIFT 码', (
   assert.match(denial, /^DERIVED_DRIFT: /)
 })
 
+test('收权：非 AgentToolError 回退不回显底层 message', () => {
+  const denial = grantGuardDecision(
+    'list_tool_contracts',
+    { objectId: 'OBJ-AML-ACCOUNT', name: 'aml-analysis', version: '1.0.0' },
+    () => {
+      throw new Error('D:\\secret\\path\\to\\file')
+    },
+  )
+  assert.match(denial, /^UNKNOWN_ERROR/)
+  assert.ok(!denial.includes('D:\\secret'), `不应泄露底层路径: ${denial}`)
+})
+
 test('收权：多级实例段 TYPE:a:b 按首个冒号前类型段判定', () => {
   const contracts = readToolContracts(AML_DIR)
   const reader = () => contracts
@@ -470,6 +494,9 @@ test('装配断言：null/错型字段拒绝，不产出残缺结果', () => {
 
   const nullChains = { ...good, candidates: [{ ...good.candidates[0], evidenceChains: null }] }
   expectCode(() => assertRunContract(nullChains), 'INVALID_TOOL_OUTPUT')
+
+  const nullNarrative = { ...good, candidates: [{ ...good.candidates[0], narrative: null }] }
+  expectCode(() => assertRunContract(nullNarrative), 'INVALID_TOOL_OUTPUT')
 })
 
 test('知识上传回执：仅 S2.2 规范字段，不回显 content/packageId/uploadedAt', () => {
@@ -499,5 +526,187 @@ test('dataset 错误回显调用方原文，不回显 resolve 后绝对路径', 
     assert.equal(e.code, 'INVALID_ARGS')
     assert.ok(e.message.includes(rel), `应回显调用方原文: ${e.message}`)
     assert.ok(!/^[A-Za-z]:\\/.test(e.message.split(': ').pop()), `不应含盘符绝对路径: ${e.message}`)
+  }
+})
+
+test('知识上传全链路：name@version 入参 → 裸名入库 → 解析 → 物化不被 package mismatch 拒绝', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-chain-'))
+  try {
+    const pkgDir = join(tmp, 'pkg')
+    cpSync(AML_DIR, pkgDir, { recursive: true })
+    const store = new KnowledgeStore(join(tmp, 'know'))
+    const versions = [{ name: 'aml-analysis', version: '1.0.0' }]
+    const src = uploadKnowledgeForPkg(store, versions, {
+      packageId: 'aml-analysis@1.0.0',
+      sourceType: 'POLICY',
+      name: '风控红线',
+      content: '不得进行高风险转账',
+    })
+    // 入库 packageId 为裸名：工作台按裸名可见，name@version 不命中
+    assert.equal(src.packageId, 'aml-analysis')
+    assert.equal(store.listSources('aml-analysis').length, 1)
+    assert.equal(store.listSources('aml-analysis@1.0.0').length, 0)
+    // 解析（启发式）→ 候选继承裸名 packageId
+    const { added } = await store.parseSource(src.id, new HeuristicLlm())
+    assert.ok(added.length > 0, '启发式应至少解析出一条候选')
+    for (const c of added) assert.equal(c.packageId, 'aml-analysis')
+    // 人审批准 → 物化到包副本：不得出现 package mismatch
+    for (const c of added) store.reviewCandidate(c.id, 'approve')
+    const ids = added.map((c) => c.id)
+    const result = store.materialize(pkgDir, ids)
+    assert.ok(result.applied.length > 0, `应有候选物化成功: ${JSON.stringify(result.skipped)}`)
+    assert.ok(
+      result.skipped.every((s) => !s.reason.includes('package mismatch')),
+      `不应 package mismatch: ${JSON.stringify(result.skipped)}`,
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('收权：idRules 顶层按 objectId join 进条目（S2.2/S2.4 承诺 idRule）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const objContracts = contracts.filter((c) => c.objectId !== undefined)
+  assert.ok(objContracts.length > 0)
+  for (const c of objContracts) {
+    assert.equal(typeof c.idRule, 'string', `${c.id} 应携带 idRule`)
+    assert.match(c.idRule, /<\w+>/)
+  }
+  // relation 条目不在 idRules（derive 只映射 objects）→ 不 join
+  const relContracts = contracts.filter((c) => c.relationId !== undefined)
+  assert.ok(relContracts.length > 0)
+  for (const c of relContracts) assert.equal(c.idRule, undefined)
+})
+
+test('list_tool_contracts 过滤：与 guard 同口径（null 未提供、非法拒绝）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  assert.equal(pickContracts(contracts, null).length, contracts.length)
+  assert.equal(pickContracts(contracts, undefined).length, contracts.length)
+  expectCode(() => pickContracts(contracts, 123), 'OBJECT_NOT_GRANTED')
+  expectCode(() => pickContracts(contracts, ''), 'OBJECT_NOT_GRANTED')
+  const picked = pickContracts(contracts, 'OBJ-AML-ACCOUNT')
+  assert.ok(picked.length > 0)
+  assert.ok(picked.every((c) => grantMatches(c, 'OBJ-AML-ACCOUNT')))
+})
+
+test('run_scenario 错误包装：保留错误码、剥离绝对 versionDir', () => {
+  const dir = 'D:\\secret\\workspace\\aml\\1.0.0'
+  const e = Object.assign(new Error(`missing package.yaml meta in ${dir}`), {
+    code: 'PACKAGE_MALFORMED',
+  })
+  const wrapped = wrapRunError(e, dir)
+  assert.ok(wrapped instanceof AgentToolError, `期望 AgentToolError，得到 ${wrapped}`)
+  assert.equal(wrapped.code, 'PACKAGE_MALFORMED')
+  assert.ok(!wrapped.message.includes('D:\\secret'), `不应泄露路径: ${wrapped.message}`)
+  assert.ok(wrapped.message.includes('<pkg>'))
+  // 非 Error / 无 code → RUN_FAILED
+  assert.equal(wrapRunError('boom', dir).code, 'RUN_FAILED')
+  // 不含 versionDir 的业务语义原样保留
+  const nf = Object.assign(new Error('场景不存在: SCN-X'), { code: 'SCENARIO_NOT_FOUND' })
+  assert.equal(wrapRunError(nf, dir).message, '场景不存在: SCN-X')
+})
+
+test('list_packages 输出投影：同包多版本按 semver 升序（1.9.0 先于 1.10.0）', () => {
+  const projected = projectPackageList([
+    { name: 'x', version: '1.10.0', status: 'DRAFT', domain: 'D' },
+    { name: 'x', version: '1.9.0', status: 'DRAFT', domain: 'D' },
+    { name: 'x', version: '1.2.0', status: 'DRAFT', domain: 'D' },
+    { name: 'a', version: '2.0.0', status: 'DRAFT', domain: 'D' },
+  ])
+  assert.deepEqual(
+    projected.map((p) => `${p.name}@${p.version}`),
+    ['a@2.0.0', 'x@1.2.0', 'x@1.9.0', 'x@1.10.0'],
+  )
+})
+
+test('数据双通道：内联 dataset 形态通过校验，坏形态拒绝', () => {
+  const ds = loadDatasetFromArgs({ dataset: { objects: [], relations: [], candidates: [] } })
+  assert.deepEqual(ds.candidates, [])
+  expectCode(() => loadDatasetFromArgs({ dataset: { objects: [] } }), 'INVALID_ARGS')
+  expectCode(() => loadDatasetFromArgs({ dataset: 'not-an-object' }), 'INVALID_ARGS')
+})
+
+test('数据形状校验：features 缺失与 tags 错型拒绝', () => {
+  const base = {
+    objects: [],
+    relations: [],
+    candidates: [{ candidateId: 'c1', objectRef: 'OBJ:x' }],
+  }
+  expectCode(() => validateDatasetShape(base), 'INVALID_ARGS')
+  expectCode(
+    () =>
+      validateDatasetShape({
+        ...base,
+        candidates: [{ candidateId: 'c1', objectRef: 'OBJ:x', features: null }],
+      }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () =>
+      validateDatasetShape({
+        ...base,
+        candidates: [{ candidateId: 'c1', objectRef: 'OBJ:x', features: {}, tags: 'x' }],
+      }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () =>
+      validateDatasetShape({
+        ...base,
+        candidates: [{ candidateId: 'c1', objectRef: 'OBJ:x', features: {}, tags: [1] }],
+      }),
+    'INVALID_ARGS',
+  )
+  const ok = validateDatasetShape({
+    ...base,
+    candidates: [{ candidateId: 'c1', objectRef: 'OBJ:x', features: {}, tags: ['a'] }],
+  })
+  assert.equal(ok.candidates.length, 1)
+})
+
+test('装配断言：candidates 非数组与 pendingChecks 错型拒绝', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  expectCode(() => assertRunContract({ ...good, candidates: 'not-array' }), 'INVALID_TOOL_OUTPUT')
+  const nullPending = {
+    ...good,
+    candidates: [{ ...good.candidates[0], pendingChecks: null }],
+  }
+  expectCode(() => assertRunContract(nullPending), 'INVALID_TOOL_OUTPUT')
+})
+
+test('规则口径：排除规则可按 id 取档', () => {
+  const pkg = loadPackage(AML_DIR)
+  const all = ruleDossier(pkg)
+  assert.ok(all.exclusionRules.length > 0, 'aml 包应有排除规则')
+  const excl = all.exclusionRules[0]
+  const one = ruleDossier(pkg, excl.id)
+  assert.equal(one.rule.id, excl.id)
+  assert.equal(one.rule.kind, 'exclusion')
+})
+
+test('收权：门禁通过后 tool-contracts 解析失败 → DERIVED_DRIFT 且不泄路径', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-tc-'))
+  try {
+    cpSync(AML_DIR, tmp, { recursive: true })
+    const tcPath = join(tmp, 'derived/tool-contracts/tool-contracts.yaml')
+    const bad = 'tools: [unclosed'
+    writeFileSync(tcPath, bad, 'utf8')
+    // 同步 manifest 指纹使门禁通过（模拟门禁后不可解析的 TOCTOU 等价态）
+    const manPath = join(tmp, 'derived/manifest.yaml')
+    const man = loadYaml(readFileSync(manPath, 'utf8'))
+    const entry = man.derived.find((d) => d.path.includes('tool-contracts'))
+    entry.sha256 = sha256Text(bad)
+    writeFileSync(manPath, dumpYaml(man), 'utf8')
+    try {
+      readToolContracts(tmp)
+      assert.fail('期望 DERIVED_DRIFT')
+    } catch (err) {
+      assert.ok(err instanceof AgentToolError, `期望 AgentToolError，得到 ${err}`)
+      assert.equal(err.code, 'DERIVED_DRIFT')
+      assert.ok(!err.message.includes(tmp), `不应泄露路径: ${err.message}`)
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
   }
 })

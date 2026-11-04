@@ -27,6 +27,7 @@ import {
   type SourceType,
 } from '@dsh-onto/core'
 import { resolveDataDir } from './services.js'
+import { compareVersions } from './agent-skills.js'
 
 /** 工具层错误；message 直接面向模型，code 供测试与断言。 */
 export class AgentToolError extends Error {
@@ -121,7 +122,7 @@ export function assertRunContract(result: ScenarioRunResult): void {
     if (typeof c.riskScore !== 'number') {
       throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} riskScore 不是数字`)
     }
-    for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks'] as const) {
+    for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks', 'narrative'] as const) {
       if (!Array.isArray(c[key])) {
         throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} ${key} 不是数组`)
       }
@@ -195,18 +196,26 @@ export function projectByContract(raw: unknown): ToolContractEntry {
   return entry
 }
 
-/** 读取派生收权清单；先过加载门禁，漂移即拒绝。 */
+/** 读取派生收权清单；先过加载门禁，漂移即拒绝。顶层 `idRules` 按 objectId join 进条目（derive 实际格式）。 */
 export function readToolContracts(versionDir: string): ToolContractEntry[] {
   const gate = verifyDerived(versionDir)
   if (!gate.ok) {
     throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
   }
   let tools: unknown[]
+  let idRules: Array<{ objectId: string; idRule: string | null }> = []
   try {
     const raw = loadYaml(readFileSync(join(versionDir, DERIVED_FILES.toolContracts), 'utf8')) as {
       tools?: unknown[]
+      idRules?: unknown[]
     }
     tools = Array.isArray(raw?.tools) ? raw.tools : []
+    idRules = Array.isArray(raw?.idRules)
+      ? raw.idRules.flatMap((r) => {
+          if (!isRecord(r) || typeof r.objectId !== 'string') return []
+          return [{ objectId: r.objectId, idRule: r.idRule === null ? null : String(r.idRule ?? '') }]
+        })
+      : []
   } catch (e) {
     // 门禁通过后仍失败（如 TOCTOU 删文件）：按不可加载处理；只回错误码，
     // 不拼 e.message（ENOENT 的 message 含全路径）。
@@ -216,7 +225,14 @@ export function readToolContracts(versionDir: string): ToolContractEntry[] {
         : ''
     throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: tool-contracts 不可读${code ? `（${code}）` : ''}`)
   }
-  return tools.map(projectByContract)
+  const idRuleByObject = new Map(idRules.map((r) => [r.objectId, r.idRule]))
+  return tools.map((t) => {
+    const entry = projectByContract(t)
+    if (entry.idRule === undefined && entry.objectId !== undefined && idRuleByObject.has(entry.objectId)) {
+      entry.idRule = idRuleByObject.get(entry.objectId) ?? null
+    }
+    return entry
+  })
 }
 
 /** grant 判定的主体：运行时引用带实例段（`OBJ-AML-ACCOUNT:x`），收权是对象粒度，按类型段匹配。 */
@@ -271,11 +287,40 @@ export function grantGuardDecision(
   } catch (e) {
     // 保留机器可读错误码（如 DERIVED_DRIFT），拒绝语义不丢码。
     if (e instanceof AgentToolError) return `${e.code}: ${e.message}`
-    return e instanceof Error ? e.message : String(e)
+    return 'UNKNOWN_ERROR: 收权清单读取失败'
   }
 }
 
 /* ───────────────────────── 只读查询投影 ───────────────────────── */
+
+/**
+ * list_tool_contracts 过滤：与 guard 同口径——null/undefined 视为未提供（返回全部）；
+ * 非法值拒绝，不静默退化。
+ */
+export function pickContracts(
+  contracts: ToolContractEntry[],
+  objectId: unknown,
+): ToolContractEntry[] {
+  if (objectId === undefined || objectId === null) return contracts
+  if (typeof objectId !== 'string' || objectId.length === 0) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', 'objectId 非法（须为非空字符串）')
+  }
+  return contracts.filter((c) => grantMatches(c, objectId))
+}
+
+/**
+ * core 场景执行异常 → 工具错误：保留机器码与业务语义，
+ * 但剥离 message 中的绝对 versionDir（不回显服务端路径）。
+ */
+export function wrapRunError(e: unknown, versionDir: string): AgentToolError {
+  const code =
+    e instanceof Error && 'code' in e && typeof (e as { code?: unknown }).code === 'string'
+      ? (e as { code: string }).code
+      : 'RUN_FAILED'
+  const raw = e instanceof Error ? e.message : String(e)
+  const msg = raw.includes(versionDir) ? raw.split(versionDir).join('<pkg>') : raw
+  return new AgentToolError(code, msg)
+}
 
 export function summarizePackage(pkg: OntologyPackage): Record<string, unknown> {
   return {
@@ -299,11 +344,13 @@ export function summarizePackage(pkg: OntologyPackage): Record<string, unknown> 
   }
 }
 
-/** list_packages 输出投影：只保留四字段，不回显 dir 等服务端路径（S2.2 规范值）。 */
+/** list_packages 输出投影：只保留四字段，不回显 dir 等服务端路径（S2.2 规范值）；按包名 + semver 版本序排列。 */
 export function projectPackageList(
   versions: ReadonlyArray<{ name: string; version: string; status: string; domain: string; dir?: string }>,
 ): Array<{ name: string; version: string; status: string; domain: string }> {
-  return versions.map((v) => ({ name: v.name, version: v.version, status: v.status, domain: v.domain }))
+  return versions
+    .map((v) => ({ name: v.name, version: v.version, status: v.status, domain: v.domain }))
+    .sort((a, b) => (a.name === b.name ? compareVersions(a.version, b.version) : a.name < b.name ? -1 : 1))
 }
 
 export function ruleDossier(pkg: OntologyPackage, ruleId?: string): Record<string, unknown> {
@@ -359,11 +406,15 @@ export function sourceSummary(rec: KnowledgeSourceRecord): Record<string, unknow
   }
 }
 
-/** packageId（`name@version`）必须是工作区真实包；格式错 → INVALID_ARGS，不存在 → NOT_FOUND。 */
+/**
+ * packageId（`name@version`）必须是工作区真实包；格式错 → INVALID_ARGS，不存在 → NOT_FOUND。
+ * 返回裸包名：知识管线（parse → 候选 → materialize）与工作台 listSources 均按
+ * `meta.name` 裸名比对，入库带 `@version` 会恒判 package mismatch（S2.6 闭环）。
+ */
 export function requireExistingPackage(
   versions: ReadonlyArray<{ name: string; version: string }>,
   packageId: string,
-): void {
+): string {
   const at = packageId.lastIndexOf('@')
   const name = at > 0 ? packageId.slice(0, at) : ''
   const version = at > 0 ? packageId.slice(at + 1) : ''
@@ -373,6 +424,17 @@ export function requireExistingPackage(
   if (!versions.some((v) => v.name === name && v.version === version)) {
     throw new AgentToolError('NOT_FOUND', `包不存在: ${packageId}`)
   }
+  return name
+}
+
+/** 知识上传（工具面薄封装）：入参 `name@version` 校验存在性，入库 packageId 归一为裸包名。 */
+export function uploadKnowledgeForPkg(
+  knowledge: KnowledgeStore,
+  versions: ReadonlyArray<{ name: string; version: string }>,
+  input: { packageId: string; sourceType: SourceType; name: string; content: string },
+): KnowledgeSourceRecord {
+  const packageName = requireExistingPackage(versions, input.packageId)
+  return knowledge.uploadSource({ ...input, packageId: packageName })
 }
 
 /** 包加载（工具面）：失败不回显底层路径，统一 NOT_FOUND。 */
@@ -526,11 +588,7 @@ export function apply(ctx: Context): void {
       },
       async execute(args) {
         const contracts = readToolContracts(ws.versionDir(args.name, args.version))
-        const picked =
-          args.objectId === undefined
-            ? contracts
-            : contracts.filter((c) => grantMatches(c, args.objectId as string))
-        return toolOut({ contracts: picked })
+        return toolOut({ contracts: pickContracts(contracts, args.objectId) })
       },
     }),
   )
@@ -591,7 +649,13 @@ export function apply(ctx: Context): void {
       },
       async execute(args) {
         const dataset = loadDatasetFromArgs(args)
-        const result = runScenario(ws.versionDir(args.name, args.version), args.scenarioId, dataset)
+        const versionDir = ws.versionDir(args.name, args.version)
+        let result: ScenarioRunResult
+        try {
+          result = runScenario(versionDir, args.scenarioId, dataset)
+        } catch (e) {
+          throw wrapRunError(e, versionDir)
+        }
         assertRunContract(result)
         return result as never
       },
@@ -624,8 +688,7 @@ export function apply(ctx: Context): void {
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
       async execute(args) {
-        requireExistingPackage(ws.listVersions(), args.packageId)
-        const source = knowledge.uploadSource({
+        const source = uploadKnowledgeForPkg(knowledge, ws.listVersions(), {
           packageId: args.packageId,
           sourceType: args.sourceType as SourceType,
           name: args.name,

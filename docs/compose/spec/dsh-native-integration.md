@@ -20,20 +20,27 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
 **Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 61/61 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 36/36 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 48/48 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
 `run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
 工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
-禁语扫描 0 命中（通过）、三层闭合 passed。评审五轮：首轮 2 critical + 2 major 修复后
+禁语扫描 0 命中（通过）、三层闭合 passed。评审七轮：首轮 2 critical + 2 major 修复后
 复审 PASS，并关死双字段 guard 残余旁路；第三轮补 skill 目录失效漏 fork/transition/
 createPackage 写路径、upload_knowledge_source packageId 存在性校验、
 readToolContracts 错误包装、objectRef 实例段按类型段判定；第四轮补 list_packages
 输出投影、空 subject 授权匹配、prerelease 版本序、加载错误路径回显；第五轮清零
 9 项 minor（guard 非法参数拒绝、装配断言类型锐度、错误路径回显口径统一、
 guard 保留 DERIVED_DRIFT 码、回执字段对齐 S2.2、prerelease 标识符数值序、
-skillNameFromId 空 id 兜底、locator workspace 包容断言）并补测试缺口。
+skillNameFromId 空 id 兜底、locator workspace 包容断言）并补测试缺口；
+第六轮修 locator 畸形输入防御（locatorInWorkspace 非字符串直接拒绝 +
+get() 窄化校验）、装配断言补 narrative 数组、guard catch 非 AgentToolError
+回退不回显底层 message；第七轮修 major 级 packageId 口径断层
+（upload 入参 `name@version` 校验存在性、入库归一为裸包名，打通上传→解析→
+物化闭环）与 idRule 顶层 join（readToolContracts 按 objectId 并入条目）、
+guard/execute null 口径统一（pickContracts）、run_scenario 错误包装剥绝对路径
+（wrapRunError）、list_packages semver 排序，并补全链路与真空测试至 48 项。
 
 ## [S1] Problem
 
@@ -134,7 +141,10 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 
 - `upload_knowledge_source` = `KnowledgeStore.uploadSource` 薄封装（sha256 幂等、五类
   sourceType）；只上传草稿原料，**原料永不直写包**（§5.3 硬规则不变）。
-  `packageId` 须为工作区真实包的 `name@version`（`requireExistingPackage`），避免落孤儿草稿。
+  入参 `packageId` 须为工作区真实包的 `name@version`（`requireExistingPackage`，避免落
+  孤儿草稿）；**入库归一为裸包名**（`meta.name`）——知识管线（parseSource → 候选 →
+  materialize）与工作台 `listSources` 过滤均按裸名比对，带 `@version` 入库会恒判
+  package mismatch、上传→物化闭环断裂（第七轮 major 修复）。
 - LLM 解析（parseSource）、人审（reviewCandidate）、物化（materialize）留在工作台 wire，
   不进工具面。
 - 返回摘要不回显 content（大块敏感数据不进模型上下文，§12.3）。

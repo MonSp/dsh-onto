@@ -64,7 +64,8 @@ function comparePrerelease(a: string, b: string): number {
   return 0
 }
 
-function compareVersions(a: string, b: string): number {
+/** semver 式版本比较（数字段数值序、预发布低于正式版）；skills 去重与 list_packages 展示序共用。 */
+export function compareVersions(a: string, b: string): number {
   const [aCore, aPre] = splitPrerelease(a)
   const [bCore, bPre] = splitPrerelease(b)
   const pa = aCore.split('.').map((s) => Number.parseInt(s, 10) || 0)
@@ -117,9 +118,19 @@ export function collectSkillSources(
 
 /** locator.versionDir 必须落在 workspace 内（防御纵深：registry 回放契约之外再拦一层）。 */
 export function locatorInWorkspace(versionDir: string, wsRoot: string): boolean {
+  if (typeof versionDir !== 'string' || versionDir === '') return false
   const rel = relative(resolve(wsRoot), resolve(versionDir))
   if (rel === '' || isAbsolute(rel)) return false
   return rel.split(/[\\/]/)[0] !== '..'
+}
+
+/** skill locator 窄化：畸形输入返回 undefined，不裸抛 TypeError（get() 前置校验）。 */
+export function parseSkillLocator(locator: unknown): { versionDir: string; sklId: string } | undefined {
+  if (locator === undefined || locator === null || typeof locator !== 'object') return undefined
+  const versionDir = (locator as { versionDir?: unknown }).versionDir
+  const sklId = (locator as { sklId?: unknown }).sklId
+  if (typeof versionDir !== 'string' || typeof sklId !== 'string') return undefined
+  return { versionDir, sklId }
 }
 
 /** skill 正文：模板口径 + 红线声明。 */
@@ -196,15 +207,17 @@ export function apply(ctx: Context): void {
         return out
       },
       async get(candidate: SkillCandidate): Promise<SkillDefinition | undefined> {
-        const locator = candidate.locator as { versionDir: string; sklId: string }
-        if (!locatorInWorkspace(locator.versionDir, wsRoot)) return undefined
+        const loc = parseSkillLocator(candidate.locator)
+        if (loc === undefined) return undefined
+        const { versionDir, sklId } = loc
+        if (!locatorInWorkspace(versionDir, wsRoot)) return undefined
         let pkg: OntologyPackage
         try {
-          pkg = loadPackage(locator.versionDir)
+          pkg = loadPackage(versionDir)
         } catch {
           return undefined
         }
-        const template = pkg.skillTemplates.find((t) => t.id === locator.sklId)
+        const template = pkg.skillTemplates.find((t) => t.id === sklId)
         if (template === undefined) return undefined
         return {
           name: candidate.name,

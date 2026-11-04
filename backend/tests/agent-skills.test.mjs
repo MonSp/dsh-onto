@@ -8,6 +8,7 @@ import { loadPackage } from '@dsh-onto/core'
 import {
   collectSkillSources,
   locatorInWorkspace,
+  parseSkillLocator,
   pickSkillSources,
   renderSkillBody,
   skillNameFromId,
@@ -114,6 +115,25 @@ test('locator：versionDir 必须落在 workspace 内', () => {
   assert.equal(locatorInWorkspace('/other/pkg', '/ws'), false)
   assert.equal(locatorInWorkspace('/ws/../etc', '/ws'), false)
   assert.equal(locatorInWorkspace('/wsfoo/pkg', '/ws'), false)
+  // 非字符串 / 空串输入直接拒绝，不抛 TypeError
+  assert.equal(locatorInWorkspace(undefined, '/ws'), false)
+  assert.equal(locatorInWorkspace(null, '/ws'), false)
+  assert.equal(locatorInWorkspace(123, '/ws'), false)
+  assert.equal(locatorInWorkspace('', '/ws'), false)
+})
+
+test('locator 窄化：畸形输入返回 undefined，合法输入解构出字段', () => {
+  assert.equal(parseSkillLocator(undefined), undefined)
+  assert.equal(parseSkillLocator(null), undefined)
+  assert.equal(parseSkillLocator('x'), undefined)
+  assert.equal(parseSkillLocator(42), undefined)
+  assert.equal(parseSkillLocator({}), undefined)
+  assert.equal(parseSkillLocator({ versionDir: 1, sklId: 'SKL-X' }), undefined)
+  assert.equal(parseSkillLocator({ versionDir: '/ws/p', sklId: null }), undefined)
+  assert.deepEqual(parseSkillLocator({ versionDir: '/ws/p', sklId: 'SKL-X' }), {
+    versionDir: '/ws/p',
+    sklId: 'SKL-X',
+  })
 })
 
 test('失效钩子：注册/注销生命周期（dispose 后不泄漏、不再触发）', () => {
