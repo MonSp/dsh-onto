@@ -1,6 +1,7 @@
 /** 签发状态机与包存储验收（规范 §3.4 / §11.3）：ISSUED 只读、fork、人审签发。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import {
   PackageStoreError,
   loadPackage,
@@ -127,6 +128,32 @@ test('版本不存在时报 PACKAGE_NOT_FOUND', () => {
   const { ws, root } = mkWorkspaceWithPkg()
   try {
     throwsCode(() => ws.exportVersion('test-pkg', '9.9.9'), 'PACKAGE_NOT_FOUND')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('versionDir 目录穿越：name/version 逃出 packagesDir 即 PACKAGE_MALFORMED', () => {
+  const ws = mkWorkspace()
+  const root = ws.root
+  try {
+    throwsCode(() => ws.versionDir('..', '..'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('../..', '1.0.0'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('pkg', '../..'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('pkg', '..'), 'PACKAGE_MALFORMED')
+    // 拒绝原因不回显服务端绝对路径
+    try {
+      ws.versionDir('..', '..')
+      assert.fail('expected PACKAGE_MALFORMED')
+    } catch (e) {
+      assert.ok(e instanceof PackageStoreError)
+      assert.equal(e.code, 'PACKAGE_MALFORMED')
+      assert.ok(!e.message.includes(root), `不应泄露工作区路径: ${e.message}`)
+    }
+    // 合法但尚不存在的版本仍返回包内直拼路径（create/fork 依赖此行为）
+    const p = ws.versionDir('new-pkg', '2.0.0')
+    assert.ok(p.endsWith(join('new-pkg', '2.0.0')), p)
+    assert.ok(p.startsWith(root), p)
   } finally {
     rmWorkspace(root)
   }

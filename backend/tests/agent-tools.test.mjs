@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AgentToolError,
+  assertDatasetGranted,
   assertRunContract,
   checkGrant,
   grantGuardDecision,
@@ -604,6 +605,9 @@ test('run_scenario 错误包装：保留错误码、剥离绝对 versionDir', ()
   // 不含 versionDir 的业务语义原样保留
   const nf = Object.assign(new Error('场景不存在: SCN-X'), { code: 'SCENARIO_NOT_FOUND' })
   assert.equal(wrapRunError(nf, dir).message, '场景不存在: SCN-X')
+  // 空 versionDir（versionDir() 消毒拒绝时尚无路径）不剥串——split('') 会逐字符打散
+  const plain = wrapRunError(new Error('invalid package path: x@../y'), '')
+  assert.equal(plain.message, 'invalid package path: x@../y')
 })
 
 test('list_packages 输出投影：同包多版本按 semver 升序（1.9.0 先于 1.10.0）', () => {
@@ -709,4 +713,43 @@ test('收权：门禁通过后 tool-contracts 解析失败 → DERIVED_DRIFT 且
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
+})
+
+test('dataset 收权：实例 id 解析到类型过 grantScope，未收权/无法解析拒绝', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const ds = (objects, refs) => ({
+    objects,
+    relations: [],
+    candidates: refs.map((objectRef, i) => ({
+      candidateId: `c${i + 1}`,
+      objectRef,
+      features: {},
+      tags: [],
+    })),
+  })
+  // 实例 id → objects[].type（examples/aml-run.json 同形）
+  assertDatasetGranted(
+    ds([{ id: 'ACCT-001', type: 'OBJ-AML-ACCOUNT', attrs: {} }], ['ACCT-001']),
+    contracts,
+  )
+  // 类型段直引与实例段
+  assertDatasetGranted(ds([], ['OBJ-AML-CUSTOMER']), contracts)
+  assertDatasetGranted(ds([], ['OBJ-AML-ACCOUNT:x']), contracts)
+  // 实例解析出的类型未收权 → 拒绝
+  expectCode(
+    () =>
+      assertDatasetGranted(
+        ds([{ id: 'g1', type: 'OBJ-NOPE', attrs: {} }], ['g1']),
+        contracts,
+      ),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 无法解析的裸 ref（deny-by-default）
+  expectCode(() => assertDatasetGranted(ds([], ['GHOST-9']), contracts), 'OBJECT_NOT_GRANTED')
+})
+
+test('dataset 收权：验收样例 aml-run.json 引用全部在收权面内（防误伤）', () => {
+  const contracts = readToolContracts(AML_DIR)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  assertDatasetGranted(dataset, contracts)
 })

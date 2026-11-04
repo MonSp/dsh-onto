@@ -19,14 +19,14 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 `onto-skill-templates` provider 暴露为 `skl-*` skill（版本去重 ISSUED 优先），
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
-**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 61/61 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 48/48 PASS；
+**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 62/62 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 50/50 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
 `run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
 工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
-禁语扫描 0 命中（通过）、三层闭合 passed。评审七轮：首轮 2 critical + 2 major 修复后
+禁语扫描 0 命中（通过）、三层闭合 passed。评审八轮：首轮 2 critical + 2 major 修复后
 复审 PASS，并关死双字段 guard 残余旁路；第三轮补 skill 目录失效漏 fork/transition/
 createPackage 写路径、upload_knowledge_source packageId 存在性校验、
 readToolContracts 错误包装、objectRef 实例段按类型段判定；第四轮补 list_packages
@@ -40,7 +40,10 @@ get() 窄化校验）、装配断言补 narrative 数组、guard catch 非 Agent
 （upload 入参 `name@version` 校验存在性、入库归一为裸包名，打通上传→解析→
 物化闭环）与 idRule 顶层 join（readToolContracts 按 objectId 并入条目）、
 guard/execute null 口径统一（pickContracts）、run_scenario 错误包装剥绝对路径
-（wrapRunError）、list_packages semver 排序，并补全链路与真空测试至 48 项。
+（wrapRunError）、list_packages semver 排序；第八轮修复审两项残留：
+run_scenario.dataset 内嵌 objectRef 收权（S2.4 口径明确，双通道解析后
+deny-by-default）与 core versionDir 目录穿越面（归一后必须落在 packagesDir 内，
+否则 PACKAGE_MALFORMED fail-loud），测试补至 core 62 / backend 50 项。
 
 ## [S1] Problem
 
@@ -115,6 +118,12 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   `objectRef` 时必须命中 tool-contracts 的 grantScope（对象或关系 ID），否则拒绝
   （reason: `OBJECT_NOT_GRANTED`）。`objectRef` 允许运行时实例段（`OBJ-AML-ACCOUNT:x`），
   按 `:` 前的类型段匹配 grantScope（收权是对象粒度）；未收权类型带不带实例段一律拒绝。
+- **dataset 内嵌收权**（`run_scenario` 双通道，第八轮）：`dataset.candidates[].objectRef`
+  在数据装载后、`runScenario` 前逐条过收权——实例 id 先解析到 `objects[].type`（examples
+  形态 `ACCT-001` → `OBJ-AML-ACCOUNT`），否则按 `:` 前类型段匹配 grantScope；无法解析的
+  ref 一律 `OBJECT_NOT_GRANTED`（deny-by-default，不以放行掩盖越权）。顶层 args 由
+  `ctx.tools.guard` 收口、dataset 由执行前置（`assertDatasetGranted`）收口——datasetPath
+  通道需文件解析，归 arg 解析阶段统一处理，两层合起来覆盖全部入参面。
 - 输出投影 `projectByContract()`：契约类输出逐字段裁剪到 inputs/outputs/idRule/grantScope，
   防御意外扩面。
 - **签发/审阅端点永不注册为工具**：transition/issue、reviewCandidate、materialize、

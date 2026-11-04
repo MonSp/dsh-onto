@@ -291,6 +291,28 @@ export function grantGuardDecision(
   }
 }
 
+/**
+ * dataset 收权（run_scenario 双通道解析后、`runScenario` 之前）：
+ * `candidates[].objectRef` 先解析到类型（实例 id → `objects[].type`，否则按 `:` 前类型段），
+ * 逐条过 grantScope；无法解析或未收权一律拒绝（deny-by-default，不以放行掩盖越权）。
+ * 顶层 args 由 guard 收口、dataset 由本函数收口，两层覆盖全部入参面。
+ */
+export function assertDatasetGranted(
+  dataset: RuntimeDataset,
+  contracts: ToolContractEntry[],
+): void {
+  const typeByInstanceId = new Map(dataset.objects.map((o) => [o.id, o.type]))
+  for (const c of dataset.candidates) {
+    const subject = typeByInstanceId.get(c.objectRef) ?? grantSubject(c.objectRef)
+    if (checkGrant(contracts, subject) !== undefined) {
+      throw new AgentToolError(
+        'OBJECT_NOT_GRANTED',
+        `dataset 候选 ${c.candidateId} 的 objectRef ${c.objectRef}（类型 ${subject}）不在收权清单`,
+      )
+    }
+  }
+}
+
 /* ───────────────────────── 只读查询投影 ───────────────────────── */
 
 /**
@@ -318,7 +340,8 @@ export function wrapRunError(e: unknown, versionDir: string): AgentToolError {
       ? (e as { code: string }).code
       : 'RUN_FAILED'
   const raw = e instanceof Error ? e.message : String(e)
-  const msg = raw.includes(versionDir) ? raw.split(versionDir).join('<pkg>') : raw
+  // versionDir 为空（versionDir() 消毒拒绝时尚无路径）时不剥——split('') 会逐字符打散。
+  const msg = versionDir !== '' && raw.includes(versionDir) ? raw.split(versionDir).join('<pkg>') : raw
   return new AgentToolError(code, msg)
 }
 
@@ -649,7 +672,15 @@ export function apply(ctx: Context): void {
       },
       async execute(args) {
         const dataset = loadDatasetFromArgs(args)
-        const versionDir = ws.versionDir(args.name, args.version)
+        let versionDir: string
+        try {
+          versionDir = ws.versionDir(args.name, args.version)
+        } catch (e) {
+          // versionDir 消毒拒绝（穿越输入）：保留机器码，message 不含服务端路径。
+          throw wrapRunError(e, '')
+        }
+        const contracts = readToolContracts(versionDir)
+        assertDatasetGranted(dataset, contracts)
         let result: ScenarioRunResult
         try {
           result = runScenario(versionDir, args.scenarioId, dataset)

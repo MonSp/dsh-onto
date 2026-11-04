@@ -23,7 +23,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   O1ApiSource,
   O1Dictionary,
@@ -47,6 +47,13 @@ export class PackageStoreError extends Error {
     this.name = 'PackageStoreError'
     this.code = code
   }
+}
+
+/** dir 必须严格落在 root 内（相对 root 有余段且首段非 `..`）；防 name/version 目录穿越。 */
+function isInsideDir(root: string, dir: string): boolean {
+  const rel = relative(resolve(root), resolve(dir))
+  if (rel === '' || isAbsolute(rel)) return false
+  return rel.split(/[\\/]/)[0] !== '..'
 }
 
 /** 源文件清单（派生 manifest 要登记指纹的全部源）。 */
@@ -366,9 +373,13 @@ export class PackageWorkspace {
   /**
    * 解析包版本目录。优先 `packages/<name>/<version>`；
    * 若目录键与 meta.name 不一致（如按域命名的目录），按 meta.name 扫描回退。
+   * name/version 归一后必须落在 packagesDir 内——含 `..` 段的穿越输入 fail-loud。
    */
   versionDir(name: string, version: string): string {
     const direct = join(this.packagesDir, name, version)
+    if (!isInsideDir(this.packagesDir, direct)) {
+      throw new PackageStoreError('PACKAGE_MALFORMED', `invalid package path: ${name}@${version}`)
+    }
     if (existsSync(join(direct, SOURCE_FILE_LAYOUT.meta))) return direct
     for (const v of this.listVersions()) {
       if (v.name === name && v.version === version) return v.dir
