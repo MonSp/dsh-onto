@@ -35,6 +35,7 @@ import {
 import {
   HeuristicLlm,
   KnowledgeStore,
+  PackageWorkspace,
   dumpYaml,
   loadPackage,
   loadYaml,
@@ -445,6 +446,22 @@ test('收权：contracts 读取失败时拒绝原因保留 DERIVED_DRIFT 码', (
     },
   )
   assert.match(denial, /^DERIVED_DRIFT: /)
+})
+
+test('收权：versionDir 消毒拒绝保留 PACKAGE_MALFORMED 码（不退化 UNKNOWN_ERROR）', () => {
+  const ws = new PackageWorkspace(mkdtempSync(join(tmpdir(), 'onto-guard-ws-')))
+  try {
+    // 与 apply() 装配同形的 readContracts 接线：穿越入参在 versionDir 即抛 PackageStoreError
+    const denial = grantGuardDecision(
+      'list_tool_contracts',
+      { objectId: 'OBJ-AML-ACCOUNT', name: '..', version: '..' },
+      (n, v) => readToolContracts(ws.versionDir(n, v)),
+    )
+    assert.match(denial, /^PACKAGE_MALFORMED: /)
+    assert.ok(!denial.includes(ws.root), `不应泄露工作区路径: ${denial}`)
+  } finally {
+    rmSync(ws.root, { recursive: true, force: true })
+  }
 })
 
 test('收权：非 AgentToolError 回退不回显底层 message', () => {

@@ -14,6 +14,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   DERIVED_FILES,
   KnowledgeStore,
+  PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
   loadPackage,
@@ -285,8 +286,10 @@ export function grantGuardDecision(
     }
     return undefined
   } catch (e) {
-    // 保留机器可读错误码（如 DERIVED_DRIFT），拒绝语义不丢码。
+    // 保留机器可读错误码（AgentToolError / PackageStoreError——后者 message 只含调用方入参），
+    // 拒绝语义不丢码；其余错误不回显底层 message。
     if (e instanceof AgentToolError) return `${e.code}: ${e.message}`
+    if (e instanceof PackageStoreError) return `${e.code}: ${e.message}`
     return 'UNKNOWN_ERROR: 收权清单读取失败'
   }
 }
@@ -479,9 +482,14 @@ function textBlock(text: string): Array<{ type: 'text'; text: string }> {
   return [{ type: 'text' as const, text }]
 }
 
-/** 工具出口收窄：运行时由 output.schema + assertRunContract 兜底校验。 */
-function toolOut<T>(value: T): never {
-  return value as never
+/**
+ * 工具出口收窄桥：core 的 interface 返回值与 defineTool 按 output.schema 推断的
+ * `InferValue<O>` 结构性不兼容（interface 无隐式索引签名，嵌套数组元素不满足
+ * `JsonValue` 对象形态）。`R` 由 execute 的上下文推断为实际契约值类型；
+ * 运行时由 output.schema 校验 + assertRunContract 兜底。
+ */
+function toolOut<T, R>(value: T): R {
+  return value as unknown as R
 }
 
 /** 场景清单渲染（render 与测试共用）。 */

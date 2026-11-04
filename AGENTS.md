@@ -22,7 +22,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 
 ## 验证阶梯（改动后必跑）
 
-1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（62 项验收测试全绿）。
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（63 项验收测试全绿）。
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`；backend 另跑 `pnpm run test`
    （agent 工具/技能纯函数）。

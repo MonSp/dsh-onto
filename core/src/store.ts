@@ -19,6 +19,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -49,9 +50,22 @@ export class PackageStoreError extends Error {
   }
 }
 
-/** dir 必须严格落在 root 内（相对 root 有余段且首段非 `..`）；防 name/version 目录穿越。 */
-function isInsideDir(root: string, dir: string): boolean {
-  const rel = relative(resolve(root), resolve(dir))
+/** 规范化路径：realpath 解析符号链接/junction；目标不存在（如 create/fork 新版本路径）退回 lexical 解析。 */
+function canonPath(p: string): string {
+  try {
+    return realpathSync(p)
+  } catch {
+    return resolve(p)
+  }
+}
+
+/**
+ * dir 必须严格落在 root 内（相对 root 有余段且首段非 `..`）；防 name/version 目录穿越。
+ * 两侧先 realpath 再比：workspace 内符号链接/junction 指向外部时拒绝（逃逸目标不存在
+ * 则退回 lexical——其后 existsSync 门在先，不存在的路径不会被当作包目录返回）。
+ */
+export function isInsideDir(root: string, dir: string): boolean {
+  const rel = relative(canonPath(root), canonPath(dir))
   if (rel === '' || isAbsolute(rel)) return false
   return rel.split(/[\\/]/)[0] !== '..'
 }
@@ -382,7 +396,14 @@ export class PackageWorkspace {
     }
     if (existsSync(join(direct, SOURCE_FILE_LAYOUT.meta))) return direct
     for (const v of this.listVersions()) {
-      if (v.name === name && v.version === version) return v.dir
+      if (v.name === name && v.version === version) {
+        // 扫描回退的 dir 由 readdir 拼出（词法必在包内），仍过一次 realpath 兜底：
+        // packages 内 junction 指向外部时拒绝返回逃逸路径。
+        if (!isInsideDir(this.packagesDir, v.dir)) {
+          throw new PackageStoreError('PACKAGE_MALFORMED', `invalid package path: ${name}@${version}`)
+        }
+        return v.dir
+      }
     }
     return direct
   }

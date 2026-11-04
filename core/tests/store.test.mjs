@@ -1,6 +1,8 @@
 /** 签发状态机与包存储验收（规范 §3.4 / §11.3）：ISSUED 只读、fork、人审签发。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   PackageStoreError,
@@ -156,5 +158,29 @@ test('versionDir 目录穿越：name/version 逃出 packagesDir 即 PACKAGE_MALF
     assert.ok(p.startsWith(root), p)
   } finally {
     rmWorkspace(root)
+  }
+})
+
+test('versionDir 目录穿越：packages 内 junction 指向外部即 PACKAGE_MALFORMED', () => {
+  const ws = mkWorkspace()
+  const root = ws.root
+  const outside = mkdtempSync(join(tmpdir(), 'dsh-onto-outside-'))
+  try {
+    // 直拼路径逃逸：junction 挂进 packages/，目标存在 → realpath 解出外部即拒绝
+    mkdirSync(join(outside, 'evil', '1.0.0'), { recursive: true })
+    symlinkSync(join(outside, 'evil'), join(ws.packagesDir, 'evil'), 'junction')
+    throwsCode(() => ws.versionDir('evil', '1.0.0'), 'PACKAGE_MALFORMED')
+
+    // 扫描回退逃逸：目录键 ≠ meta.name 时按 meta.name 命中 junction 拼出的 dir，同样拒绝
+    const inner = join(outside, 'inner', '1.0.0')
+    mkdirSync(inner, { recursive: true })
+    const ghost = minimalPkg()
+    ghost.meta.name = 'ghost-pkg'
+    savePackage(inner, ghost)
+    symlinkSync(join(outside, 'inner'), join(ws.packagesDir, 'dirkey'), 'junction')
+    throwsCode(() => ws.versionDir('ghost-pkg', '1.0.0'), 'PACKAGE_MALFORMED')
+  } finally {
+    rmWorkspace(root)
+    rmWorkspace(outside)
   }
 })

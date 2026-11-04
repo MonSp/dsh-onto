@@ -19,8 +19,8 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 `onto-skill-templates` provider 暴露为 `skl-*` skill（版本去重 ISSUED 优先），
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
-**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 62/62 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 50/50 PASS；
+**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 63/63 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 52/52 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
@@ -44,6 +44,11 @@ guard/execute null 口径统一（pickContracts）、run_scenario 错误包装�
 run_scenario.dataset 内嵌 objectRef 收权（S2.4 口径明确，双通道解析后
 deny-by-default）与 core versionDir 目录穿越面（归一后必须落在 packagesDir 内，
 否则 PACKAGE_MALFORMED fail-loud），测试补至 core 62 / backend 50 项。
+第九轮清零复审 3 项 nit：grantGuardDecision 保留 PackageStoreError 机器码
+（穿越拒绝不再退化 UNKNOWN_ERROR）、isInsideDir/locatorInWorkspace 两侧 realpath
+再比（packages 内 junction 指向外部即拒绝，扫描回退 dir 同步兜底，locator 收敛
+core 单源）、toolOut 由 `as never` 改为上下文推断出口类型（返回类型即
+output.schema 契约值类型），测试补至 core 63 / backend 52 项。
 
 ## [S1] Problem
 

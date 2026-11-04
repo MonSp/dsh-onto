@@ -5,7 +5,7 @@
  * 优先 ISSUED，再按版本号降序取一条。包写入路径经 agent-hooks 失效目录。
  * @module @dsh-onto/backend/agent-skills
  */
-import { join, isAbsolute, relative, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   SkillCandidate,
@@ -15,6 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-skill'
 import {
   PackageWorkspace,
+  isInsideDir,
   loadPackage,
   type O2SkillTemplate,
   type OntologyPackage,
@@ -116,12 +117,10 @@ export function collectSkillSources(
   return pickSkillSources(sources)
 }
 
-/** locator.versionDir 必须落在 workspace 内（防御纵深：registry 回放契约之外再拦一层）。 */
+/** locator.versionDir 必须落在 workspace 内（防御纵深：registry 回放契约之外再拦一层；realpath 防符号链接逃逸）。 */
 export function locatorInWorkspace(versionDir: string, wsRoot: string): boolean {
   if (typeof versionDir !== 'string' || versionDir === '') return false
-  const rel = relative(resolve(wsRoot), resolve(versionDir))
-  if (rel === '' || isAbsolute(rel)) return false
-  return rel.split(/[\\/]/)[0] !== '..'
+  return isInsideDir(wsRoot, versionDir)
 }
 
 /** skill locator 窄化：畸形输入返回 undefined，不裸抛 TypeError（get() 前置校验）。 */

@@ -3,6 +3,9 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
 import {
@@ -120,6 +123,22 @@ test('locator：versionDir 必须落在 workspace 内', () => {
   assert.equal(locatorInWorkspace(null, '/ws'), false)
   assert.equal(locatorInWorkspace(123, '/ws'), false)
   assert.equal(locatorInWorkspace('', '/ws'), false)
+})
+
+test('locator：workspace 内 junction 指向外部即拒绝（realpath 兜底）', () => {
+  const wsRoot = mkdtempSync(join(tmpdir(), 'onto-locator-ws-'))
+  const outside = mkdtempSync(join(tmpdir(), 'onto-locator-out-'))
+  try {
+    mkdirSync(join(outside, 'pkg', '1.0.0'), { recursive: true })
+    symlinkSync(outside, join(wsRoot, 'link'), 'junction')
+    assert.equal(locatorInWorkspace(join(wsRoot, 'link', 'pkg', '1.0.0'), wsRoot), false)
+    // 对照：真实内部路径仍放行
+    mkdirSync(join(wsRoot, 'pkg', '1.0.0'), { recursive: true })
+    assert.equal(locatorInWorkspace(join(wsRoot, 'pkg', '1.0.0'), wsRoot), true)
+  } finally {
+    rmSync(wsRoot, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
 })
 
 test('locator 窄化：畸形输入返回 undefined，合法输入解构出字段', () => {
