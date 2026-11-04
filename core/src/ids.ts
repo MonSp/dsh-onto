@@ -5,6 +5,7 @@
  * `dict-<slug>`              例：dict-txn-type
  * 属性引用：`<OBJ|REL ID>.<attrName>`
  */
+import { createHash } from 'node:crypto'
 
 export const ID_TYPES = [
   'PKG',
@@ -108,22 +109,18 @@ export function extractIdRefs(text: string): string[] {
   return out
 }
 
+/** 记录 ID 共用派生：sha256 截 128-bit（32 hex）——原 32-bit FNV 可离线定向碰撞，
+ * 撞 id 后 writeFileSync 无独占标志会覆盖他人记录（round-13 major）。 */
+function recordId(prefix: string, seed: string): string {
+  return `${prefix}-${createHash('sha256').update(seed, 'utf8').digest('hex').slice(0, 32)}`
+}
+
 /** 生成候选记录 ID（知识库运行时用；非 Schema ID）。 */
 export function draftCandidateId(seed: string): string {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return `dc-${(h >>> 0).toString(16).padStart(8, '0')}`
+  return recordId('dc', seed)
 }
 
 /** 生成知识原料记录 ID。 */
 export function knowledgeSourceId(seed: string): string {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return `ks-${(h >>> 0).toString(16).padStart(8, '0')}`
+  return recordId('ks', seed)
 }

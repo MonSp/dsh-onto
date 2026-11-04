@@ -75,6 +75,11 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
     if (!isRecord(o) || typeof o.id !== 'string' || o.id === '' || typeof o.type !== 'string' || o.type === '') {
       throw new AgentToolError('INVALID_ARGS', 'object 需要非空字符串 id 与 type')
     }
+    // 声明 type 是纯类型 ID（O1/O2 语法无冒号）；「:实例」段只允许出现在引用侧
+    // （objectRef/objectId）。type 夹带冒号会在收权二次剥段时被截成已收权前缀（伪托）。
+    if (o.type.includes(':')) {
+      throw new AgentToolError('INVALID_ARGS', `object.type 不得含实例段（收到: ${o.type}）`)
+    }
     if (seenObjectIds.has(o.id)) {
       throw new AgentToolError('INVALID_ARGS', `object 实例 ID 重复: ${o.id}`)
     }
@@ -94,6 +99,9 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
     ) {
       throw new AgentToolError('INVALID_ARGS', 'relation 需要非空字符串 id/type/from/to')
     }
+    if (r.type.includes(':')) {
+      throw new AgentToolError('INVALID_ARGS', `relation.type 不得含实例段（收到: ${r.type}）`)
+    }
   }
   if (behaviors !== undefined && behaviors !== null) {
     if (!Array.isArray(behaviors)) {
@@ -102,6 +110,9 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
     for (const b of behaviors) {
       if (!isRecord(b) || typeof b.id !== 'string' || b.id === '' || typeof b.type !== 'string' || b.type === '') {
         throw new AgentToolError('INVALID_ARGS', 'behavior 需要非空字符串 id 与 type')
+      }
+      if (b.type.includes(':')) {
+        throw new AgentToolError('INVALID_ARGS', `behavior.type 不得含实例段（收到: ${b.type}）`)
       }
     }
   }
@@ -173,6 +184,16 @@ export function assertRunContract(result: ScenarioRunResult): void {
         throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} ${key} 不是数组`)
       }
     }
+    // 证据链 score 同为规则引擎产物：包权重 YAML `.inf` 会让其成 Infinity（riskScore 有夹取
+    // 不暴露），须在出口契约拦截，不产出非有限数证据（round-13 minor）。
+    for (const e of c.evidenceChains) {
+      if (!isRecord(e) || !Number.isFinite(e.score)) {
+        throw new AgentToolError(
+          'INVALID_TOOL_OUTPUT',
+          `输出契约失败: ${c.candidateId} evidenceChains 条目需要有限 score`,
+        )
+      }
+    }
   }
   if (!Array.isArray(result.excluded)) {
     throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: excluded 不是数组')
@@ -219,39 +240,76 @@ export function renderRunText(result: ScenarioRunResult): string {
     lines.push(`  禁语命中 @ ${h.where}`)
   }
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
-  let text = lines.join('\n')
   // 命中短语本身是禁语——渲染文本（模型可见面）整体脱敏（S2.3），只留位置；
-  // 叙述/证据/待核实等任何行都不得回显短语本体。
-  for (const h of hits) {
-    if (h.phrase) {
-      text = text.split(h.phrase).join('【禁语已脱敏】')
-    }
+  // 叙述/证据/待核实等任何行都不得回显短语本体。输入已由 maskForbiddenPhrases
+  // 深脱敏时 needle 全是占位标记 → 过滤后空转（幂等，防标记被二次改写）；
+  // core 直调的原始输入按真实短语脱敏。
+  return maskPhrases(
+    lines.join('\n'),
+    hits.map((h) => h.phrase).filter((p) => !isMaskToken(p)),
+  )
+}
+
+/** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */
+const MASK_TOKENS = ['【禁语已脱敏】', '【已屏蔽】', '【内容已隐藏】'] as const
+
+/** 短语是否已是占位标记（脱敏幂等：标记不再作为 needle 参与再脱敏）。 */
+function isMaskToken(s: string): boolean {
+  return (MASK_TOKENS as readonly string[]).includes(s)
+}
+
+/** 选首个不含任何短语的标记——防「禁语本体含『脱敏/禁语』」时标记自嵌残留（round-13 minor）。 */
+function pickMaskToken(phrases: readonly string[]): string {
+  for (const m of MASK_TOKENS) {
+    if (!phrases.some((p) => m.includes(p))) return m
   }
-  return text
+  return ''
+}
+
+/**
+ * 单一脱敏收口：占位标记替换 + 边界重组残留剥离到不动点
+ * （剥离相位只删不增，每轮严格减长，必然终止）。
+ * 入参约定：调用方须先滤掉占位标记（幂等）与空串，本函数只处理真实短语。
+ */
+function maskPhrases(text: string, phrases: readonly string[]): string {
+  const real = [...new Set(phrases)].filter((p) => p !== '')
+  if (real.length === 0) return text
+  const token = pickMaskToken(real)
+  let out = text
+  if (token !== '') {
+    for (const p of real) out = out.split(p).join(token)
+  }
+  // token 与上下文边界可能拼出短语残留（及 token='' 全剥离路径）：剥离相位只删不增，
+  // 每轮长度严格递减（≥|p|），必然到达不动点——无需次数守卫。
+  while (real.some((p) => out.includes(p))) {
+    for (const p of real) out = out.split(p).join('')
+  }
+  return out
 }
 
 /**
  * 工具出口禁语脱敏（S2.3）：canonical 出口与 render 同一口径——
- * `forbiddenPhraseHits[].phrase` 与 `checks[].detail` 不回显短语本体（count/where 保留）。
- * core/wire 人审面保留完整短语；工具层只裁 audit面，候选/证据等原样。
+ * **全字段深走**，任何字符串字段（narrative / evidence / pendingChecks / audit 等）
+ * 命中即脱敏；count/where 保留（字段在场，含短语时其内短语一并脱敏）。
+ * core/wire 人审面不经过本函数，保留完整短语。幂等：全部命中已是标记时原样返回。
  */
 export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResult {
-  const hits = result.audit.forbiddenPhraseHits
-  const phrases = hits.map((h) => h.phrase).filter((p) => p.length > 0)
+  const hits = result.audit?.forbiddenPhraseHits ?? []
+  // 已是占位标记的命中（重复脱敏）过滤掉 → 全标记时原样返回（幂等）。
+  // 实战中禁语本体是结论句而非标记串，此过滤不会漏掩真实短语。
+  const phrases = hits.map((h) => h.phrase).filter((p) => p !== '' && !isMaskToken(p))
   if (phrases.length === 0) return result
-  const mask = (s: string): string => {
-    let out = s
-    for (const p of phrases) out = out.split(p).join('【禁语已脱敏】')
-    return out
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return maskPhrases(v, phrases)
+    if (Array.isArray(v)) return v.map(walk)
+    if (isRecord(v)) {
+      const out: Record<string, unknown> = {}
+      for (const [k, item] of Object.entries(v)) out[k] = walk(item)
+      return out
+    }
+    return v
   }
-  return {
-    ...result,
-    audit: {
-      ...result.audit,
-      checks: result.audit.checks.map((c) => ({ ...c, detail: mask(c.detail) })),
-      forbiddenPhraseHits: hits.map((h) => ({ ...h, phrase: mask(h.phrase) })),
-    },
-  }
+  return walk(result) as ScenarioRunResult
 }
 
 /* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */
@@ -436,8 +494,10 @@ function resolveDatasetSubject(
   ambiguousIds: ReadonlySet<string>,
 ): string | undefined {
   // 完整 ref 命中实例表 → 声明类型（裸实例 id 形态，examples 的 ACCT-001 同此）。
+  // 声明类型不得含实例段：夹带冒号的类型会在 grantSubject 二次剥段时被截成
+  // 已收权前缀（类型段伪托）——形状校验已拦，此处兜底直调路径（deny-by-default）。
   const direct = typeByInstanceId.get(objectRef)
-  if (direct !== undefined) return direct
+  if (direct !== undefined) return direct.includes(':') ? undefined : direct
   if (ambiguousIds.has(objectRef)) return undefined
   const colon = objectRef.indexOf(':')
   if (colon >= 0) {
@@ -608,17 +668,34 @@ export function uploadKnowledgeForPkg(
   return knowledge.uploadSource({ ...input, packageId: packageName })
 }
 
-/** 包加载（工具面）：失败不回显底层路径，统一 NOT_FOUND。 */
+/**
+ * 包加载（工具面）：失败不回显底层路径，统一 NOT_FOUND；
+ * 加载后过派生门禁（§8.1「场景执行与规则加载前必须过此门禁」——get_rule 规则口径
+ * 与 get_package/list_scenarios 的包内容同闸，漂移/未派生 → DERIVED_DRIFT）。
+ */
 export function loadToolPackage(
   ws: { versionDir(name: string, version: string): string },
   pkgName: string,
   version: string,
 ): OntologyPackage {
+  let dir: string
+  let pkg: OntologyPackage
   try {
-    return loadPackage(ws.versionDir(pkgName, version))
+    dir = ws.versionDir(pkgName, version)
+    pkg = loadPackage(dir)
   } catch {
     throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${pkgName}@${version}`)
   }
+  let gate: ReturnType<typeof verifyDerived>
+  try {
+    gate = verifyDerived(dir)
+  } catch {
+    throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: 派生门禁不可读')
+  }
+  if (!gate.ok) {
+    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
+  }
+  return pkg
 }
 
 /* ───────────────────────── 工具注册 ───────────────────────── */

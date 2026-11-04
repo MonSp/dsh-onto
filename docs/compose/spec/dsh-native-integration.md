@@ -67,6 +67,22 @@ toolOut 收口（去 `as never`）、validateDatasetShape 空串 id/type/objectR
 候选拒载（candidateNameForSkl）、wrapRunError 大小写不敏感剥离（Windows 路径
 变体）、工具出口 canonical 值经 maskForbiddenPhrases 统一禁语脱敏（S2.3 结构面
 与 render 同口径，core/wire 人审面保留完整短语），测试补至 core 65 / backend 65 项。
+第十三轮（round-13 修复批）：1 critical + 2 major + 7 minor/nit 清零并固化回归——
+禁语脱敏收口为单一全字段深走（修 execute→render 组合路径短语泄漏，round-11/12
+两轮修复叠加回归；自嵌短语换标记、剥离相位不动点、幂等同引用）、dataset 声明
+type 夹冒号双层拒绝（形状校验 INVALID_ARGS + 收权解析兜底 OBJECT_NOT_GRANTED，
+堵 grantSubject 二次剥段伪托）、core canonPath 两侧同策略（最近存在祖先 realpath
++ 词法尾段，修 junction 数据根下 create/fork 误拒回归）、loadToolPackage 派生
+门禁单一收口、evidenceChains score 出口契约有限性、skills 去重平局全序确定化
+与 get() 胜出者复核、knowledge packageId 类型/空串守卫与 materialize 归一比较、
+记录 ID FNV-32 → sha256 截 128-bit（定向碰撞覆盖不可行）、validate 表达式语法
+门禁（EXPR_INVALID，排除规则坏语法不再静默漏到运行时）、importVersion 归档 rel
+两遍式逃逸校验（wire 导入面）；新增 backend 攻击面回归清单（attack-surface.test）
+与 core 回归（junction create/fork、importVersion 逃逸、EXPR_INVALID、
+packageId 守卫/sha256 id/materialize 归一），测试补至 core 72 / backend 74 项；
+验证阶梯 1-4 全绿（build/test、node --check、dump-config 2/2、dev-web + Tabbit
+冒烟：五 tab、aml-analysis 场景运行 6/6 断言、会话内 run_scenario 调用
+humanReviewRequired=true + 禁语 0 命中 + 规则 ID/证据链齐全）。
 
 ## [S1] Problem
 
@@ -124,13 +140,18 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   evidenceChains[].ruleId、pendingChecks、pendingVerification、narrative）、excluded、
   `humanReviewRequired: true`、reviewGate、ruleHitLog、audit{checks, forbiddenPhraseHits, passed}。
   每一分回指 ruleId 由 core 保证，工具层不改写分数与命中。
-- **出口禁语脱敏**（S2.3）：canonical 出口与 render 同一口径——`forbiddenPhraseHits[].phrase`
-  与 `checks[].detail` 不回显短语本体（count/where 保留）；core/wire 人审面保留完整短语。
+- **出口禁语脱敏**（S2.3）：canonical 出口与 render 同一口径——`maskForbiddenPhrases`
+  **全字段深走**（narrative / evidenceChains / pendingChecks / audit 等任何字符串面命中即
+  脱敏，自嵌短语换标记退避，剥离相位兜底到不动点）；count/where 保留（字段在场，
+  含短语时其内短语一并脱敏）；core/wire 人审面不经过本函数、保留完整短语；
+  重复脱敏幂等（全部命中已是标记时同引用返回）。
 - **render 合规页脚**：候选摘要行（candidateId、riskScore、命中 ruleId、证据链摘要、待核实点）
   之后强制输出：`humanReviewRequired=true`、禁语扫描命中数（0 = 通过）、三层闭合 passed。
   渲染文本自身不得触发场景 `forbiddenPhrases`（narrative 来自 SKL 模板，只回填不认定）。
 - 执行路径：core `runScenario` 自带 `verifyDerived` 门禁——漂移包直接抛 `DERIVED_DRIFT`
   工具错误，与工作台行为一致。包状态不限 DRAFT/ISSUED（与工作台场景运行对等）。
+  `get_package` / `get_rule` / `list_scenarios` 的包读取经 `loadToolPackage` 单一收口同过
+  门禁（§8.1：未派生/指纹不符即 `DERIVED_DRIFT`，不存在仍 `NOT_FOUND`，均不泄绝对路径）。
 
 ### [S2.4] 对象粒度收权（规范 §12.4 落实，决策 D1）
 

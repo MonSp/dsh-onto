@@ -1,11 +1,12 @@
 /** 签发状态机与包存储验收（规范 §3.4 / §11.3）：ISSUED 只读、fork、人审签发。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   PackageStoreError,
+  PackageWorkspace,
   loadPackage,
   savePackage,
   readPackageMeta,
@@ -200,5 +201,58 @@ test('versionDir 单段校验：空/多级下钻即 PACKAGE_MALFORMED（防越�
     assert.ok(ws.versionDir('new-pkg', '2.0.0+build.1').endsWith(join('new-pkg', '2.0.0+build.1')))
   } finally {
     rmWorkspace(root)
+  }
+})
+
+test('junction 数据根下 create/fork 不误拒（round-13：canonPath 两侧同策略）', () => {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-onto-juncws-'))
+  try {
+    const real = join(base, 'real-ws')
+    mkdirSync(join(real, 'packages'), { recursive: true })
+    const link = join(base, 'junc-ws')
+    symlinkSync(real, link, 'junction')
+    // 数据根经 junction 访问：fresh 新版本路径（尚不存在）必须放行
+    const ws = new PackageWorkspace(join(link, 'ws'))
+    const dir = ws.createPackage({ name: 'pkg-j', version: '1.0.0', domain: 'TST' })
+    assert.ok(existsSync(join(dir, 'package.yaml')), 'junction 根下 create 应成功')
+    const forked = ws.forkVersion('pkg-j', '1.0.0', '2.0.0')
+    assert.equal(readPackageMeta(forked).version, '2.0.0')
+    // 逃逸仍拒：packages 内 junction 指向外部
+    const outside = join(base, 'outside')
+    mkdirSync(join(outside, 'evil', '1.0.0'), { recursive: true })
+    symlinkSync(outside, join(ws.packagesDir, 'evil'), 'junction')
+    throwsCode(() => ws.versionDir('evil', '1.0.0'), 'PACKAGE_MALFORMED')
+  } finally {
+    rmWorkspace(base)
+  }
+})
+
+test('importVersion 归档 rel 逃逸拒绝（round-13：wire 导入面两遍式校验）', () => {
+  const ws = mkWorkspace()
+  try {
+    const meta = { ...minimalPkg().meta }
+    const dirOf = () => ws.versionDir(meta.name, meta.version)
+    // 逃逸形态：上钻 / 混合分隔符 / 绝对盘符
+    for (const evil of ['../evil.txt', 'a/../../evil.txt', '..\\evil.txt', 'C:\\evil.txt', '/abs/evil.txt', '']) {
+      throwsCode(() => ws.importVersion({ meta, files: { [evil]: 'x' } }), 'PACKAGE_MALFORMED')
+    }
+    // 合法 + 非法混合：整体拒绝且不留半写状态（校验在建目录之前）
+    throwsCode(
+      () => ws.importVersion({ meta, files: { 'package.yaml': 'kind: BusinessOntologyPackage\n', 'x/../evil.yaml': 'y' } }),
+      'PACKAGE_MALFORMED',
+    )
+    assert.ok(!existsSync(dirOf()), '校验期拒绝不得创建版本目录')
+    assert.ok(!existsSync(join(ws.root, 'evil.txt')), '不得写出 packages 根之外')
+    // 合法嵌套相对路径仍可导入
+    const dir = ws.importVersion({
+      meta,
+      files: {
+        'package.yaml': 'kind: BusinessOntologyPackage\n',
+        'o1-objects/dictionaries/dict-x.yaml': 'id: dict-x\nname: X\nvalues: [a]\n',
+      },
+    })
+    assert.ok(existsSync(join(dir, 'o1-objects', 'dictionaries', 'dict-x.yaml')))
+  } finally {
+    rmWorkspace(ws.root)
   }
 })

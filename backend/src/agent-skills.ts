@@ -91,11 +91,24 @@ export function compareVersions(a: string, b: string): number {
   return comparePrerelease(aPre, bPre)
 }
 
-function betterThan(a: SklSource, b: SklSource): boolean {
+/**
+ * 全序比较：ISSUED 优先 → 版本降序 → 版本串字典序 → 模板 id → 版本目录。
+ * 末两级平局收口（`1.0.0+a`≡`1.0.0+b`、双 ISSUED 同版等）——结果与 readdir/模板
+ * 输入序无关，保证去重确定性（round-13 minor）。
+ */
+function compareSources(a: SklSource, b: SklSource): number {
   const issuedA = a.status === 'ISSUED' ? 1 : 0
   const issuedB = b.status === 'ISSUED' ? 1 : 0
-  if (issuedA !== issuedB) return issuedA > issuedB
-  return compareVersions(a.version, b.version) > 0
+  if (issuedA !== issuedB) return issuedA - issuedB
+  const v = compareVersions(a.version, b.version)
+  if (v !== 0) return v
+  if (a.version !== b.version) return a.version > b.version ? 1 : -1
+  if (a.template.id !== b.template.id) return a.template.id > b.template.id ? 1 : -1
+  return a.versionDir > b.versionDir ? 1 : a.versionDir < b.versionDir ? -1 : 0
+}
+
+function betterThan(a: SklSource, b: SklSource): boolean {
+  return compareSources(a, b) > 0
 }
 
 /** 同 SKL id 去重：ISSUED 优先，再版本号降序。 */
@@ -132,16 +145,36 @@ export function candidateNameForSkl(candidateName: unknown, sklId: string): stri
   return name !== '' && name === candidateName ? name : undefined
 }
 
-/** 扫描一组包版本目录，收集 SKL 模板并跨版本去重。 */
+/**
+ * 胜出者复核（get() 前置校验）：locator 仍须是当前扫描快照下该名的去重胜出者——
+ * 失效目录（fork/transition 后出现更优版本）之外，落选 DRAFT/旧版 locator 一律拒载
+ * （round-13 minor：stale 候选绕过 ISSUED 优先）。
+ */
+export function isCurrentWinner(
+  winners: ReadonlyMap<string, SklSource>,
+  name: string,
+  versionDir: string,
+  sklId: string,
+): boolean {
+  const w = winners.get(name)
+  return w !== undefined && w.versionDir === versionDir && w.template.id === sklId
+}
+
+/**
+ * 扫描一组包版本目录，收集 SKL 模板并跨版本去重。
+ * 单包不可加载时经 `onSkip` 上抛给调用方（可观测：损坏包不再无声消失）。
+ */
 export function collectSkillSources(
   entries: ReadonlyArray<{ dir: string; status: string; version: string }>,
+  onSkip?: (dir: string, error: unknown) => void,
 ): Map<string, SklSource> {
   const sources: SklSource[] = []
   for (const v of entries) {
     let pkg: OntologyPackage
     try {
       pkg = loadPackage(v.dir)
-    } catch {
+    } catch (e) {
+      onSkip?.(v.dir, e)
       continue
     }
     for (const template of pkg.skillTemplates) {
@@ -215,7 +248,11 @@ export function apply(ctx: Context): void {
   const wsRoot = join(dataDir, 'workspace')
   const ws = new PackageWorkspace(wsRoot)
 
-  const scan = (): Map<string, SklSource> => collectSkillSources(ws.listVersions())
+  const scan = (): Map<string, SklSource> =>
+    collectSkillSources(ws.listVersions(), (dir, error) => {
+      // 损坏包不再无声消失：经 cordis logger 暴露（目录本身是服务端数据路径，可入服务端日志）。
+      ctx.logger('dsh-onto').warn('skill 扫描跳过不可加载包 %s: %o', dir, error)
+    })
 
   ctx.skills.registerProvider((control) => {
     const unregister = registerSkillInvalidator(control.invalidate)
@@ -245,6 +282,8 @@ export function apply(ctx: Context): void {
         const name = candidateNameForSkl(candidate.name, sklId)
         if (name === undefined) return undefined
         if (!locatorInWorkspace(versionDir, wsRoot)) return undefined
+        // 胜出者复核（round-13）：locator 仍须是当前扫描快照下该名的去重胜出者。
+        if (!isCurrentWinner(dedupeSkillNames(scan().values()), name, versionDir, sklId)) return undefined
         let pkg: OntologyPackage
         try {
           pkg = loadPackage(versionDir)

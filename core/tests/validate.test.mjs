@@ -154,3 +154,33 @@ test('ID_EMPTY：空 ID 元素报 error，不再静默逃过检查', () => {
   assert.equal(empties.length, 1, JSON.stringify(empties))
   assert.ok(empties[0].message.includes('为空'))
 })
+
+test('表达式语法错误 → EXPR_INVALID（round-13：门禁拦截，不漏到运行时）', () => {
+  const pkg = minimalPkg()
+  pkg.scoreRules[0].expression = 'min(1, f1'  // 括号未闭合
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg)
+    const { errors } = validatePackageDir(dir)
+    const hits = errors.filter((e) => e.code === 'EXPR_INVALID')
+    assert.ok(hits.length >= 1, JSON.stringify(errors))
+    assert.ok(hits.some((e) => e.message.includes('打分表达式')), JSON.stringify(hits))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('排除条件语法错误 → EXPR_INVALID（round-13：不再静默漏到运行时）', () => {
+  const pkg = minimalPkg()
+  pkg.exclusionRules[0].condition = 'tag =='  // 操作数缺失
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg)
+    const { errors } = validatePackageDir(dir)
+    const hits = errors.filter((e) => e.code === 'EXPR_INVALID')
+    assert.ok(hits.length >= 1, JSON.stringify(errors))
+    assert.ok(hits.some((e) => e.message.includes('排除条件')), JSON.stringify(hits))
+  } finally {
+    rmWorkspace(root)
+  }
+})

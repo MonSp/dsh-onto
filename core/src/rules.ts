@@ -233,6 +233,20 @@ function parseExpr(src: string): Node {
   return new Parser(tokenize(src)).parse()
 }
 
+/**
+ * 表达式语法校验（validate 层用）：非法返回错误消息，合法返回 null。
+ * 在包质量门禁拦截，避免坏表达式到运行时才暴露（排除规则求值异常原先
+ * 被静默吞成「不匹配」——方向保守但不可见；语法错误现在在 validate 报 error）。
+ */
+export function validateExpression(src: string): string | null {
+  try {
+    parseExpr(src)
+    return null
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * 求值
  * ═══════════════════════════════════════════════════════════════════════════ */

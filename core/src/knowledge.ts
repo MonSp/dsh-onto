@@ -103,6 +103,11 @@ function sha256Hex(text: string): string {
 
 /** packageId 归一：知识管线约定裸包名（meta.name）；`name@version` 形态剥版本段（幂等）。 */
 function normalizePackageId(packageId: string): string {
+  // wire 直传可能非 string（原代码直接 .lastIndexOf 裸抛 TypeError）——一律受控错误面。
+  // 空串按原语义保留（listSources('') 过滤无匹配返回 []，不抛错）；写入路径另拒空。
+  if (typeof packageId !== 'string') {
+    throw new KnowledgeError('BAD_PACKAGE_ID', `packageId 必须是字符串: ${JSON.stringify(packageId)}`)
+  }
   const at = packageId.lastIndexOf('@')
   return at > 0 ? packageId.slice(0, at) : packageId
 }
@@ -145,8 +150,11 @@ export class KnowledgeStore {
       throw new KnowledgeError('BAD_SOURCE_TYPE', `unknown sourceType ${input.sourceType}`)
     }
     // packageId 归一为裸包名（meta.name）：知识管线唯一约定；`name@version` 形态剥版本段（幂等），
-    // 工具面/工作台/wire 直传两种写法入库一致（S2.6 闭环）。
+    // 工具面/工作台/wire 直传两种写法入库一致（S2.6 闭环）。写入路径空串拒绝（空 packageId 不入库）。
     const packageId = normalizePackageId(input.packageId)
+    if (packageId === '') {
+      throw new KnowledgeError('BAD_PACKAGE_ID', 'packageId 不得为空')
+    }
     const sha256 = sha256Hex(input.content)
     const existing = this.listSources().find(
       (s) => s.sha256 === sha256 && normalizePackageId(s.packageId) === packageId,
@@ -362,7 +370,8 @@ export class KnowledgeStore {
     })
     const eligible: typeof targets = []
     for (const c of targets) {
-      if (c.packageId !== meta.name) {
+      // 比较前归一（旧数据可能存 name@version）：与 uploadSource 入库口径一致，避免误判 mismatch。
+      if (typeof c.packageId !== 'string' || normalizePackageId(c.packageId) !== meta.name) {
         skipped.push({ id: c.id, reason: `package mismatch: 候选属于 ${c.packageId}，目标包为 ${meta.name}` })
         continue
       }
@@ -418,7 +427,7 @@ export class KnowledgeStore {
         out.push({ id, ok: false, error: `candidate ${id} not found`, targetKind: '-', name: '-', summary: '' })
         continue
       }
-      if (c.packageId !== meta.name) {
+      if (typeof c.packageId !== 'string' || normalizePackageId(c.packageId) !== meta.name) {
         out.push({
           id,
           ok: false,

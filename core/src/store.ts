@@ -24,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   O1ApiSource,
   O1Dictionary,
@@ -50,19 +50,33 @@ export class PackageStoreError extends Error {
   }
 }
 
-/** 规范化路径：realpath 解析符号链接/junction；目标不存在（如 create/fork 新版本路径）退回 lexical 解析。 */
+/**
+ * 规范化路径：两侧必须同策略——对最近**存在**的祖先做 realpath（解析符号链接/junction），
+ * 再把尚不存在的尾段按词法拼回。若 root 走 realpath 而目标直接 lexical resolve，
+ * 数据目录经 junction 访问时 root 与目标落在不同命名空间，fresh 路径（create/fork
+ * 新版本尚不存在）会被 isInsideDir 误判越界（round-13 major：junction 下误拒）。
+ */
 function canonPath(p: string): string {
-  try {
-    return realpathSync(p)
-  } catch {
-    return resolve(p)
+  const abs = resolve(p)
+  const tail: string[] = []
+  let cur = abs
+  for (;;) {
+    try {
+      const real = realpathSync(cur)
+      return tail.length === 0 ? real : join(real, ...tail.reverse())
+    } catch {
+      const parent = dirname(cur)
+      if (parent === cur) return abs // 已到根仍不可达（盘符根必存在，仅防御）
+      tail.push(basename(cur))
+      cur = parent
+    }
   }
 }
 
 /**
  * dir 必须严格落在 root 内（相对 root 有余段且首段非 `..`）；防 name/version 目录穿越。
- * 两侧先 realpath 再比：workspace 内符号链接/junction 指向外部时拒绝（逃逸目标不存在
- * 则退回 lexical——其后 existsSync 门在先，不存在的路径不会被当作包目录返回）。
+ * 两侧经 canonPath 同策略规范化：workspace 内符号链接/junction 指向外部时拒绝
+ * （逃逸目标不存在则解析最近存在祖先 + 词法尾段，与 root 侧口径一致）。
  */
 export function isInsideDir(root: string, dir: string): boolean {
   const rel = relative(canonPath(root), canonPath(dir))
@@ -571,11 +585,25 @@ export class PackageWorkspace {
     if (existsSync(join(dir, SOURCE_FILE_LAYOUT.meta))) {
       throw new PackageStoreError('PACKAGE_EXISTS', `${name}@${version} already exists`)
     }
-    mkdirSync(dir, { recursive: true })
+    // 两遍式：先全量校验 rel，再建目录落盘——恶意归档在校验期整体拒绝，不留半写状态。
+    const files: Array<{ full: string; text: string }> = []
     for (const [rel, text] of Object.entries(archive.files)) {
-      const full = join(dir, rel)
-      mkdirSync(dirname(full), { recursive: true })
-      writeFileSync(full, text, 'utf8')
+      // rel 来自 wire 归档 JSON（外部输入）：绝对路径 / 盘符·ADS 冒号 / 多级下钻
+      // 一律拒绝，落盘前再验包含（round-13：原实现 join(dir, rel) 直写可逃出版本目录）。
+      const segs = rel.split(/[\\/]/)
+      if (
+        isAbsolute(rel) ||
+        segs.some((s) => s.includes(':') || !isPlainSegment(s)) ||
+        !isInsideDir(dir, join(dir, rel))
+      ) {
+        throw new PackageStoreError('PACKAGE_MALFORMED', `invalid archive path: ${rel}`)
+      }
+      files.push({ full: join(dir, rel), text })
+    }
+    mkdirSync(dir, { recursive: true })
+    for (const f of files) {
+      mkdirSync(dirname(f.full), { recursive: true })
+      writeFileSync(f.full, f.text, 'utf8')
     }
     return dir
   }
