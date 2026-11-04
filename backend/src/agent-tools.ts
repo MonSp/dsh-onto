@@ -63,9 +63,37 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
   if (!isRecord(value)) {
     throw new AgentToolError('INVALID_ARGS', 'dataset 必须是 JSON 对象（objects/relations/candidates）')
   }
-  const { objects, relations, candidates } = value
+  const { objects, relations, candidates, behaviors } = value
   if (!Array.isArray(objects) || !Array.isArray(relations) || !Array.isArray(candidates)) {
     throw new AgentToolError('INVALID_ARGS', 'dataset 需要 objects/relations/candidates 三个数组')
+  }
+  // 元素级形状：下游 assertDatasetGranted 与 core 会解引用 id/type/from/to——
+  // 畸形元素必须落 INVALID_ARGS 受控错误面，不得裸抛 TypeError。
+  for (const o of objects) {
+    if (!isRecord(o) || typeof o.id !== 'string' || typeof o.type !== 'string') {
+      throw new AgentToolError('INVALID_ARGS', 'object 需要字符串 id 与 type')
+    }
+  }
+  for (const r of relations) {
+    if (
+      !isRecord(r) ||
+      typeof r.id !== 'string' ||
+      typeof r.type !== 'string' ||
+      typeof r.from !== 'string' ||
+      typeof r.to !== 'string'
+    ) {
+      throw new AgentToolError('INVALID_ARGS', 'relation 需要字符串 id/type/from/to')
+    }
+  }
+  if (behaviors !== undefined && behaviors !== null) {
+    if (!Array.isArray(behaviors)) {
+      throw new AgentToolError('INVALID_ARGS', 'behaviors 必须是数组')
+    }
+    for (const b of behaviors) {
+      if (!isRecord(b) || typeof b.id !== 'string' || typeof b.type !== 'string') {
+        throw new AgentToolError('INVALID_ARGS', 'behavior 需要字符串 id 与 type')
+      }
+    }
   }
   for (const c of candidates) {
     if (!isRecord(c) || typeof c.candidateId !== 'string' || typeof c.objectRef !== 'string') {
@@ -129,6 +157,14 @@ export function assertRunContract(result: ScenarioRunResult): void {
       }
     }
   }
+  if (!Array.isArray(result.excluded)) {
+    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: excluded 不是数组')
+  }
+  for (const x of result.excluded) {
+    if (!isRecord(x) || typeof x.candidateId !== 'string' || typeof x.ruleId !== 'string') {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: excluded 条目需要字符串 candidateId 与 ruleId')
+    }
+  }
   if (result.humanReviewRequired !== true) {
     throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: humanReviewRequired 必须为 true')
   }
@@ -162,7 +198,8 @@ export function renderRunText(result: ScenarioRunResult): string {
   const hits = result.audit.forbiddenPhraseHits
   lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
   for (const h of hits) {
-    lines.push(`  禁语[${h.phrase}] @ ${h.where}`)
+    // 命中短语本身是禁语——渲染文本不得回显（S2.3），只给位置；完整短语在结构化 audit 里供人审。
+    lines.push(`  禁语命中 @ ${h.where}`)
   }
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
   return lines.join('\n')
@@ -199,7 +236,13 @@ export function projectByContract(raw: unknown): ToolContractEntry {
 
 /** 读取派生收权清单；先过加载门禁，漂移即拒绝。顶层 `idRules` 按 objectId join 进条目（derive 实际格式）。 */
 export function readToolContracts(versionDir: string): ToolContractEntry[] {
-  const gate = verifyDerived(versionDir)
+  let gate: ReturnType<typeof verifyDerived>
+  try {
+    gate = verifyDerived(versionDir)
+  } catch {
+    // 门禁内部读取失败（TOCTOU/文件锁）：按不可加载处理；不回显底层 message（含绝对路径）。
+    throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: 派生门禁不可读')
+  }
   if (!gate.ok) {
     throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
   }

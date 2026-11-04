@@ -101,6 +101,12 @@ function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
+/** packageId 归一：知识管线约定裸包名（meta.name）；`name@version` 形态剥版本段（幂等）。 */
+function normalizePackageId(packageId: string): string {
+  const at = packageId.lastIndexOf('@')
+  return at > 0 ? packageId.slice(0, at) : packageId
+}
+
 /** 知识库存储（profile 数据目录下的一等运行时状态）。 */
 export class KnowledgeStore {
   readonly root: string
@@ -138,13 +144,18 @@ export class KnowledgeStore {
     if (!SOURCE_TYPES.includes(input.sourceType)) {
       throw new KnowledgeError('BAD_SOURCE_TYPE', `unknown sourceType ${input.sourceType}`)
     }
+    // packageId 归一为裸包名（meta.name）：知识管线唯一约定；`name@version` 形态剥版本段（幂等），
+    // 工具面/工作台/wire 直传两种写法入库一致（S2.6 闭环）。
+    const packageId = normalizePackageId(input.packageId)
     const sha256 = sha256Hex(input.content)
-    const existing = this.listSources().find((s) => s.sha256 === sha256 && s.packageId === input.packageId)
+    const existing = this.listSources().find(
+      (s) => s.sha256 === sha256 && normalizePackageId(s.packageId) === packageId,
+    )
     if (existing) return existing
-    const id = knowledgeSourceId(`${input.packageId}|${input.sourceType}|${input.name}|${sha256}`)
+    const id = knowledgeSourceId(`${packageId}|${input.sourceType}|${input.name}|${sha256}`)
     const record: KnowledgeSourceRecord = {
       id,
-      packageId: input.packageId,
+      packageId,
       sourceType: input.sourceType,
       name: input.name,
       content: input.content,
@@ -158,12 +169,13 @@ export class KnowledgeStore {
 
   listSources(packageId?: string): KnowledgeSourceRecord[] {
     const dir = join(this.root, 'sources')
+    const want = packageId === undefined ? undefined : normalizePackageId(packageId)
     const out: KnowledgeSourceRecord[] = []
     for (const f of readdirSafe(dir)) {
       if (!f.endsWith('.json')) continue
       try {
         const rec = JSON.parse(readFileSync(join(dir, f), 'utf8')) as KnowledgeSourceRecord
-        if (!packageId || rec.packageId === packageId) out.push(rec)
+        if (!want || normalizePackageId(rec.packageId) === want) out.push(rec)
       } catch {
         /* skip */
       }
@@ -236,8 +248,9 @@ export class KnowledgeStore {
   /* ── 人审队列 ──────────────────────────────────────────────────────── */
 
   listCandidates(filter?: { packageId?: string; status?: DraftCandidate['status'] }): DraftCandidate[] {
+    const want = filter?.packageId ? normalizePackageId(filter.packageId) : undefined
     return this.loadQueue().filter(
-      (c) => (!filter?.packageId || c.packageId === filter.packageId) && (!filter?.status || c.status === filter.status),
+      (c) => (!want || normalizePackageId(c.packageId) === want) && (!filter?.status || c.status === filter.status),
     )
   }
 

@@ -560,10 +560,10 @@ test('知识上传全链路：name@version 入参 → 裸名入库 → 解析 �
       name: '风控红线',
       content: '不得进行高风险转账',
     })
-    // 入库 packageId 为裸名：工作台按裸名可见，name@version 不命中
+    // 入库 packageId 为裸名：工作台按裸名可见；过滤亦归一，name@version 同样命中
     assert.equal(src.packageId, 'aml-analysis')
     assert.equal(store.listSources('aml-analysis').length, 1)
-    assert.equal(store.listSources('aml-analysis@1.0.0').length, 0)
+    assert.equal(store.listSources('aml-analysis@1.0.0').length, 1)
     // 解析（启发式）→ 候选继承裸名 packageId
     const { added } = await store.parseSource(src.id, new HeuristicLlm())
     assert.ok(added.length > 0, '启发式应至少解析出一条候选')
@@ -769,4 +769,77 @@ test('dataset 收权：验收样例 aml-run.json 引用全部在收权面内（�
   const contracts = readToolContracts(AML_DIR)
   const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
   assertDatasetGranted(dataset, contracts)
+})
+
+// ── 第 10 轮修复回归：dataset 元素形状 / excluded 契约 / 禁语渲染脱敏 / 内联 e2e ──
+
+test('dataset 形状：objects/relations/behaviors 畸形元素落 INVALID_ARGS（不裸抛 TypeError）', () => {
+  expectCode(() => validateDatasetShape({ objects: [null], relations: [], candidates: [] }), 'INVALID_ARGS')
+  expectCode(
+    () =>
+      validateDatasetShape({
+        objects: [{ id: 'A', type: 'T' }],
+        relations: [{ id: 'R', type: 'RT', from: 'A' }],
+        candidates: [],
+      }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => validateDatasetShape({ objects: [{ id: 1, type: 'T' }], relations: [], candidates: [] }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => validateDatasetShape({ objects: [], relations: [], candidates: [], behaviors: [null] }),
+    'INVALID_ARGS',
+  )
+  const ok = validateDatasetShape({
+    objects: [{ id: 'A', type: 'T', attrs: {} }],
+    relations: [{ id: 'R', type: 'RT', from: 'A', to: 'B' }],
+    candidates: [],
+  })
+  assert.equal(ok.objects.length, 1)
+})
+
+test('装配断言：excluded 形状校验（非数组/畸形条目即 INVALID_TOOL_OUTPUT）', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  assert.doesNotThrow(() => assertRunContract(good))
+  expectCode(() => assertRunContract({ ...good, excluded: 'not-array' }), 'INVALID_TOOL_OUTPUT')
+  expectCode(() => assertRunContract({ ...good, excluded: [null] }), 'INVALID_TOOL_OUTPUT')
+  expectCode(() => assertRunContract({ ...good, excluded: [{ candidateId: 'x' }] }), 'INVALID_TOOL_OUTPUT')
+})
+
+test('renderRunText：禁语命中时渲染文本脱敏（不回显短语），排除行在场', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  const text = renderRunText(result)
+  // aml-run.json 实产出排除项（CAND-003 / RULE-AML-EXCL-WHITELIST）
+  assert.ok(result.excluded.length > 0, '验收样例应产出排除项')
+  for (const x of result.excluded) {
+    assert.ok(text.includes(`排除: ${x.candidateId}（${x.ruleId}）`), `渲染应含排除行: ${x.candidateId}`)
+  }
+  assert.ok(result.excluded.some((x) => x.candidateId === 'CAND-003'), '验收样例应排除 CAND-003')
+  // 命中>0：渲染脱敏（不回显短语），命中数与位置在场；结构化 audit 保留完整短语供人审
+  const hitPhrase = '确定为洗钱'
+  const hit = {
+    ...result,
+    audit: {
+      ...result.audit,
+      forbiddenPhraseHits: [{ phrase: hitPhrase, where: 'candidates[0].narrative[0]' }],
+    },
+  }
+  const hitText = renderRunText(hit)
+  assert.ok(!hitText.includes(hitPhrase), '渲染文本不得回显禁语短语')
+  assert.match(hitText, /禁语扫描: 1 命中/)
+  assert.match(hitText, /禁语命中 @ candidates\[0\]\.narrative\[0\]/)
+  assert.equal(hit.audit.forbiddenPhraseHits[0].phrase, hitPhrase)
+})
+
+test('端到端：内联 dataset 走 runScenario 与 datasetPath 同契约', () => {
+  const inline = loadDatasetFromArgs({ dataset: JSON.parse(readFileSync(AML_RUN, 'utf8')) })
+  const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', inline)
+  assertRunContract(result)
+  assert.equal(result.humanReviewRequired, true)
+  assert.ok(result.candidates.length > 0)
+  assert.ok(result.candidates.some((c) => c.hitRuleIds.length > 0))
 })

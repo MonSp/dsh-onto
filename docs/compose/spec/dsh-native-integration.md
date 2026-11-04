@@ -49,6 +49,15 @@ deny-by-default）与 core versionDir 目录穿越面（归一后必须落在 pa
 再比（packages 内 junction 指向外部即拒绝，扫描回退 dir 同步兜底，locator 收敛
 core 单源）、toolOut 由 `as never` 改为上下文推断出口类型（返回类型即
 output.schema 契约值类型），测试补至 core 63 / backend 52 项。
+第十轮修复 9 项（3 minor + 6 nit）：validateDatasetShape 元素级校验
+（objects/relations/behaviors 畸形元素落 INVALID_ARGS，不裸抛 TypeError）、
+readToolContracts 门禁内部读取失败收口 DERIVED_DRIFT（execute 路径不泄绝对路径）、
+禁语命中渲染脱敏（S2.3：渲染文本不回显短语，audit 结构面保留供人审）、
+versionDir 单段校验（空/多级下钻 fail-loud，防越界不只防逃出）、semver build
+metadata 不参与优先级且非数字段不猜 0、S2.8 计数勘误、renderRunText 排除行
+与内联 dataset e2e 测试补缺、assertRunContract excluded 形状断言、知识库
+packageId 归一收口（uploadSource/listSources/listCandidates 双形态一致），
+测试补至 core 65 / backend 58 项。
 
 ## [S1] Problem
 
@@ -173,7 +182,7 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 
 ### [S2.8] 测试边界
 
-- core：现有 61 项测试保持全绿（本特性不改引擎语义）。
+- core：现有 65 项测试保持全绿（本特性不改引擎语义）。
 - backend：新增 `backend/tests/*.test.mjs`（`node --test`）覆盖纯函数：数据集双通道校验、
   装配断言、契约输出投影、SKL 正文渲染、收权 guard 判定、幂等上传摘要。测试不起 dsh host。
 - 端到端：AGENTS.md 验证阶梯 1–3 不变；第 4 步扩展会话内验收（见 T8）。

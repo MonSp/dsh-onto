@@ -147,6 +147,32 @@ test('原料同 sha256 上传幂等', () => {
   }
 })
 
+test('uploadSource packageId 归一：name@version 入库剥成裸名，listSources 双形态可见', () => {
+  const { store, root } = mkStore()
+  try {
+    const rec = store.uploadSource({
+      packageId: 'pkg-x@1.0.0',
+      sourceType: 'POLICY',
+      name: 'p1',
+      content: '唯一内容ABC',
+    })
+    assert.equal(rec.packageId, 'pkg-x')
+    assert.equal(store.listSources('pkg-x').length, 1)
+    assert.equal(store.listSources('pkg-x@1.0.0').length, 1)
+    // 幂等：同内容换写法再传不重复（归一后比对）
+    const again = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'POLICY',
+      name: 'p2',
+      content: '唯一内容ABC',
+    })
+    assert.equal(again.id, rec.id)
+    assert.equal(store.listSources().length, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('物化：pending 不得物化；approved 才落包；ISSUED 拒写', async () => {
   const { ws, dir, root } = mkWorkspaceWithPkg()
   try {

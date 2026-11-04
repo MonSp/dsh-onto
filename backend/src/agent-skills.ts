@@ -40,8 +40,11 @@ export interface SklSource {
 }
 
 function splitPrerelease(version: string): [core: string, prerelease: string] {
-  const i = version.indexOf('-')
-  return i < 0 ? [version, ''] : [version.slice(0, i), version.slice(i + 1)]
+  // build metadata（`+...`）不参与优先级（semver §11）；先剥再拆预发布，
+  // 否则 `1.0.0+build-1` 会被误拆成 core=`1.0.0+build`、pre=`1`。
+  const noBuild = version.split('+')[0]
+  const i = noBuild.indexOf('-')
+  return i < 0 ? [noBuild, ''] : [noBuild.slice(0, i), noBuild.slice(i + 1)]
 }
 
 /** semver 式预发布标识符比较：数字段按数值，数字段低于字母段，逐段直到分出胜负。 */
@@ -69,11 +72,18 @@ function comparePrerelease(a: string, b: string): number {
 export function compareVersions(a: string, b: string): number {
   const [aCore, aPre] = splitPrerelease(a)
   const [bCore, bPre] = splitPrerelease(b)
-  const pa = aCore.split('.').map((s) => Number.parseInt(s, 10) || 0)
-  const pb = bCore.split('.').map((s) => Number.parseInt(s, 10) || 0)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
-    if (d !== 0) return d
+  const pa = aCore.split('.')
+  const pb = bCore.split('.')
+  // 非数字段（如 `1.x.0`）不猜测为 0：回退核心串比较，保证确定性。
+  if (pa.some((s) => !/^\d+$/.test(s)) || pb.some((s) => !/^\d+$/.test(s))) {
+    if (aCore !== bCore) return aCore < bCore ? -1 : 1
+  } else {
+    const na = pa.map((s) => Number.parseInt(s, 10))
+    const nb = pb.map((s) => Number.parseInt(s, 10))
+    for (let i = 0; i < Math.max(na.length, nb.length); i += 1) {
+      const d = (na[i] ?? 0) - (nb[i] ?? 0)
+      if (d !== 0) return d
+    }
   }
   if (aPre === bPre) return 0
   if (aPre === '') return 1

@@ -184,3 +184,21 @@ test('versionDir 目录穿越：packages 内 junction 指向外部即 PACKAGE_MA
     rmWorkspace(outside)
   }
 })
+
+test('versionDir 单段校验：空/多级下钻即 PACKAGE_MALFORMED（防越界不只防逃出）', () => {
+  const ws = mkWorkspace()
+  const root = ws.root
+  try {
+    throwsCode(() => ws.versionDir('', '1.0.0'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('pkg', ''), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('foo/bar', '1.0.0'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('pkg', '1.0/0'), 'PACKAGE_MALFORMED')
+    throwsCode(() => ws.versionDir('.', '1.0.0'), 'PACKAGE_MALFORMED')
+    // 合法单段（含尚不存在的版本、预发布/build 形态）仍可解析
+    assert.ok(ws.versionDir('new-pkg', '2.0.0').endsWith(join('new-pkg', '2.0.0')))
+    assert.ok(ws.versionDir('new-pkg', '2.0.0-rc.1').endsWith(join('new-pkg', '2.0.0-rc.1')))
+    assert.ok(ws.versionDir('new-pkg', '2.0.0+build.1').endsWith(join('new-pkg', '2.0.0+build.1')))
+  } finally {
+    rmWorkspace(root)
+  }
+})

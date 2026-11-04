@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
 import {
   collectSkillSources,
+  compareVersions,
   locatorInWorkspace,
   parseSkillLocator,
   pickSkillSources,
@@ -171,4 +172,20 @@ test('失效钩子：注册/注销生命周期（dispose 后不泄漏、不再�
   un2()
   invalidateSkillCatalog()
   assert.equal(n, 3)
+})
+
+// ── 第 10 轮修复回归：semver build metadata / 非数字段不猜 0 ──
+
+test('版本比较：build metadata 不参与优先级（1.0.0+build-1 ≡ 1.0.0）', () => {
+  assert.equal(compareVersions('1.0.0+build-1', '1.0.0'), 0)
+  assert.equal(compareVersions('1.0.0', '1.0.0+build-1'), 0)
+  assert.ok(compareVersions('1.0.0+build-1', '1.0.1') < 0)
+  assert.ok(compareVersions('1.0.0-rc.1+meta', '1.0.0') < 0)
+  assert.equal(compareVersions('1.0.0-rc.1+meta', '1.0.0-rc.1'), 0)
+})
+
+test('版本比较：非数字段不猜 0（1.x.0 ≠ 1.0.0，确定性回退串比较）', () => {
+  assert.notEqual(compareVersions('1.x.0', '1.0.0'), 0)
+  assert.notEqual(compareVersions('1.x.0', '1.y.0'), 0)
+  assert.equal(compareVersions('1.x.0', '1.x.0'), 0)
 })
