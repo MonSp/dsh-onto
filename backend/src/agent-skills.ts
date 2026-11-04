@@ -108,6 +108,30 @@ export function pickSkillSources(sources: SklSource[]): Map<string, SklSource> {
   return best
 }
 
+/**
+ * 跨 SKL id 的 skill 名去重：不同 id 规范化到同名时以 ISSUED 优先、版本降序胜出。
+ * 撞名不再静默遮蔽——后到者按同一胜出序让位，结果确定。
+ */
+export function dedupeSkillNames(sources: Iterable<SklSource>): Map<string, SklSource> {
+  const byName = new Map<string, SklSource>()
+  for (const s of sources) {
+    const name = skillNameFromId(s.template.id)
+    if (name === '') continue
+    const cur = byName.get(name)
+    if (cur === undefined || betterThan(s, cur)) byName.set(name, s)
+  }
+  return byName
+}
+
+/**
+ * 候选名必须与 locator.sklId 归一结果一致才可加载——
+ * stale/spoofed 候选拒载，不回放错名（get() 前置校验）。
+ */
+export function candidateNameForSkl(candidateName: unknown, sklId: string): string | undefined {
+  const name = skillNameFromId(sklId)
+  return name !== '' && name === candidateName ? name : undefined
+}
+
 /** 扫描一组包版本目录，收集 SKL 模板并跨版本去重。 */
 export function collectSkillSources(
   entries: ReadonlyArray<{ dir: string; status: string; version: string }>,
@@ -200,9 +224,7 @@ export function apply(ctx: Context): void {
       name: 'onto-skill-templates',
       async list(_options: SkillLookupOptions): Promise<SkillCandidate[]> {
         const out: SkillCandidate[] = []
-        for (const s of scan().values()) {
-          const name = skillNameFromId(s.template.id)
-          if (name === '') continue // 空/全非法 id 的坏模板不进目录
+        for (const [name, s] of dedupeSkillNames(scan().values())) {
           out.push({
             name,
             description: s.template.description ?? s.template.name,
@@ -219,6 +241,9 @@ export function apply(ctx: Context): void {
         const loc = parseSkillLocator(candidate.locator)
         if (loc === undefined) return undefined
         const { versionDir, sklId } = loc
+        // 候选名必须与 sklId 归一结果一致：stale/spoofed 候选拒载，不回放错名。
+        const name = candidateNameForSkl(candidate.name, sklId)
+        if (name === undefined) return undefined
         if (!locatorInWorkspace(versionDir, wsRoot)) return undefined
         let pkg: OntologyPackage
         try {
@@ -229,7 +254,7 @@ export function apply(ctx: Context): void {
         const template = pkg.skillTemplates.find((t) => t.id === sklId)
         if (template === undefined) return undefined
         return {
-          name: candidate.name,
+          name,
           description: template.description ?? template.name,
           invocation: { modelInvocable: true, userInvocable: true },
           source: 'runtime',

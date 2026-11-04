@@ -17,6 +17,7 @@ import {
   grantMatches,
   loadDatasetFromArgs,
   loadToolPackage,
+  maskForbiddenPhrases,
   pickContracts,
   projectByContract,
   projectPackageList,
@@ -633,6 +634,14 @@ test('run_scenario 错误包装：保留错误码、剥离绝对 versionDir', ()
   // 空 versionDir（versionDir() 消毒拒绝时尚无路径）不剥串——split('') 会逐字符打散
   const plain = wrapRunError(new Error('invalid package path: x@../y'), '')
   assert.equal(plain.message, 'invalid package path: x@../y')
+  // Windows 路径大小写不敏感：大小写变体同样剥离
+  const cased = wrapRunError(
+    Object.assign(new Error('ENOENT: open C:\\Users\\Demo\\pkg\\package.yaml'), { code: 'ENOENT' }),
+    'c:\\users\\demo\\pkg',
+  )
+  assert.equal(cased.code, 'ENOENT')
+  assert.ok(!cased.message.toLowerCase().includes('demo\\pkg'), `大小写变体不得回显: ${cased.message}`)
+  assert.ok(cased.message.includes('<pkg>'))
 })
 
 test('list_packages 输出投影：同包多版本按 semver 升序（1.9.0 先于 1.10.0）', () => {
@@ -950,7 +959,7 @@ test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行）
   }
   assert.ok(result.excluded.some((x) => x.candidateId === 'CAND-003'), '验收样例应排除 CAND-003')
   // 真实命中形态：短语在 narrative/evidence 里（特征插值/模板回填），命中登记指向这些位置——
-  // 渲染文本（模型可见面）必须整体脱敏，结构化结果保留原文供人审。
+  // 渲染文本（模型可见面）必须整体脱敏；core/wire 人审面保留原文（工具出口由 maskForbiddenPhrases 收口）。
   const hitPhrase = '确定为洗钱'
   const hit = {
     ...result,
@@ -979,12 +988,65 @@ test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行）
   assert.ok(hitText.includes('【禁语已脱敏】'), '脱敏标记在场')
   assert.match(hitText, /禁语扫描: 2 命中/)
   assert.match(hitText, /禁语命中 @ candidates\[0\]\.narrative\[0\]/)
-  // 结构化侧保留完整短语与原文供人审（S2.3：完整短语在 structured audit 里）
+  // core/wire 人审面保留完整短语（renderRunText 不改写入参；工具出口 canonical 值经 maskForbiddenPhrases 裁剪）
   assert.equal(hit.audit.forbiddenPhraseHits[0].phrase, hitPhrase)
   assert.ok(
     hit.candidates[0].narrative.some((n) => n.includes(hitPhrase)),
-    '结构化 narrative 保留原文供人审',
+    'core 结构面保留原文供人审',
   )
+})
+
+test('数据形状：空串 id/objectRef/type 一律拒绝（与顶层 guard 口径对称）', () => {
+  expectCode(() => validateDatasetShape({ objects: [{ id: '', type: 'T' }], relations: [], candidates: [] }), 'INVALID_ARGS')
+  expectCode(() => validateDatasetShape({ objects: [{ id: 'O', type: '' }], relations: [], candidates: [] }), 'INVALID_ARGS')
+  expectCode(
+    () => validateDatasetShape({ objects: [], relations: [{ id: 'R', type: '', from: 'a', to: 'b' }], candidates: [] }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => validateDatasetShape({ objects: [], relations: [], candidates: [{ candidateId: '', objectRef: 'X', features: {}, tags: [] }] }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => validateDatasetShape({ objects: [], relations: [], candidates: [{ candidateId: 'C', objectRef: '', features: {}, tags: [] }] }),
+    'INVALID_ARGS',
+  )
+  const ok = validateDatasetShape({
+    objects: [{ id: 'A1', type: 'OBJ-AML-ACCOUNT' }],
+    relations: [],
+    candidates: [{ candidateId: 'C1', objectRef: 'A1', features: {}, tags: [] }],
+  })
+  assert.equal(ok.candidates[0].objectRef, 'A1')
+})
+
+test('工具出口禁语脱敏：结构面不回显短语本体（count/where 保留）', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  const hitPhrase = '确定为洗钱'
+  const hit = {
+    ...result,
+    audit: {
+      ...result.audit,
+      checks: [{ check: 'O3_CLOSED', closed: true, detail: `禁语命中: ${hitPhrase}@candidates[0].narrative[0]`, ts: 't' }],
+      forbiddenPhraseHits: [{ phrase: hitPhrase, where: 'candidates[0].narrative[0]' }],
+    },
+  }
+  const masked = maskForbiddenPhrases(hit)
+  const face = JSON.stringify(masked.audit)
+  assert.ok(!face.includes(hitPhrase), `工具出口结构面不得回显短语: ${face}`)
+  assert.ok(face.includes('【禁语已脱敏】'), '脱敏标记在场')
+  assert.equal(masked.audit.forbiddenPhraseHits.length, 1)
+  assert.equal(masked.audit.forbiddenPhraseHits[0].where, 'candidates[0].narrative[0]')
+  assert.equal(masked.audit.forbiddenPhraseHits[0].phrase, '【禁语已脱敏】')
+  assert.equal(masked.humanReviewRequired, true)
+  // 候选/证据面原样（裁剪只发生在 audit）
+  assert.deepEqual(masked.candidates, result.candidates)
+  // 无命中时原样返回（同引用，零拷贝开销）
+  assert.equal(maskForbiddenPhrases(result), result)
+  // renderRunText 对已脱敏结果幂等（不再回显、计数不变）
+  const text = renderRunText(masked)
+  assert.ok(!text.includes(hitPhrase))
+  assert.match(text, /禁语扫描: 1 命中/)
 })
 
 test('端到端：内联 dataset 走 runScenario 与 datasetPath 同契约', () => {

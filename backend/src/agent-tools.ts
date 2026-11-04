@@ -72,8 +72,8 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
   // 实例 id 重复会使收权解析歧义（同 id 异型可伪托已收权类型），一律拒绝。
   const seenObjectIds = new Set<string>()
   for (const o of objects) {
-    if (!isRecord(o) || typeof o.id !== 'string' || typeof o.type !== 'string') {
-      throw new AgentToolError('INVALID_ARGS', 'object 需要字符串 id 与 type')
+    if (!isRecord(o) || typeof o.id !== 'string' || o.id === '' || typeof o.type !== 'string' || o.type === '') {
+      throw new AgentToolError('INVALID_ARGS', 'object 需要非空字符串 id 与 type')
     }
     if (seenObjectIds.has(o.id)) {
       throw new AgentToolError('INVALID_ARGS', `object 实例 ID 重复: ${o.id}`)
@@ -84,11 +84,15 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
     if (
       !isRecord(r) ||
       typeof r.id !== 'string' ||
+      r.id === '' ||
       typeof r.type !== 'string' ||
+      r.type === '' ||
       typeof r.from !== 'string' ||
-      typeof r.to !== 'string'
+      r.from === '' ||
+      typeof r.to !== 'string' ||
+      r.to === ''
     ) {
-      throw new AgentToolError('INVALID_ARGS', 'relation 需要字符串 id/type/from/to')
+      throw new AgentToolError('INVALID_ARGS', 'relation 需要非空字符串 id/type/from/to')
     }
   }
   if (behaviors !== undefined && behaviors !== null) {
@@ -96,14 +100,20 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
       throw new AgentToolError('INVALID_ARGS', 'behaviors 必须是数组')
     }
     for (const b of behaviors) {
-      if (!isRecord(b) || typeof b.id !== 'string' || typeof b.type !== 'string') {
-        throw new AgentToolError('INVALID_ARGS', 'behavior 需要字符串 id 与 type')
+      if (!isRecord(b) || typeof b.id !== 'string' || b.id === '' || typeof b.type !== 'string' || b.type === '') {
+        throw new AgentToolError('INVALID_ARGS', 'behavior 需要非空字符串 id 与 type')
       }
     }
   }
   for (const c of candidates) {
-    if (!isRecord(c) || typeof c.candidateId !== 'string' || typeof c.objectRef !== 'string') {
-      throw new AgentToolError('INVALID_ARGS', 'candidate 需要字符串 candidateId 与 objectRef')
+    if (
+      !isRecord(c) ||
+      typeof c.candidateId !== 'string' ||
+      c.candidateId === '' ||
+      typeof c.objectRef !== 'string' ||
+      c.objectRef === ''
+    ) {
+      throw new AgentToolError('INVALID_ARGS', 'candidate 需要非空字符串 candidateId 与 objectRef')
     }
     if (!isRecord(c.features)) {
       throw new AgentToolError('INVALID_ARGS', `candidate ${c.candidateId} 缺少 features 对象`)
@@ -205,7 +215,7 @@ export function renderRunText(result: ScenarioRunResult): string {
   const hits = result.audit.forbiddenPhraseHits
   lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
   for (const h of hits) {
-    // 命中清单只给位置；完整短语在结构化 audit 里供人审。
+    // 命中清单只给位置；短语本体经 maskForbiddenPhrases 在结构面与渲染面统一脱敏。
     lines.push(`  禁语命中 @ ${h.where}`)
   }
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
@@ -218,6 +228,30 @@ export function renderRunText(result: ScenarioRunResult): string {
     }
   }
   return text
+}
+
+/**
+ * 工具出口禁语脱敏（S2.3）：canonical 出口与 render 同一口径——
+ * `forbiddenPhraseHits[].phrase` 与 `checks[].detail` 不回显短语本体（count/where 保留）。
+ * core/wire 人审面保留完整短语；工具层只裁 audit面，候选/证据等原样。
+ */
+export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResult {
+  const hits = result.audit.forbiddenPhraseHits
+  const phrases = hits.map((h) => h.phrase).filter((p) => p.length > 0)
+  if (phrases.length === 0) return result
+  const mask = (s: string): string => {
+    let out = s
+    for (const p of phrases) out = out.split(p).join('【禁语已脱敏】')
+    return out
+  }
+  return {
+    ...result,
+    audit: {
+      ...result.audit,
+      checks: result.audit.checks.map((c) => ({ ...c, detail: mask(c.detail) })),
+      forbiddenPhraseHits: hits.map((h) => ({ ...h, phrase: mask(h.phrase) })),
+    },
+  }
 }
 
 /* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */
@@ -449,8 +483,13 @@ export function wrapRunError(e: unknown, versionDir: string): AgentToolError {
       ? (e as { code: string }).code
       : 'RUN_FAILED'
   const raw = e instanceof Error ? e.message : String(e)
-  // versionDir 为空（versionDir() 消毒拒绝时尚无路径）时不剥——split('') 会逐字符打散。
-  const msg = versionDir !== '' && raw.includes(versionDir) ? raw.split(versionDir).join('<pkg>') : raw
+  // versionDir 为空（versionDir() 消毒拒绝时尚无路径）时不剥；
+  // Windows 路径大小写不敏感，按小写定位整段替换，防大小写变体漏剥。
+  let msg = raw
+  if (versionDir !== '') {
+    const esc = versionDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    msg = raw.replace(new RegExp(esc, 'gi'), '<pkg>')
+  }
   return new AgentToolError(code, msg)
 }
 
@@ -802,7 +841,7 @@ export function apply(ctx: Context): void {
           throw wrapRunError(e, versionDir)
         }
         assertRunContract(result)
-        return result as never
+        return toolOut(maskForbiddenPhrases(result))
       },
     }),
   )

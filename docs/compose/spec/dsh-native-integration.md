@@ -19,14 +19,14 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 `onto-skill-templates` provider 暴露为 `skl-*` skill（版本去重 ISSUED 优先），
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
-**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 63/63 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 52/52 PASS；
+**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 65/65 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 65/65 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
 `run_scenario{aml-analysis@1.0.0, SCN-AML-FIND-CLUES, datasetPath: examples/aml-run.json}`
 工具调用，工具结果含命中规则/证据[RULE-…]、humanReviewRequired=true、
-禁语扫描 0 命中（通过）、三层闭合 passed。评审八轮：首轮 2 critical + 2 major 修复后
+禁语扫描 0 命中（通过）、三层闭合 passed。评审十二轮：首轮 2 critical + 2 major 修复后
 复审 PASS，并关死双字段 guard 残余旁路；第三轮补 skill 目录失效漏 fork/transition/
 createPackage 写路径、upload_knowledge_source packageId 存在性校验、
 readToolContracts 错误包装、objectRef 实例段按类型段判定；第四轮补 list_packages
@@ -57,7 +57,16 @@ versionDir 单段校验（空/多级下钻 fail-loud，防越界不只防逃出�
 metadata 不参与优先级且非数字段不猜 0、S2.8 计数勘误、renderRunText 排除行
 与内联 dataset e2e 测试补缺、assertRunContract excluded 形状断言、知识库
 packageId 归一收口（uploadSource/listSources/listCandidates 双形态一致），
-测试补至 core 65 / backend 58 项。
+测试补至 core 65 / backend 58 项。第十一轮（终审）修复 2 major + 1 minor：
+dataset 收权双旁路（重复实例 id 消歧 + 类型段伪托拒绝，deny-by-default）、
+renderRunText 禁语整体脱敏（叙述/证据行不再回显，测试改为真实命中形态）、
+assertRunContract 以 Number.isFinite 拒绝 NaN/Infinity——四探针复核全拒且防误伤
+正常路径放行。第十二轮（外部审阅）清零 5 项 + 1 设计收紧：run_scenario 出口
+toolOut 收口（去 `as never`）、validateDatasetShape 空串 id/type/objectRef 拒绝
+（与顶层 guard 口径对称）、skill 名撞名确定性去重（dedupeSkillNames）与 stale
+候选拒载（candidateNameForSkl）、wrapRunError 大小写不敏感剥离（Windows 路径
+变体）、工具出口 canonical 值经 maskForbiddenPhrases 统一禁语脱敏（S2.3 结构面
+与 render 同口径，core/wire 人审面保留完整短语），测试补至 core 65 / backend 65 项。
 
 ## [S1] Problem
 
@@ -111,10 +120,12 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 - **装配断言**（防御核心回归，断言失败 → isError `INVALID_TOOL_OUTPUT`，不产出残缺结果）：
   `candidates` 为数组；每条含 `riskScore` / `hitRuleIds` / `evidenceChains` / `pendingChecks`；
   `humanReviewRequired === true`；`audit` 含 `forbiddenPhraseHits` 数组。
-- **规范值** = core `ScenarioRunResult` 原样：候选（riskScore、hitRuleIds、
+- **规范值** = core `ScenarioRunResult`（audit 面经工具出口禁语脱敏，见下）：候选（riskScore、hitRuleIds、
   evidenceChains[].ruleId、pendingChecks、pendingVerification、narrative）、excluded、
   `humanReviewRequired: true`、reviewGate、ruleHitLog、audit{checks, forbiddenPhraseHits, passed}。
-  每一分回指 ruleId 由 core 保证，工具层不改写。
+  每一分回指 ruleId 由 core 保证，工具层不改写分数与命中。
+- **出口禁语脱敏**（S2.3）：canonical 出口与 render 同一口径——`forbiddenPhraseHits[].phrase`
+  与 `checks[].detail` 不回显短语本体（count/where 保留）；core/wire 人审面保留完整短语。
 - **render 合规页脚**：候选摘要行（candidateId、riskScore、命中 ruleId、证据链摘要、待核实点）
   之后强制输出：`humanReviewRequired=true`、禁语扫描命中数（0 = 通过）、三层闭合 passed。
   渲染文本自身不得触发场景 `forbiddenPhrases`（narrative 来自 SKL 模板，只回填不认定）。
@@ -150,7 +161,9 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
 - skill name = `skl-` + SKL id 小写（`SKL-AML-NARRATIVE` → `skl-aml-narrative`，满足
   kebab-case）。
 - 同一 SKL id 多版本并存：优先 ISSUED，再按版本号降序取一条（不同包的 ID 含 PKG_TAG，
-  天然不冲突）。
+  天然不冲突）。跨 id 的 skill 名规范化撞名（如 `SKL-AML_X` 与 `SKL-AML-X`）由
+  `dedupeSkillNames` 按同一胜出序（ISSUED 优先、版本降序）确定性去重，不再静默遮蔽；
+  `get()` 校验候选名与 locator.sklId 归一结果一致，stale/spoofed 候选拒载。
 - 正文 markdown：名称、description、steps、weights 集合、outputTemplate、红线声明
   （叙述只回填模板、禁认定性表述、结论性表述只落 forbiddenPhrases）、使用方式
   （配合 run_scenario 的 SKILL_RUN 步骤）。
@@ -218,3 +231,8 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   验收脚本要靠逐行落盘 + 端口轮询判断存活，不能以「日志为空」判死。
 - defineTool 的 output.schema 推断与 core 的 interface 返回类型不兼容（interface 无隐式
   索引签名）；工具出口统一走 `toolOut` 收窄，运行时由 output.schema + 装配断言兜底。
+- 第十二轮外部审阅（独立评审）核对过的关键面：收权双通道 deny-by-default、证据/叙述只回填
+  候选自身 features（无跨对象泄漏面）、excluded/ruleHitLog 最小结构、路径脱敏闭环、versionDir
+  穿越加固、失效钩子全覆盖、harness API 契约（ToolExecution.name/arguments、ToolGuard
+  monotonic、registerProvider(control)）逐一比对。修复 5 项 minor/nit + 1 项设计收紧
+  （见 Report 第十二轮）。

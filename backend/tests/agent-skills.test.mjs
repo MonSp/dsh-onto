@@ -9,8 +9,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
 import {
+  candidateNameForSkl,
   collectSkillSources,
   compareVersions,
+  dedupeSkillNames,
   locatorInWorkspace,
   parseSkillLocator,
   pickSkillSources,
@@ -111,6 +113,29 @@ test('skill 命名：空/全非法 id 返回空串（调用方跳过）', () => 
   assert.equal(skillNameFromId('___'), '')
   assert.equal(skillNameFromId('---'), '')
   assert.match(skillNameFromId('SKL-AML-NARRATIVE'), /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+})
+
+test('skill 命名撞名去重：同名以 ISSUED 优先、版本降序胜出（不再静默遮蔽）', () => {
+  const tpl = (id) => ({ id, name: id, weights: {} })
+  // 两个不同 SKL id 规范化到同一个 skill 名（skl-aml-narrative）
+  const draft = { versionDir: '/a/1.0.0', status: 'DRAFT', version: '1.0.0', template: tpl('SKL-AML-NARRATIVE') }
+  const issued = { versionDir: '/b/1.0.0', status: 'ISSUED', version: '1.0.0', template: tpl('SKL_AML_NARRATIVE') }
+  const picked = dedupeSkillNames([draft, issued])
+  assert.equal(picked.size, 1)
+  assert.equal(picked.get('skl-aml-narrative').status, 'ISSUED')
+  // 空归一 id 不进目录
+  assert.equal(dedupeSkillNames([{ versionDir: '/c', status: 'DRAFT', version: '1.0.0', template: tpl('---') }]).size, 0)
+  // 同名同状态按版本降序
+  const old = { versionDir: '/d/1.0.0', status: 'DRAFT', version: '1.0.0', template: tpl('SKL-AML-N') }
+  const neu = { versionDir: '/e/1.1.0', status: 'DRAFT', version: '1.1.0', template: tpl('SKL_AML_N') }
+  assert.equal(dedupeSkillNames([old, neu]).get('skl-aml-n').version, '1.1.0')
+})
+
+test('候选名与 sklId 归一结果不一致即拒载（stale/spoofed 候选）', () => {
+  assert.equal(candidateNameForSkl('skl-aml-narrative', 'SKL-AML-NARRATIVE'), 'skl-aml-narrative')
+  assert.equal(candidateNameForSkl('skl-wrong-name', 'SKL-AML-NARRATIVE'), undefined)
+  assert.equal(candidateNameForSkl(undefined, 'SKL-AML-NARRATIVE'), undefined)
+  assert.equal(candidateNameForSkl('skl-x', '---'), undefined)
 })
 
 test('locator：versionDir 必须落在 workspace 内', () => {
