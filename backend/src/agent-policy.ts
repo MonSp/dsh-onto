@@ -57,31 +57,54 @@ function errorCode(e: unknown, fallback: string): string {
 }
 
 /**
+ * 错误 message 含任一短语 → 整段退避（保留机器码；I1 错误载体）。
+ * 不做子串手术（P2.2：嵌套/重组残片无法证明完备）——与 render 拼接后兜底同口径。
+ */
+export function retreatPhraseEcho(message: string, phrases: readonly string[]): string {
+  const list = phrases.filter((p) => typeof p === 'string' && p !== '')
+  if (list.length === 0) return message
+  if (list.some((p) => message.includes(p))) {
+    return '错误消息含禁语，已整段脱敏'
+  }
+  return message
+}
+
+/**
  * 错误信封：任何出口不得裸抛。
  * - 原生 fs/系统错误 → 只留机器码（`工具执行失败（ENOENT）`），原文不入模型面；
- * - 受控/业务错误 → 保留机器码与 message（剥服务端目录）；
+ * - 受控/业务错误 → 保留机器码与 message（剥服务端目录 + 禁语整段退避）；
  * - 其余 → RUN_FAILED + 受控短消息。
  */
-export function asToolError(e: unknown, extraRedact: readonly string[] = []): AgentToolError {
+export function asToolError(
+  e: unknown,
+  extraRedact: readonly string[] = [],
+  phrases: readonly string[] = [],
+): AgentToolError {
   if (isSystemError(e)) {
     const code = errorCode(e, 'UNKNOWN_ERROR')
     return new AgentToolError(code, `工具执行失败（${code}）`)
   }
   const code = errorCode(e, 'RUN_FAILED')
   const raw = e instanceof Error ? e.message : String(e)
-  return new AgentToolError(code, scrub(raw, extraRedact))
+  return new AgentToolError(code, retreatPhraseEcho(scrub(raw, extraRedact), phrases))
 }
 
-/** execute 统一信封：体内任何抛出经 asToolError 收口后重抛。 */
+/**
+ * execute 统一信封：体内任何抛出经 asToolError 收口后重抛。
+ * `phrases` 可为清单或按 args 惰性取值的 getter（仅 catch 时求值）——
+ * 入参回显（objectRef/candidateId…）含红线短语时错误面整段退避（I1）。
+ */
 export function toolExecute<A, R>(
   fn: (args: A) => R | Promise<R>,
   extraRedact: readonly string[] = [],
+  phrases: readonly string[] | ((args: A) => readonly string[]) = [],
 ): (args: A) => Promise<R> {
   return async (args: A): Promise<R> => {
     try {
       return await fn(args)
     } catch (e) {
-      throw asToolError(e, extraRedact)
+      const list = typeof phrases === 'function' ? phrases(args) : phrases
+      throw asToolError(e, extraRedact, list)
     }
   }
 }

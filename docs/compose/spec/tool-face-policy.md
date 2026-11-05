@@ -1,7 +1,7 @@
 ---
 feature: tool-face-policy
 status: delivered
-updated: 2026-11-17
+updated: 2026-11-05
 supersedes: dsh-native-integration.md §S2.3/§S2.4 的散点实现口径
 ---
 
@@ -69,7 +69,11 @@ PR#2 前十三轮评审反复出现同类问题（路径 9 轮、收权 8 轮、
 - **render 闸** `renderRunText(result, phrases?)`：叙述/证据/待核实/位置等**片段级**
   先重遮再拼行；拼接后若仍检出短语（模板固定字面碰撞、短语横跨分隔符重组等
   病态构造），**整段渲染文本**替换为标记。渲染不改写入参。
-- **错误面**：抛出消息同受 P2.4 信封约束；禁语断言可对其复核。
+- **错误面**：抛出消息同受 P2.4 信封约束；**且过禁语退避**——`asToolError`/`toolExecute`
+  接受红线清单（或按 args 惰性取值的 getter，仅 catch 时 `loadPackage` 求值），
+  message 含任一短语时**整段退避**为受控短语并保留机器码（`retreatPhraseEcho`，
+  与 render 拼接后兜底同口径，禁止子串手术）；guard 拒绝语为字符串信封，
+  退避时保留 `CODE:` 前缀。人审面错误不经本函数。
 
 被删除的机制（衍生病的根源，禁止回潮）：占位标记子串替换、边界重组残留剥离
 不动点、嵌套短语长者优先排序、剥离相位终止性论证。
@@ -96,7 +100,10 @@ PR#2 前十三轮评审反复出现同类问题（路径 9 轮、收权 8 轮、
   message，剥除服务端目录（serverDir 清单）后放行。
 - **原生 fs/系统错误**（带 errno/syscall 的 SystemError）：**只留机器码**
   （如 `工具执行失败（ENOENT）`），原文一律不入模型面（原文含绝对路径）。
-- 其余未知错误：`UNKNOWN_ERROR`/`RUN_FAILED` + 受控短消息。
+- **其余未知错误**：`UNKNOWN_ERROR`/`RUN_FAILED` + 受控短消息。
+- **禁语退避（与 P2.2 错误面同源）**：受控/未知错误的 message 在路径剥除后
+  再过 `retreatPhraseEcho(message, phrases)`——含红线短语即整段退避，
+  `AgentToolError.code` 不变；guard 字符串拒绝保留 `CODE:` 前缀。
 - 机器码词汇：`PACKAGE_MALFORMED`/`PACKAGE_EXISTS`/`INVALID_ARGS`/
   `INVALID_TOOL_OUTPUT`/`OBJECT_NOT_GRANTED`/`DERIVED_DRIFT`/`NOT_FOUND`/
   `RUN_FAILED`/`UNKNOWN_ERROR`/业务码透传。
@@ -105,7 +112,7 @@ PR#2 前十三轮评审反复出现同类问题（路径 9 轮、收权 8 轮、
 
 | # | 不变量 | 含义 |
 |---|---|---|
-| I1 | 不回显-短语 | 模型面任何字符串不含禁语短语；二次执行同引用（幂等） |
+| I1 | 不回显-短语 | 模型面任何字符串（value / render / **错误与 guard 拒绝语**）不含禁语短语；二次执行同引用（幂等） |
 | I2 | 不回显-路径 | 任何工具错误消息不含 resolve 后绝对路径/底层 fs 错误原文 |
 | I3 | 不放行-路径 | datasetPath/读源/写源/归档的穿越、junction 逃逸、ADS、盘符绝对路径全拒 |
 | I4 | 不放行-收权 | objectRef 全形态（空/非串/裸/实例段/类型段伪托/重复歧义）未命中即拒 |

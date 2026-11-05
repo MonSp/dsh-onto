@@ -19,8 +19,8 @@ source: https://github.com/MonSp/dsh-onto/pull/2
 `onto-skill-templates` provider 暴露为 `skl-*` skill（版本去重 ISSUED 优先），
 知识上传仅入草稿原料（sha256 幂等、不回显 content）。版本 0.1.2。
 
-**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 65/65 PASS；
-`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 65/65 PASS；
+**Verification** — `core`：`pnpm run build` + `node --test tests/*.test.mjs` 73/73 PASS；
+`backend`：`pnpm run build` + `node --check dist/*` + `pnpm run test` 87/87 PASS；
 `workbench`：`pnpm run build` + `node --check dist/index.js dist/client.js` PASS；
 `scripts/dump-config.ps1 -ProfileName dsh-onto-v012` 2/2 包在组合中 PASS；
 会话内验收（dev-web + Tabbit）PASS：对话「帮我跑 AML 线索场景」→ 轨迹可见
@@ -89,6 +89,10 @@ humanReviewRequired=true + 禁语 0 命中 + 规则 ID/证据链齐全）。
 writeSource relPath 与 importVersion 同一口径（isSafeRelPath：ADS 冒号拒绝，
 封死 NTFS 隐藏流）、compareSources 全序收口至模板序列化判别、skills list()
 包含性过滤（junction 指外不进目录）；测试补至 core 72 / backend 78。
+第十五轮（终审修复）：错误面禁语退避——`asToolError`/`toolExecute` 接受红线清单
+（按 args 惰性 `loadPackage`，仅 catch 求值），message 含短语整段退避并保留机器码；
+guard 字符串拒绝保留 `CODE:` 前缀；`retreatPhraseEcho` 与 render 兜底同口径
+（禁子串手术）。Verification 计数勘误为 core 73 / backend 87（与 AGENTS.md 一致）。
 
 ## [S1] Problem
 

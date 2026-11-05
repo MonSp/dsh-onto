@@ -36,6 +36,7 @@ import {
   registerServerDir,
   rememberPhrases,
   renderRunText,
+  retreatPhraseEcho,
   toolExecute,
 } from './agent-policy.js'
 import {
@@ -321,6 +322,45 @@ function textBlock(text: string): Array<{ type: 'text'; text: string }> {
   return [{ type: 'text' as const, text }]
 }
 
+/** 包内全部场景红线（错误面退避用；成功路径仍按命中场景双源取清单）。 */
+function phrasesOfPkg(pkg: OntologyPackage): string[] {
+  return pkg.scenarios.flatMap((s) =>
+    Array.isArray(s.outputContract?.forbiddenPhrases)
+      ? s.outputContract.forbiddenPhrases.filter((p) => typeof p === 'string' && p !== '')
+      : [],
+  )
+}
+
+/**
+ * 按工具入参惰性取红线清单（仅 toolExecute catch / guard 拒绝时求值）。
+ * `name@version` 或 `packageId=name@version` → loadPackage（不依赖派生门禁；
+ * 读失败返回 []，退化为无短语退避——与修复前等价）。
+ */
+function redlinesForArgs(
+  ws: PackageWorkspace,
+  args: unknown,
+): string[] {
+  const a = isRecord(args) ? args : {}
+  let name: string | undefined
+  let version: string | undefined
+  if (typeof a.name === 'string' && typeof a.version === 'string') {
+    name = a.name
+    version = a.version
+  } else if (typeof a.packageId === 'string') {
+    const at = a.packageId.lastIndexOf('@')
+    if (at > 0) {
+      name = a.packageId.slice(0, at)
+      version = a.packageId.slice(at + 1)
+    }
+  }
+  if (name === undefined || version === undefined) return []
+  try {
+    return phrasesOfPkg(loadPackage(ws.versionDir(name, version)))
+  } catch {
+    return []
+  }
+}
+
 /**
  * 工具出口收窄桥：core 的 interface 返回值与 defineTool 按 output.schema 推断的
  * `InferValue<O>` 结构性不兼容（interface 无隐式索引签名，嵌套数组元素不满足
@@ -356,11 +396,22 @@ export function apply(ctx: Context): void {
   const load = (pkgName: string, version: string): OntologyPackage =>
     loadToolPackage(ws, pkgName, version)
 
-  ctx.tools.guard((execution) =>
-    grantGuardDecision(execution.name, execution.arguments, (n, v) =>
+  // 红线惰性取值：仅错误/guard 拒绝时 loadPackage，成功路径零开销。
+  const redlines = (args: unknown): string[] => redlinesForArgs(ws, args)
+
+  ctx.tools.guard((execution) => {
+    const denial = grantGuardDecision(execution.name, execution.arguments, (n, v) =>
       readToolContracts(ws.versionDir(n, v)),
-    ),
-  )
+    )
+    if (denial === undefined) return undefined
+    // 拒绝语若回显了入参中的红线短语：保留 `CODE:` 机器码前缀，语义段整段退避
+    //（guard 出口是字符串信封，码嵌在串里，不能像 AgentToolError 那样靠 .code 字段保码）。
+    const retreated = retreatPhraseEcho(denial, redlines(execution.arguments))
+    if (retreated === denial) return denial
+    const colon = denial.indexOf(':')
+    const code = colon > 0 ? denial.slice(0, colon + 1) : ''
+    return `${code} 错误消息含禁语，已整段脱敏`
+  })
 
   ctx.tools.register(
     defineTool({
@@ -411,8 +462,11 @@ export function apply(ctx: Context): void {
         schema: { type: 'object', additionalProperties: true, properties: {} },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      execute: toolExecute((args: { name: string; version: string }) =>
-        toolOut(summarizePackage(load(args.name, args.version))),
+      execute: toolExecute(
+        (args: { name: string; version: string }) =>
+          toolOut(summarizePackage(load(args.name, args.version))),
+        [],
+        (args) => redlines(args),
       ),
     }),
   )
@@ -431,8 +485,11 @@ export function apply(ctx: Context): void {
         schema: { type: 'object', additionalProperties: true, properties: {} },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      execute: toolExecute((args: { name: string; version: string; ruleId?: string }) =>
-        toolOut(ruleDossier(load(args.name, args.version), args.ruleId)),
+      execute: toolExecute(
+        (args: { name: string; version: string; ruleId?: string }) =>
+          toolOut(ruleDossier(load(args.name, args.version), args.ruleId)),
+        [],
+        (args) => redlines(args),
       ),
     }),
   )
@@ -456,10 +513,14 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      execute: toolExecute((args: { name: string; version: string; objectId?: string }) => {
-        const contracts = readToolContracts(ws.versionDir(args.name, args.version))
-        return toolOut({ contracts: pickContracts(contracts, args.objectId) })
-      }),
+      execute: toolExecute(
+        (args: { name: string; version: string; objectId?: string }) => {
+          const contracts = readToolContracts(ws.versionDir(args.name, args.version))
+          return toolOut({ contracts: pickContracts(contracts, args.objectId) })
+        },
+        [],
+        (args) => redlines(args),
+      ),
     }),
   )
 
@@ -479,8 +540,11 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(renderScenarioList(value.scenarios)),
       },
-      execute: toolExecute((args: { name: string; version: string }) =>
-        toolOut(scenarioCatalog(load(args.name, args.version))),
+      execute: toolExecute(
+        (args: { name: string; version: string }) =>
+          toolOut(scenarioCatalog(load(args.name, args.version))),
+        [],
+        (args) => redlines(args),
       ),
     }),
   )
@@ -517,26 +581,30 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(renderRunText(value as unknown as ScenarioRunResult)),
       },
-      execute: toolExecute((args: {
-        name: string
-        version: string
-        scenarioId: string
-        datasetPath?: string
-        dataset?: unknown
-      }) => {
-        const dataset = loadDatasetFromArgs(args)
-        const pkg = load(args.name, args.version)
-        const versionDir = ws.versionDir(args.name, args.version)
-        const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
-        const contracts = readToolContracts(versionDir)
-        assertDatasetGranted(dataset, contracts)
-        const result = runScenario(versionDir, args.scenarioId, dataset)
-        assertRunContract(result)
-        // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
-        const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
-        rememberPhrases(result.runId, phrases)
-        return toolOut(enforceOutputPolicy(result, phrases))
-      }),
+      execute: toolExecute(
+        (args: {
+          name: string
+          version: string
+          scenarioId: string
+          datasetPath?: string
+          dataset?: unknown
+        }) => {
+          const dataset = loadDatasetFromArgs(args)
+          const pkg = load(args.name, args.version)
+          const versionDir = ws.versionDir(args.name, args.version)
+          const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
+          const contracts = readToolContracts(versionDir)
+          assertDatasetGranted(dataset, contracts)
+          const result = runScenario(versionDir, args.scenarioId, dataset)
+          assertRunContract(result)
+          // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
+          const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
+          rememberPhrases(result.runId, phrases)
+          return toolOut(enforceOutputPolicy(result, phrases))
+        },
+        [],
+        (args) => redlines(args),
+      ),
     }),
   )
 
@@ -565,15 +633,19 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      execute: toolExecute((args: {
-        packageId: string
-        sourceType: SourceType
-        name: string
-        content: string
-      }) => {
-        const source = uploadKnowledgeForPkg(knowledge, ws.listVersions(), args)
-        return toolOut({ source: sourceSummary(source) })
-      }),
+      execute: toolExecute(
+        (args: {
+          packageId: string
+          sourceType: SourceType
+          name: string
+          content: string
+        }) => {
+          const source = uploadKnowledgeForPkg(knowledge, ws.listVersions(), args)
+          return toolOut({ source: sourceSummary(source) })
+        },
+        [],
+        (args) => redlines(args),
+      ),
     }),
   )
 }

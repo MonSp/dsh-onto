@@ -19,6 +19,8 @@ import {
   enforceOutputPolicy,
   rememberPhrases,
   renderRunText,
+  retreatPhraseEcho,
+  toolExecute,
 } from '../dist/agent-policy.js'
 import {
   assertDatasetGranted,
@@ -579,6 +581,39 @@ test('I2 错误信封：原生 fs 错误只留机器码；受控错误保留语�
   assert.ok(!kept.message.includes('D:\\secret'), '服务端目录不得回显')
   // 非 Error → RUN_FAILED 受控
   assert.equal(asToolError('boom').code, 'RUN_FAILED')
+})
+
+test('I1 错误面：入参回显含红线短语 → 整段退避且保留机器码（toolExecute/asToolError）', async () => {
+  const phrase = '确定为洗钱'
+  // asToolError 直传清单
+  const raw = new AgentToolError('OBJECT_NOT_GRANTED', `objectRef ${phrase} 不在收权清单`)
+  const retreated = asToolError(raw, [], [phrase])
+  assert.equal(retreated.code, 'OBJECT_NOT_GRANTED', '机器码必须保留')
+  assert.ok(!retreated.message.includes(phrase), `错误面不得回显短语: ${retreated.message}`)
+  assert.ok(retreated.message.includes('已整段脱敏'), retreated.message)
+  // 无短语命中时业务语义原样保留
+  const plain = asToolError(new AgentToolError('NOT_FOUND', '包不存在: no-pkg@1.0.0'), [], [phrase])
+  assert.equal(plain.message, '包不存在: no-pkg@1.0.0')
+  // toolExecute 惰性 getter：仅 catch 时求值
+  const exec = toolExecute(
+    () => {
+      throw new AgentToolError('INVALID_ARGS', `candidate ${phrase} 缺少 features 对象`)
+    },
+    [],
+    () => [phrase],
+  )
+  await assert.rejects(
+    () => exec({}),
+    (e) => {
+      assert.ok(e instanceof AgentToolError)
+      assert.equal(e.code, 'INVALID_ARGS')
+      assert.ok(!e.message.includes(phrase), e.message)
+      return true
+    },
+  )
+  // 无清单时退化为原语义（与修复前等价，不误伤）
+  assert.equal(retreatPhraseEcho(`x ${phrase} y`, []), `x ${phrase} y`)
+  assert.equal(retreatPhraseEcho('safe', [phrase]), 'safe')
 })
 
 test('I5 契约验形：evidence/missing/hits 错型落 INVALID_TOOL_OUTPUT，render 不再可能裸抛', () => {
