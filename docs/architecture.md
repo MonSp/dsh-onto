@@ -219,8 +219,9 @@ scenario:
   → 候选队列(同 包+层+类型+名称 幂等跳过) → 人工: 批准/合并/驳回 → 物化进包 → 校验 → 签发
 ```
 
-五类原料与抽取重点：`LEGACY_SYS`（旧系统算法/标签 → O2 判定口径）、`CASE_SAMPLE`（样例 → O1 + 统计口径）、
-`POLICY`（制度 → 阈值/排除/红线）、`SCHEMA_API`（表结构/接口 → O1 属性/绑定）、`WORK_ORDER`（工单 → O3 场景骨架）。
+六类原料与抽取重点：`LEGACY_SYS`（旧系统算法/标签 → O2 判定口径）、`CASE_SAMPLE`（样例 → O1 + 统计口径）、
+`POLICY`（制度 → 阈值/排除/红线）、`SCHEMA_API`（表结构/接口 → O1 属性/绑定）、`WORK_ORDER`（工单 → O3 场景骨架）、
+`CONVERSATION`（对话轮次 → 草案留痕与溯源，conversational-modeling P3）。
 
 | LLM 可以 | LLM 不可以 |
 |---|---|
@@ -256,7 +257,8 @@ scenario:
 | `core/src/rules.ts` | 表达式求值、排除→打分 | `tests/scenario.test.mjs` |
 | `core/src/scenario.ts` `audit.ts` | 场景派发、三层审计、禁语扫描 | `tests/scenario.test.mjs` |
 | `core/src/runstore.ts` | RunRecord 运行留痕、两轮对比、审计归档（`workspace/runs/`） | `tests/runstore.test.mjs` |
-| `core/src/knowledge.ts` `llm.ts` | 五类原料解析、人审队列、物化 | `tests/knowledge.test.mjs` |
+| `core/src/knowledge.ts` `llm.ts` | 六类原料解析、人审队列、物化、对话草案与骨架门 | `tests/knowledge.test.mjs` |
+| `core/src/graph.ts` | 图谱构建（画布数据源）与 issue 节点定位 | `tests/graph.test.mjs` |
 | `core/src/cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge` | — |
-| `backend/` | dsh-onto* wire 服务 + agent 工具/skill 面（`run_scenario` 等 10 工具、SKL provider） | `tests/agent-*.test.mjs` |
+| `backend/` | dsh-onto* wire 服务 + agent 工具/skill 面（`run_scenario` 等 17 工具、SKL provider） | `tests/agent-*.test.mjs` |
 | `workbench/` | Web UI 五 tab | — |

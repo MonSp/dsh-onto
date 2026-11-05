@@ -20,7 +20,7 @@
 |---|---|
 | 包管理：创建 / 导入导出 / 版本 fork / 签发状态机（DRAFT→IN_REVIEW→ISSUED，ISSUED 只读） | `dsh-onto package *` / Web「包管理」 |
 | 建模面：O1/O2/O3 结构录入 + YAML 导入 | Web「建模」 / `ontoModel.writeSource` |
-| 知识库：五类原料上传 + LLM 解析（失败回落词面启发）+ 候选队列 + 人审 | `dsh-onto knowledge *` / Web「知识库」 |
+| 知识库：六类原料上传 + LLM 解析（失败回落词面启发）+ 候选队列 + 人审 | `dsh-onto knowledge *` / Web「知识库」 |
 | 校验器：引用闭合 / 权重=1.0 / 字典 / 事件口径 / 属性解析 + 质量分 | `dsh-onto validate` / Web「校验派生」 |
 | 派生器：derived/** + manifest 指纹 + 加载门禁（DERIVED_DRIFT） | `dsh-onto derive` / `dsh-onto gate` |
 | 规则引擎：排除（before-scoring）→ 打分（权重来自 O2），每分回指 ruleId | `core` 规则引擎 |
@@ -86,7 +86,7 @@ node dist\cli.js knowledge queue --root ..\workspace
 ## 验收
 
 `core/tests/`（46 项，`node --test tests/*.test.mjs`）覆盖验收清单：
-校验拦截、五类原料解析、结论不进 O3、强制人审、ISSUED 只读、fork、
+校验拦截、六类原料解析、结论不进 O3、强制人审、ISSUED 只读、fork、
 派生漂移拒绝与恢复、端到端场景字段齐全、ruleId/证据链/禁语零命中、第二域零改引擎。
 
 ## 边界（如实声明）

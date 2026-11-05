@@ -65,7 +65,7 @@ function firstNumber(line: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-/** 五类原料的词面启发路由（§5.5 prompt 路由的确定性对应实现）。 */
+/** 六类原料的词面启发路由（§5.5 prompt 路由的确定性对应实现；CONVERSATION 见 conversational-modeling P3）。 */
 export function heuristicParse(request: LlmParseRequest): DraftItem[] {
   const items: DraftItem[] = []
   const lines = sentences(request.content)

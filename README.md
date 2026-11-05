@@ -108,7 +108,7 @@ node dist\cli.js knowledge queue --root ..\workspace
 ## Testing
 
 `core/tests/` ships 46 acceptance tests (`node --test tests/*.test.mjs`) covering:
-validator interceptions, five-source knowledge parsing, conclusion phrases kept out of O3,
+validator interceptions, six-source knowledge parsing, conclusion phrases kept out of O3,
 forced review for low confidence, ISSUED read-only + fork, derived-drift refusal and
 recovery, end-to-end scenario output contract, rule-ID/evidence-chain/forbidden-phrase
 guarantees, and a second domain running on the untouched engine.
