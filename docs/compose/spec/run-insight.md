@@ -2,7 +2,7 @@
 feature: run-insight
 status: delivered
 updated: 2026-11-05
-source: feat/v0.2.0-run-insight
+source: https://github.com/MonSp/dsh-onto/pull/3
 ---
 
 # 运行时场景/规则体验深化（Run Insight）
