@@ -17,9 +17,11 @@ import { assertWritable, loadPackage, readPackageMeta, savePackage } from './sto
 import type {
   DraftCandidate,
   DraftItem,
+  DraftProvenance,
   KnowledgeSourceRecord,
   LlmPort,
   OntologyPackage,
+  SkeletonRecord,
   SourceType,
 } from './types.js'
 import { DRAFT_TARGET_KINDS, SOURCE_TYPES } from './types.js'
@@ -112,12 +114,60 @@ function normalizePackageId(packageId: string): string {
   return at > 0 ? packageId.slice(0, at) : packageId
 }
 
-/** 知识库存储（profile 数据目录下的一等运行时状态）。 */
-export class KnowledgeStore {
+/** 对话开局骨架存储（conversational-modeling P3/I6）：`<dataDir>/knowledge/skeletons/<pkg>.json`。 */
+export class SkeletonStore {
   readonly root: string
 
   constructor(dataDir: string) {
+    this.root = join(dataDir, 'knowledge', 'skeletons')
+    mkdirSync(this.root, { recursive: true })
+  }
+
+  private pathOf(packageId: string): string {
+    return join(this.root, `${normalizePackageId(packageId)}.json`)
+  }
+
+  /** 读取骨架；不存在返回 null（无骨架 = 不启用 I6 门，保持既有管线兼容）。 */
+  get(packageId: string): SkeletonRecord | null {
+    try {
+      const p = this.pathOf(packageId)
+      if (!existsSync(p)) return null
+      const rec = JSON.parse(readFileSync(p, 'utf8')) as SkeletonRecord
+      if (!rec || typeof rec !== 'object' || !Array.isArray(rec.ids)) return null
+      return rec
+    } catch {
+      return null
+    }
+  }
+
+  /** 保存骨架（updatedAt 每次刷新）。 */
+  save(rec: Omit<SkeletonRecord, 'updatedAt'>): SkeletonRecord {
+    if (typeof rec.packageId !== 'string' || normalizePackageId(rec.packageId) === '') {
+      throw new KnowledgeError('BAD_PACKAGE_ID', 'skeleton packageId 不得为空')
+    }
+    if (!Array.isArray(rec.ids)) {
+      throw new KnowledgeError('BAD_SKELETON', 'skeleton.ids 必须是字符串数组')
+    }
+    const next: SkeletonRecord = {
+      ...rec,
+      packageId: normalizePackageId(rec.packageId),
+      ids: rec.ids.map(String),
+      updatedAt: new Date().toISOString(),
+    }
+    writeFileSync(this.pathOf(next.packageId), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    return next
+  }
+}
+
+/** 知识库存储（profile 数据目录下的一等运行时状态）。 */
+export class KnowledgeStore {
+  readonly root: string
+  /** 对话骨架（同数据目录）；skeleton 门在 materialize 前置（I6）。 */
+  readonly skeletons: SkeletonStore
+
+  constructor(dataDir: string) {
     this.root = join(dataDir, 'knowledge')
+    this.skeletons = new SkeletonStore(dataDir)
     mkdirSync(join(this.root, 'sources'), { recursive: true })
     if (!existsSync(this.queuePath)) writeFileSync(this.queuePath, '[]\n', 'utf8')
   }
@@ -235,6 +285,7 @@ export class KnowledgeStore {
         status: 'pending',
         forcedReview: item.confidence < 0.75,
         conclusionLike,
+        provenance: { sourceId },
         createdAt: new Date().toISOString(),
       }
       queue.push(cand)
@@ -254,6 +305,46 @@ export class KnowledgeStore {
   }
 
   /* ── 人审队列 ──────────────────────────────────────────────────────── */
+
+  /**
+   * 对话轮直起草（conversational-modeling P3：draft_elements 落点）。
+   * 与 parseSource 同闸门：validateDraftItem / 幂等键 / conclusionLike / forcedReview；
+   * 永远只入草案队列（pending），不写包（I1）。
+   */
+  addDraft(input: {
+    packageId: string
+    item: DraftItem
+    provenance?: DraftProvenance
+  }): DraftCandidate {
+    const packageId = normalizePackageId(input.packageId)
+    if (packageId === '') {
+      throw new KnowledgeError('BAD_PACKAGE_ID', 'packageId 不得为空')
+    }
+    const bad = validateDraftItem(input.item)
+    if (bad) throw new KnowledgeError('BAD_DRAFT', `draft invalid: ${bad}`)
+    const item = input.item
+    const key = `${packageId}|${item.layer}|${item.targetKind}|${item.name}`
+    const queue = this.loadQueue()
+    const existing = queue.find(
+      (c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key,
+    )
+    if (existing) return existing
+    const cand: DraftCandidate = {
+      ...item,
+      id: draftCandidateId(key),
+      packageId,
+      sourceId: input.provenance?.sourceId ?? '',
+      sourceName: item.name,
+      status: 'pending',
+      forcedReview: item.confidence < 0.75,
+      conclusionLike: isConclusionLike(item),
+      provenance: input.provenance ?? {},
+      createdAt: new Date().toISOString(),
+    }
+    queue.push(cand)
+    this.saveQueue(queue)
+    return cand
+  }
 
   listCandidates(filter?: { packageId?: string; status?: DraftCandidate['status'] }): DraftCandidate[] {
     const want = filter?.packageId ? normalizePackageId(filter.packageId) : undefined
@@ -368,6 +459,15 @@ export class KnowledgeStore {
       if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
       return c
     })
+    // I6 骨架门：骨架存在且未确认 → 全部拒物化（无骨架记录 = 不启用，保持既有管线兼容）。
+    const skeleton = this.skeletons.get(meta.name)
+    if (skeleton && !skeleton.confirmed) {
+      for (const c of targets) {
+        skipped.push({ id: c.id, reason: 'skeleton 未确认，不得物化（I6）' })
+      }
+      return { applied, skipped }
+    }
+    const inSkeleton = (id: string): boolean => !skeleton || skeleton.ids.includes(id)
     const eligible: typeof targets = []
     for (const c of targets) {
       // 比较前归一（旧数据可能存 name@version）：与 uploadSource 入库口径一致，避免误判 mismatch。
@@ -377,6 +477,12 @@ export class KnowledgeStore {
       }
       if (c.status !== 'approved') {
         skipped.push({ id: c.id, reason: `status=${c.status}，未经人审批准不得物化` })
+        continue
+      }
+      // 显式 payload.id 超骨架 → 拒（ID 漂移源头拦截）。
+      const explicitId = (c.payload as Record<string, unknown> | undefined)?.['id']
+      if (typeof explicitId === 'string' && explicitId && !inSkeleton(explicitId)) {
+        skipped.push({ id: c.id, reason: `ID ${explicitId} 不在骨架内（I6）` })
         continue
       }
       eligible.push(c)
@@ -395,8 +501,17 @@ export class KnowledgeStore {
 
     const pkg = loadPackage(versionDir)
     for (const c of eligible) {
+      // 自动分配 ID 也必须在骨架内：先干跑应用，超界即回滚该条（I6 全覆盖）。
+      const before = snapshotPkg(pkg)
       try {
-        applyDraftToPackage(pkg, c)
+        c.appliedAs = applyDraftToPackage(pkg, c)
+        if (!inSkeleton(c.appliedAs)) {
+          const oosId = c.appliedAs
+          restorePkg(pkg, before)
+          delete c.appliedAs
+          skipped.push({ id: c.id, reason: `生成 ID ${oosId} 不在骨架内（I6）` })
+          continue
+        }
         applied.push(c.id)
       } catch (e) {
         skipped.push({ id: c.id, reason: e instanceof Error ? e.message : String(e) })
@@ -474,6 +589,20 @@ function snapshotPkg(pkg: OntologyPackage): Record<string, string> {
     fieldMaps: JSON.stringify(pkg.fieldMaps),
     apiSources: JSON.stringify(pkg.apiSources),
   }
+}
+
+/** 从快照还原内存模型（骨架门超界回滚单条草案）。 */
+function restorePkg(pkg: OntologyPackage, snap: Record<string, string>): void {
+  pkg.objects = JSON.parse(snap.objects)
+  pkg.relations = JSON.parse(snap.relations)
+  pkg.dictionaries = JSON.parse(snap.dictionaries)
+  pkg.behaviors = JSON.parse(snap.behaviors)
+  pkg.scoreRules = JSON.parse(snap.scoreRules)
+  pkg.exclusionRules = JSON.parse(snap.exclusionRules)
+  pkg.skillTemplates = JSON.parse(snap.skillTemplates)
+  pkg.scenarios = JSON.parse(snap.scenarios)
+  pkg.fieldMaps = JSON.parse(snap.fieldMaps)
+  pkg.apiSources = JSON.parse(snap.apiSources)
 }
 
 function diffSnapshot(
@@ -576,8 +705,8 @@ function tagOf(pkg: OntologyPackage): string {
   return domain.slice(0, 12)
 }
 
-/** 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）。 */
-export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): void {
+/** 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）；返回物化的元素 ID（溯源 I2）。 */
+export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
   const p = c.payload ?? {}
   const tag = tagOf(pkg)
 
@@ -597,7 +726,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         scenario.outputContract.forbiddenPhrases.push(phrase)
       }
     }
-    return
+    return scenario.id
   }
 
   if (c.conclusionLike) {
@@ -614,7 +743,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         attributes: Array.isArray(p['attributes']) ? (p['attributes'] as OntologyPackage['objects'][number]['attributes']) : [],
         lifecycle: Array.isArray(p['lifecycle']) ? (p['lifecycle'] as string[]) : undefined,
       })
-      break
+      return id
     }
     case 'RelationType': {
       const id = pickId(p, 'REL', tag, pkg)
@@ -625,7 +754,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         to: String(p['to'] ?? ''),
         attributes: Array.isArray(p['attributes']) ? (p['attributes'] as OntologyPackage['relations'][number]['attributes']) : [],
       })
-      break
+      return id
     }
     case 'Attribute': {
       const ownerName = typeof p['ownerName'] === 'string' ? p['ownerName'] : undefined
@@ -635,37 +764,41 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         pkg.relations.find((r) => r.id === ownerId || r.name === ownerName)
       if (!owner) throw new KnowledgeError('ATTR_OWNER_NOT_FOUND', `属性 owner 不存在: ${ownerId ?? ownerName ?? '(空)'}`)
       owner.attributes = owner.attributes ?? []
-      if (owner.attributes.some((a) => a.name === String(p['name'] ?? c.name))) break
+      const attrName = String(p['name'] ?? c.name)
+      if (owner.attributes.some((a) => a.name === attrName)) return `${owner.id}.${attrName}`
       owner.attributes.push({
-        name: String(p['name'] ?? c.name),
+        name: attrName,
         type: (p['type'] as 'string') ?? 'string',
         enumValuesRef: typeof p['enumValuesRef'] === 'string' ? p['enumValuesRef'] : undefined,
         refObject: typeof p['refObject'] === 'string' ? p['refObject'] : undefined,
       })
-      break
+      return `${owner.id}.${attrName}`
     }
     case 'Dictionary': {
+      const id = pickDictId(p, pkg)
       pkg.dictionaries.push({
-        id: pickDictId(p, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         values: Array.isArray(p['values']) ? (p['values'] as string[]).map(String) : [],
       })
-      break
+      return id
     }
     case 'BehaviorType': {
+      const id = pickId(p, 'BHV', tag, pkg)
       pkg.behaviors.push({
-        id: pickId(p, 'BHV', tag, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         anchor: String(p['anchor'] ?? ''),
         relations: Array.isArray(p['relations']) ? (p['relations'] as string[]) : undefined,
         states: Array.isArray(p['states']) ? (p['states'] as string[]) : undefined,
         trigger: typeof p['trigger'] === 'string' ? p['trigger'] : undefined,
       })
-      break
+      return id
     }
     case 'ScoreRule': {
+      const id = pickId(p, 'RULE', tag, pkg)
       pkg.scoreRules.push({
-        id: pickId(p, 'RULE', tag, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         description: typeof p['description'] === 'string' ? p['description'] : undefined,
         weight: Number.isFinite(p['weight'] as number) ? (p['weight'] as number) : 0,
@@ -673,27 +806,29 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         threshold: Number.isFinite(p['threshold'] as number) ? (p['threshold'] as number) : undefined,
         evidenceTemplate: typeof p['evidenceTemplate'] === 'string' ? p['evidenceTemplate'] : undefined,
       })
-      break
+      return id
     }
     case 'ExclusionRule': {
+      const id = pickId(p, 'RULE', tag, pkg)
       pkg.exclusionRules.push({
-        id: pickId(p, 'RULE', tag, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         action: p['action'] === 'downweight' ? 'downweight' : 'drop',
         factor: Number.isFinite(p['factor'] as number) ? (p['factor'] as number) : undefined,
         condition: String(p['condition'] ?? "tag == 'unknown'"),
       })
-      break
+      return id
     }
     case 'SkillTemplate': {
+      const id = pickId(p, 'SKL', tag, pkg)
       pkg.skillTemplates.push({
-        id: pickId(p, 'SKL', tag, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         weights: (p['weights'] as Record<string, number>) ?? {},
         steps: Array.isArray(p['steps']) ? (p['steps'] as string[]) : undefined,
         outputTemplate: typeof p['outputTemplate'] === 'string' ? p['outputTemplate'] : undefined,
       })
-      break
+      return id
     }
     case 'ScenarioCard': {
       const id = pickId(p, 'SCN', tag, pkg)
@@ -731,24 +866,26 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): vo
         },
         auditChecks: Array.isArray(p['auditChecks']) ? (p['auditChecks'] as string[]) : ['O1_CLOSED', 'O2_CLOSED', 'O3_CLOSED'],
       })
-      break
+      return id
     }
     case 'FieldMap': {
+      const id = pickId(p, 'FM', tag, pkg)
       pkg.fieldMaps.push({
-        id: pickId(p, 'FM', tag, pkg),
+        id,
         source: String(p['source'] ?? ''),
         target: String(p['target'] ?? ''),
       })
-      break
+      return id
     }
     case 'ApiSource': {
+      const id = pickId(p, 'SRC', tag, pkg)
       pkg.apiSources.push({
-        id: pickId(p, 'SRC', tag, pkg),
+        id,
         name: String(p['name'] ?? c.name),
         sourceType: (p['sourceType'] as SourceType) ?? 'SCHEMA_API',
         endpoint: typeof p['endpoint'] === 'string' ? p['endpoint'] : undefined,
       })
-      break
+      return id
     }
     default:
       throw new KnowledgeError('BAD_TARGET_KIND', `unknown targetKind ${String(c.targetKind)}`)

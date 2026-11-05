@@ -29,6 +29,14 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'compare_runs',
   'export_audit',
   'upload_knowledge_source',
+  // 对话式建模（conversational-modeling P4）
+  'get_model_graph',
+  'draft_elements',
+  'apply_draft',
+  'reject_draft',
+  'list_capabilities',
+  'list_experts',
+  'invoke_expert',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

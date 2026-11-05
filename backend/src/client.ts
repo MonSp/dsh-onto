@@ -122,6 +122,7 @@ window.__ModuleLoader__.load({
       desc('ontoModel', 'save', true, 'MSV', 'Save the model (ISSUED refuses).'),
       desc('ontoModel', 'readSources', true, 'MRS', 'Read raw source files.'),
       desc('ontoModel', 'writeSource', true, 'MWS', 'Write one YAML source file.'),
+      desc('ontoModel', 'getGraph', true, 'MGR', 'Build the modeling graph (nodes/edges/issues) for the canvas.'),
       // ontoValidate
       desc('ontoValidate', 'validate', true, 'VVD', 'Validate and persist quality-report.json.'),
       desc('ontoValidate', 'summary', true, 'VSM', 'Validate without writing the report.'),
@@ -138,6 +139,8 @@ window.__ModuleLoader__.load({
       desc('ontoKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
       desc('ontoKnowledge', 'previewMaterialize', true, 'KPV', 'Dry-run materialize: show what would be written.'),
       desc('ontoKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
+      desc('ontoKnowledge', 'addDraft', true, 'KAD', 'Queue a draft item from a conversation turn (never writes the package).'),
+      desc('ontoKnowledge', 'saveSkeleton', true, 'KSK', 'Save/confirm the modeling skeleton (I6 gate).'),
       // ontoRuntime
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),

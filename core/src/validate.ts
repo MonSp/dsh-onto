@@ -8,10 +8,16 @@ import { join } from 'node:path'
 import { extractAttrRefs, parseAttrRef, UNREFERENCED_EXEMPT_PREFIXES } from './ids.js'
 import { validateExpression } from './rules.js'
 import { listSourceFiles, loadPackage, readPackageMeta, QUALITY_REPORT_FILE } from './store.js'
-import type { OntologyPackage, QualityReport, ValidationIssue } from './types.js'
+import type { OntologyPackage, QualityReport, SkeletonRecord, ValidationIssue } from './types.js'
 import { loadYaml } from './yamlio.js'
 
 const WEIGHT_SUM_TOLERANCE = 1e-6
+
+/** 校验可选项（conversational-modeling P3/I6）。 */
+export interface ValidateOptions {
+  /** 对话骨架：提供时启用 SKELETON_OUT_OF_SCOPE 门（骨架外 ID → error）。 */
+  skeleton?: SkeletonRecord | null
+}
 
 /** 深度遍历任意值里的所有字符串。 */
 function walkStrings(value: unknown, visit: (s: string) => void): void {
@@ -76,20 +82,21 @@ function collectDefinedIds(pkg: OntologyPackage): {
 /**
  * 对一个包版本目录执行全部校验规则，返回问题清单（不落盘）。
  */
-export function validatePackageDir(versionDir: string): {
+export function validatePackageDir(versionDir: string, opts?: ValidateOptions): {
   pkg: OntologyPackage
   errors: ValidationIssue[]
   warnings: ValidationIssue[]
   info: ValidationIssue[]
 } {
   const pkg = loadPackage(versionDir)
-  return { pkg, ...validatePackage(pkg, versionDir) }
+  return { pkg, ...validatePackage(pkg, versionDir, opts) }
 }
 
 /** 对内存模型执行校验；versionDir 仅用于 events 扫描与 where 定位。 */
 export function validatePackage(
   pkg: OntologyPackage,
   versionDir?: string,
+  opts?: ValidateOptions,
 ): { errors: ValidationIssue[]; warnings: ValidationIssue[]; info: ValidationIssue[] } {
   const errors: ValidationIssue[] = []
   const warnings: ValidationIssue[] = []
@@ -106,10 +113,20 @@ export function validatePackage(
 
   const resolved = (id: string): boolean => defined.has(id) || external.has(id)
 
+  /* ── error: 骨架外 ID（conversational-modeling I6） ────────────────────── */
+
+  const skeleton = opts?.skeleton
+  if (skeleton) {
+    const allowed = new Set(skeleton.ids)
+    for (const id of defined.keys()) {
+      if (!allowed.has(id)) err('SKELETON_OUT_OF_SCOPE', id, `ID 不在骨架内: ${id}`)
+    }
+  }
+
   /* ── error: ID 全包唯一（§3.3；score/exclusion 共用 RULE-* 也算重复） ── */
 
   for (const d of dupes) {
-    err('DUP_ID', d.second, `ID 重复: ${d.id}（已定义于 ${d.first}）`)
+    err('DUP_ID', d.id, `ID 重复: ${d.id}（已定义于 ${d.first}）`)
   }
   for (const where of empty) {
     err('ID_EMPTY', where, 'ID 为空')
@@ -198,7 +215,7 @@ export function validatePackage(
         continue
       }
       if (!attrs.has(ref.attrName)) {
-        err('ATTR_UNRESOLVED', 'package', `属性不可解析: ${key}`)
+        err('ATTR_UNRESOLVED', owner, `属性不可解析: ${key}`)
       }
     }
   })
@@ -305,10 +322,10 @@ export function validatePackage(
     }
   }
   markRefs(pkg, false)
-  for (const [id, where] of defined) {
+  for (const id of defined.keys()) {
     if (referenced.has(id)) continue
     if (UNREFERENCED_EXEMPT_PREFIXES.some((p) => id.startsWith(p))) continue
-    warn('ID_UNREFERENCED', where, `ID 未被引用: ${id}`)
+    warn('ID_UNREFERENCED', id, `ID 未被引用: ${id}`)
   }
 
   /* ── info: 覆盖统计（§7.1） ─────────────────────────────────────────── */

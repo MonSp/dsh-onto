@@ -228,6 +228,31 @@ function closureRequirement(check: string): string {
 }
 
 /**
+ * O→L 层标注（conversational-modeling P4）：bindings/工具契约→L2，
+ * skill-templates→L3，职责/审计/编排→L4；rule-engine-config 等引擎配置不标
+ * （O2 运行配置，非 L 层执行件）。L1/L5 为入口面，不派生。
+ */
+function layerOfEntry(rel: string): ManifestEntry['layer'] {
+  if (rel.startsWith('bindings/')) return 'L2'
+  if (rel.startsWith('derived/tool-contracts')) return 'L2'
+  if (
+    rel.startsWith('derived/agent-duties') ||
+    rel.startsWith('derived/audit-checks') ||
+    rel.startsWith('derived/scenario-orchestration')
+  ) {
+    return 'L4'
+  }
+  if (rel.startsWith('o2-behavior-rules/skill-templates/')) return 'L3'
+  return undefined
+}
+
+/** manifest 条目构造：path + sha256 + 可选 layer（向后兼容，缺省即无标注）。 */
+function withLayer(path: string, sha256: string): ManifestEntry {
+  const layer = layerOfEntry(path)
+  return layer ? { path, sha256, layer } : { path, sha256 }
+}
+
+/**
  * 派生入口：生成 derived/** 并写 manifest（含全部源/派生指纹）。
  * 覆盖已有派生物（只读语义指运行时不得手改，再生成是恢复手段）。
  */
@@ -246,14 +271,12 @@ export function derivePackage(versionDir: string): DerivedManifest {
     writeFileSync(full, dumpYaml(doc), 'utf8')
   }
 
-  const sources: ManifestEntry[] = listSourceFiles(versionDir).map((rel) => ({
-    path: rel,
-    sha256: sourceFileSha256(rel, readSourceFile(versionDir, rel)),
-  }))
-  const derivedEntries: ManifestEntry[] = Object.keys(derived).map((rel) => ({
-    path: rel,
-    sha256: sha256Text(readFileSync(join(versionDir, rel), 'utf8')),
-  }))
+  const sources: ManifestEntry[] = listSourceFiles(versionDir).map((rel) =>
+    withLayer(rel, sourceFileSha256(rel, readSourceFile(versionDir, rel))),
+  )
+  const derivedEntries: ManifestEntry[] = Object.keys(derived).map((rel) =>
+    withLayer(rel, sha256Text(readFileSync(join(versionDir, rel), 'utf8'))),
+  )
 
   const meta = readPackageMeta(versionDir)
   const manifest: DerivedManifest = {

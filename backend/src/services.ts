@@ -43,6 +43,9 @@ import {
   verifyDerived,
   writeQualityReport,
   type KnowledgeSourceRecord,
+  type DraftCandidate,
+  type DraftItem,
+  type ModelGraph,
   type OntologyPackage,
   type PackageMeta,
   type QualityReport,
@@ -50,9 +53,11 @@ import {
   type RunRecord,
   type RuntimeDataset,
   type ScenarioRunResult,
+  type SkeletonRecord,
   type SourceType,
 } from '@dsh-onto/core'
 import { invalidateSkillCatalog } from './agent-hooks.js'
+import { buildGraphForTool } from './model-face.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -215,10 +220,13 @@ export class OntoWorkspace extends TypertRemoteService {
 
 export class OntoModel extends TypertRemoteService {
   private readonly ws: PackageWorkspace
+  private readonly knowledge: KnowledgeStore
 
   constructor(ctx: Context) {
     super(ctx, 'ontoModel')
-    this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
+    const dataDir = resolveDataDir(ctx)
+    this.ws = new PackageWorkspace(join(dataDir, 'workspace'))
+    this.knowledge = new KnowledgeStore(dataDir)
   }
 
   private dirOf(name: string, version: string): string {
@@ -228,6 +236,19 @@ export class OntoModel extends TypertRemoteService {
   @Remote('load')
   async remoteExportLoad(request: { name: string; version: string }): Promise<{ pkg: OntologyPackage }> {
     return guard(() => ({ pkg: loadPackage(this.dirOf(request.name, request.version)) }))
+  }
+
+  /** 画布数据源（conversational-modeling P1）：节点/边/issues/骨架 + revision 刷新信号。 */
+  @Remote('getGraph')
+  async remoteExportGetGraph(request: { name: string; version: string }): Promise<{ graph: ModelGraph }> {
+    return guard(() => ({
+      graph: buildGraphForTool({
+        ws: this.ws,
+        knowledge: this.knowledge,
+        name: request.name,
+        version: request.version,
+      }),
+    }))
   }
 
   @Remote('save')
@@ -452,6 +473,62 @@ export class OntoKnowledge extends TypertRemoteService {
     return guard(() => ({
       candidate: this.store.reviewCandidate(request.id, request.action, { mergeIntoName: request.mergeIntoName }),
     }))
+  }
+
+  /** 对话/画布直起草（conversational-modeling P3）：只入草案队列，永不直写包（I1）。 */
+  @Remote('addDraft')
+  async remoteExportAddDraft(request: {
+    name: string
+    version: string
+    item: DraftItem
+    turnId?: string
+  }): Promise<{ candidate: DraftCandidate }> {
+    return guard(() => {
+      if (!request?.name || !request?.version || !request?.item) {
+        throw ontoError('onto/bad-request', 'name/version/item required')
+      }
+      const dir = this.ws.versionDir(request.name, request.version)
+      const meta = readPackageMeta(dir)
+      if (meta.status === 'ISSUED') {
+        throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (fork before drafting)`)
+      }
+      return {
+        candidate: this.store.addDraft({
+          packageId: meta.name,
+          item: request.item,
+          provenance: { turnId: request.turnId },
+        }),
+      }
+    })
+  }
+
+  /** 对话开局骨架（P3/I6）：domainCode + 全量 ID 清单 + 确认态；骨架门在物化前置。 */
+  @Remote('saveSkeleton')
+  async remoteExportSaveSkeleton(request: {
+    name: string
+    version: string
+    domainCode: string
+    confirmed: boolean
+    ids: string[]
+  }): Promise<{ skeleton: SkeletonRecord }> {
+    return guard(() => {
+      if (!request?.name || !request?.version || !Array.isArray(request?.ids)) {
+        throw ontoError('onto/bad-request', 'name/version/ids required')
+      }
+      const dir = this.ws.versionDir(request.name, request.version)
+      const meta = readPackageMeta(dir)
+      if (meta.status === 'ISSUED') {
+        throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (read-only)`)
+      }
+      return {
+        skeleton: this.store.skeletons.save({
+          packageId: meta.name,
+          domainCode: request.domainCode,
+          confirmed: request.confirmed,
+          ids: request.ids,
+        }),
+      }
+    })
   }
 
   @Remote('previewMaterialize')
