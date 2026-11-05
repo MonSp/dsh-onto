@@ -12,15 +12,22 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AgentToolError,
-  assertDatasetGranted,
   assertNoForbiddenPhrases,
   assertRunContract,
+  asToolError,
+  collectPhrases,
+  enforceOutputPolicy,
+  rememberPhrases,
+  renderRunText,
+} from '../dist/agent-policy.js'
+import {
+  assertDatasetGranted,
   grantGuardDecision,
+  readToolContracts,
+} from '../dist/agent-grants.js'
+import {
   loadDatasetFromArgs,
   loadToolPackage,
-  enforceOutputPolicy,
-  readToolContracts,
-  renderRunText,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
 import { dedupeSkillNames, isCurrentWinner, pickSkillSources } from '../dist/agent-skills.js'
@@ -492,5 +499,109 @@ test('I1 断言闸门：模型面残留短语即受控失败（错误不回显�
   } catch (e) {
     assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
     assert.ok(!e.message.includes(phrase), `错误消息不得回显短语: ${e.message}`)
+  }
+})
+
+/* ── 第十四轮挂点病同族补测：render 闸可达性（I1）+ 错误信封（I2）+ 验形（I5） ── */
+
+const cleanRun = (runId, extra = {}) => ({
+  scenarioId: 'S', runId, startedAt: 't',
+  candidates: [{
+    candidateId: 'C1', objectRef: 'g1', riskScore: 0.5, hitRuleIds: ['RULE-AML-001'],
+    evidenceChains: [], pendingChecks: [],
+    pendingVerification: false, narrative: ['干净叙述'],
+  }],
+  excluded: [], humanReviewRequired: true,
+  reviewGate: { threshold: 0.5, required: true, requireReviewFor: [] },
+  ruleHitLog: [],
+  audit: { checks: [], forbiddenPhraseHits: [], passed: true },
+  ...extra,
+})
+
+test('I1 模板字面碰撞（红线双源）：命中为空、短语仅存场景红线 → 渲染模板碰撞仍整段兜底', () => {
+  const phrase = '命中' // 构造形态：红线短语 ⊂ render 模板固定字面（「命中规则」「N 命中」）
+  const raw = cleanRun('R-tpl')
+  const phrases = collectPhrases(raw, [phrase])
+  assert.deepEqual(phrases, [phrase], '清单双源：命中为空时场景红线补入')
+  // 生产路径：注册 → value 闸 → render 闸（经 runId 注册表取回清单）
+  rememberPhrases(raw.runId, phrases)
+  const masked = enforceOutputPolicy(raw, phrases)
+  const text = renderRunText(masked)
+  assert.ok(!text.includes(phrase), `模板碰撞不得泄漏: ${text}`)
+  assert.match(text, /^【.+】$/, '拼接后检出短语 → 整段渲染文本替换为标记')
+  // 反证挂点病：清单丢失（旧实现从空化 value 反推）→ 兜底失效、模板字面原样泄漏
+  const blind = renderRunText(masked, [])
+  assert.ok(blind.includes(phrase), '空清单失去兜底——清单必须由 execute 传递，不得从 value 反推')
+})
+
+test('I1 跨分隔符重组：短语横跨 ID 面字段与模板分隔符 → 整段退避为标记', () => {
+  const phrase = 'C1（g1' // candidateId=C1 + 分隔符（ + objectRef=g1 拼成
+  const raw = cleanRun('R-x')
+  const phrases = collectPhrases(raw, [phrase])
+  const masked = enforceOutputPolicy(raw, phrases)
+  // 单字段均不含短语（ID 面直通）：value 闸放行且不改写 ID
+  assert.equal(masked.candidates[0].candidateId, 'C1')
+  assert.equal(masked.candidates[0].objectRef, 'g1')
+  const text = renderRunText(masked, phrases)
+  assert.ok(!text.includes(phrase), `跨段重组不得泄漏: ${text}`)
+  assert.match(text, /^【.+】$/, '拼接后检出短语 → 整段渲染文本替换为标记')
+})
+
+test('I1 幂等（copy-on-write）：带清单二次执行同引用，不依赖空化短路', () => {
+  const phrase = '确定为洗钱'
+  const raw = rawRun(phrase)
+  const phrases = collectPhrases(raw, [phrase])
+  const masked = enforceOutputPolicy(raw, phrases)
+  assert.equal(enforceOutputPolicy(masked, phrases), masked, '带清单二次执行必须同引用')
+  assert.equal(enforceOutputPolicy(masked), masked, '清单缺省（命中已空化）同样同引用')
+})
+
+test('I2 错误信封：原生 fs 错误只留机器码；受控错误保留语义并剥服务端目录', () => {
+  // 原生 fs（errno/syscall 或 errno 词形码）：原文含绝对路径，只留机器码
+  const fsErr = Object.assign(
+    new Error(`ENOENT: no such file or directory, open 'D:\\data\\knowledge\\sources\\x.json'`),
+    { code: 'ENOENT', errno: -4058, syscall: 'open', path: 'D:\\data\\knowledge\\sources\\x.json' },
+  )
+  const wrapped = asToolError(fsErr)
+  assert.equal(wrapped.code, 'ENOENT')
+  assert.ok(!wrapped.message.includes('D:\\data'), `fs 原文不得回显绝对路径: ${wrapped.message}`)
+  assert.ok(!wrapped.message.includes('no such file'), `fs 错误原文不得回显: ${wrapped.message}`)
+  // errno 词形码（无 errno 属性的同形错误）同样只留码
+  const word = asToolError(Object.assign(new Error('EACCES: permission denied, open \'C:\\x\''), { code: 'EACCES' }))
+  assert.equal(word.code, 'EACCES')
+  assert.ok(!word.message.includes('C:\\x'))
+  // 受控业务错误：语义保留、服务端目录剥除
+  const dir = 'D:\\secret\\workspace\\aml\\1.0.0'
+  const biz = Object.assign(new Error(`missing package.yaml meta in ${dir}`), { code: 'PACKAGE_MALFORMED' })
+  const kept = asToolError(biz, [dir])
+  assert.equal(kept.code, 'PACKAGE_MALFORMED')
+  assert.ok(kept.message.includes('<pkg>'), '业务语义保留（目录占位）')
+  assert.ok(!kept.message.includes('D:\\secret'), '服务端目录不得回显')
+  // 非 Error → RUN_FAILED 受控
+  assert.equal(asToolError('boom').code, 'RUN_FAILED')
+})
+
+test('I5 契约验形：evidence/missing/hits 错型落 INVALID_TOOL_OUTPUT，render 不再可能裸抛', () => {
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
+  const first = (mut) => ({
+    ...good,
+    candidates: good.candidates.map((c, i) => (i === 0 ? mut(c) : c)),
+  })
+  const cases = [
+    first((c) => ({ ...c, evidenceChains: [{ ruleId: 123, evidence: 'x', score: 0.5 }] })),
+    first((c) => ({ ...c, evidenceChains: [{ ruleId: 'R', evidence: null, score: 0.5 }] })),
+    first((c) => ({ ...c, pendingChecks: [{ note: 'n', missing: 'not-an-array' }] })),
+    first((c) => ({ ...c, pendingChecks: [{ note: 'n', missing: [1, 2] }] })),
+    first((c) => ({ ...c, pendingChecks: [{ missing: [] }] })),
+    first((c) => ({ ...c, hitRuleIds: [42] })),
+    first((c) => ({ ...c, narrative: [null] })),
+    {
+      ...good,
+      audit: { ...good.audit, forbiddenPhraseHits: [{ phrase: 'x' }] },
+    },
+  ]
+  for (const bad of cases) {
+    expectCode(() => assertRunContract(bad), 'INVALID_TOOL_OUTPUT')
   }
 })

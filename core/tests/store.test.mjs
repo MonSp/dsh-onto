@@ -1,15 +1,17 @@
 /** 签发状态机与包存储验收（规范 §3.4 / §11.3）：ISSUED 只读、fork、人审签发。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   PackageStoreError,
   PackageWorkspace,
   loadPackage,
+  readSourceFile,
   savePackage,
   readPackageMeta,
+  writeSourceFile,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, mkWorkspace, rmWorkspace } from './helpers.mjs'
 
@@ -254,5 +256,39 @@ test('importVersion 归档 rel 逃逸拒绝（round-13：wire 导入面两遍式
     assert.ok(existsSync(join(dir, 'o1-objects', 'dictionaries', 'dict-x.yaml')))
   } finally {
     rmWorkspace(ws.root)
+  }
+})
+
+
+test('读源围栏：readSourceFile 本体拒绝穿越/ADS/绝对路径/junction 读穿（读写成对）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-rsrc-'))
+  const outside = mkdtempSync(join(tmpdir(), 'onto-rsrc-out-'))
+  try {
+    const dir = join(tmp, 'pkg', '1.0.0')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(outside, 'secret.yaml'), 'secret: true')
+    const bad = (rel) => {
+      try {
+        readSourceFile(dir, rel)
+        assert.fail(`期望拒绝: ${rel}`)
+      } catch (e) {
+        assert.ok(e instanceof PackageStoreError, `期望 PackageStoreError，得到 ${e}`)
+        assert.equal(e.code, 'PACKAGE_MALFORMED')
+      }
+    }
+    bad('../secret.yaml')
+    bad('a:b.yaml')
+    bad('sub/../../up.yaml')
+    bad('C:\\abs.yaml')
+    bad('')
+    // junction 读穿：子目录指外不得读到外部内容
+    symlinkSync(outside, join(dir, 'sub'), 'junction')
+    bad('sub/secret.yaml')
+    // 合法读回（与写源同口径）
+    writeSourceFile(dir, 'o1-objects/x.yaml', 'ok: true')
+    assert.ok(readSourceFile(dir, 'o1-objects/x.yaml').includes('ok'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
   }
 })

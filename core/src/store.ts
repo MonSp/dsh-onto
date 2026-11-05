@@ -170,9 +170,14 @@ export function listSourceFiles(versionDir: string): string[] {
   return rel
 }
 
-/** 读取单个源文件文本（相对版本目录）。 */
+/** 读取单个源文件文本（相对版本目录）。读写成对围栏（tool-face-policy P2.1）：
+ * rel 形态拒绝 + 落点 containment——manifest 等外部清单里的越界路径不读围栏外文件。 */
 export function readSourceFile(versionDir: string, relPath: string): string {
-  return readFileSync(join(versionDir, relPath), 'utf8')
+  const full = join(versionDir, relPath)
+  if (!isSafeRelPath(relPath) || !isInsideDir(versionDir, full)) {
+    throw new PackageStoreError('PACKAGE_MALFORMED', `invalid source path: ${relPath}`)
+  }
+  return readFileSync(full, 'utf8')
 }
 
 /** 写入单个源文件（带签发守卫）。 */
@@ -197,7 +202,7 @@ export function writeSourceFile(versionDir: string, relPath: string, text: strin
 export function readPackageMeta(versionDir: string): PackageMeta {
   const doc = readYamlFile<Partial<PackageMeta>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
   if (!doc.name || !doc.version) {
-    throw new PackageStoreError('PACKAGE_MALFORMED', `missing package.yaml meta in ${versionDir}`)
+    throw new PackageStoreError('PACKAGE_MALFORMED', 'missing package.yaml meta')
   }
   return {
     kind: 'BusinessOntologyPackage',

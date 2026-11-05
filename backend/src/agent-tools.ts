@@ -1,9 +1,10 @@
 /**
  * dsh 原生 agent 工具面：场景执行 / 只读查询 / 知识上传。
  *
- * 约束（docs/compose/spec/dsh-native-integration.md）：
+ * 约束（docs/compose/spec/tool-face-policy.md）：
  * - 签发/审阅端点永不注册（规范 §12.4）；
- * - 对象粒度收权以派生 `derived/tool-contracts` 为事实源（guard + 输出投影）；
+ * - 策略裁决全部在 agent-policy（禁语/错误信封/契约断言）与 agent-grants（收权），
+ *   本模块只做注册、投影与数据双通道；
  * - run_scenario 工具结果恒含 ruleId 回指、humanReviewRequired=true 与禁语扫描。
  * @module @dsh-onto/backend/agent-tools
  */
@@ -12,15 +13,12 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
-  DERIVED_FILES,
   KnowledgeStore,
-  PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
   isInsideDir,
   isSafeRelPath,
   loadPackage,
-  loadYaml,
   runScenario,
   verifyDerived,
   type KnowledgeSourceRecord,
@@ -29,36 +27,27 @@ import {
   type ScenarioRunResult,
   type SourceType,
 } from '@dsh-onto/core'
+import {
+  AgentToolError,
+  assertRunContract,
+  collectPhrases,
+  enforceOutputPolicy,
+  isRecord,
+  registerServerDir,
+  rememberPhrases,
+  renderRunText,
+  toolExecute,
+} from './agent-policy.js'
+import {
+  assertDatasetGranted,
+  grantGuardDecision,
+  pickContracts,
+  readToolContracts,
+} from './agent-grants.js'
 import { resolveDataDir } from './services.js'
 import { compareVersions } from './agent-skills.js'
 
-/** 工具层错误；message 直接面向模型，code 供测试与断言。 */
-export class AgentToolError extends Error {
-  readonly code: string
-
-  constructor(code: string, message: string) {
-    super(message)
-    this.name = 'AgentToolError'
-    this.code = code
-  }
-}
-
-/** 全部 dsh-onto 工具名；guard 只作用于本工具面。 */
-export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
-  'list_packages',
-  'get_package',
-  'get_rule',
-  'list_tool_contracts',
-  'list_scenarios',
-  'run_scenario',
-  'upload_knowledge_source',
-])
-
 /* ───────────────────────── 数据集双通道（S2.3） ───────────────────────── */
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 /** 校验并收窄 RuntimeDataset 形状；对象/关系明细留给 core 的 DATA_INGEST 对照 O1。 */
 export function validateDatasetShape(value: unknown): RuntimeDataset {
@@ -179,434 +168,7 @@ export function loadDatasetFromArgs(
   return validateDatasetShape(args.dataset)
 }
 
-/* ───────────────────────── 输出契约装配断言（S2.3） ───────────────────────── */
-
-/** 装配断言：工具结果必须完整携带输出契约要件；失败即 isError，不产出残缺结果。 */
-export function assertRunContract(result: ScenarioRunResult): void {
-  if (!Array.isArray(result.candidates)) {
-    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: candidates 不是数组')
-  }
-  for (const c of result.candidates) {
-    // Number.isFinite 同时拒 NaN/Infinity 与非数字（typeof NaN === 'number'，纯 typeof 拦不住）。
-    if (!Number.isFinite(c.riskScore)) {
-      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} riskScore 非有限数`)
-    }
-    for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks', 'narrative'] as const) {
-      if (!Array.isArray(c[key])) {
-        throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: ${c.candidateId} ${key} 不是数组`)
-      }
-    }
-    // 证据链 score 同为规则引擎产物：包权重 YAML `.inf` 会让其成 Infinity（riskScore 有夹取
-    // 不暴露），须在出口契约拦截，不产出非有限数证据（round-13 minor）。
-    for (const e of c.evidenceChains) {
-      if (!isRecord(e) || !Number.isFinite(e.score)) {
-        throw new AgentToolError(
-          'INVALID_TOOL_OUTPUT',
-          `输出契约失败: ${c.candidateId} evidenceChains 条目需要有限 score`,
-        )
-      }
-    }
-  }
-  if (!Array.isArray(result.excluded)) {
-    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: excluded 不是数组')
-  }
-  for (const x of result.excluded) {
-    if (!isRecord(x) || typeof x.candidateId !== 'string' || typeof x.ruleId !== 'string') {
-      throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: excluded 条目需要字符串 candidateId 与 ruleId')
-    }
-  }
-  if (result.humanReviewRequired !== true) {
-    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: humanReviewRequired 必须为 true')
-  }
-  if (!result.audit || !Array.isArray(result.audit.forbiddenPhraseHits)) {
-    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: audit.forbiddenPhraseHits 缺失')
-  }
-}
-
-/** 面向模型的合规渲染：候选摘要 + 强制合规页脚（tool-face-policy P2.2）。 */
-export function renderRunText(result: ScenarioRunResult): string {
-  const phrases = [...new Set(result.audit.forbiddenPhraseHits.map((h) => h.phrase))].filter((p) => p !== '')
-  const token = phrases.length > 0 ? requireMaskToken(phrases) : ''
-  // 自由文本片段级整值重遮；ID 回指片段不改写（撞短语 fail-loud）。
-  const face = (s: string) => (phrases.some((p) => s.includes(p)) ? token : s)
-  const idFace = (key: string, s: string) => {
-    if (phrases.some((p) => s.includes(p))) {
-      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
-    }
-    return s
-  }
-  const lines: string[] = []
-  lines.push(`场景 ${idFace('scenarioId', result.scenarioId)} · 运行 ${idFace('runId', result.runId)}`)
-  for (const c of result.candidates) {
-    lines.push(`- ${idFace('candidateId', c.candidateId)}（${idFace('objectRef', c.objectRef)}）riskScore=${c.riskScore}`)
-    lines.push(`  命中规则: ${c.hitRuleIds.map((id) => idFace('hitRuleIds', id)).join(', ') || '—'}`)
-    for (const e of c.evidenceChains) {
-      lines.push(`  证据[${idFace('ruleId', e.ruleId)}] ${face(e.evidence)} (score=${e.score})`)
-    }
-    for (const p of c.pendingChecks) {
-      const missing =
-        p.missing && p.missing.length > 0 ? `（缺 ${p.missing.map((m) => idFace('missing', m)).join(', ')}）` : ''
-      lines.push(`  待核实: ${face(p.note)}${missing}`)
-    }
-    if (c.pendingVerification) lines.push('  pendingVerification=true')
-    for (const n of c.narrative) lines.push(`  叙述: ${face(n)}`)
-  }
-  for (const x of result.excluded) {
-    lines.push(`排除: ${idFace('candidateId', x.candidateId)}（${idFace('ruleId', x.ruleId)}）`)
-  }
-  lines.push('—— 合规 ——')
-  lines.push('humanReviewRequired=true（认定出口只在人工复核）')
-  const hits = result.audit.forbiddenPhraseHits
-  lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
-  for (const h of hits) {
-    // 命中清单只给位置；短语本体不经渲染面（P2.2）。
-    lines.push(`  禁语命中 @ ${face(h.where)}`)
-  }
-  lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
-  const text = lines.join('\n')
-  // 病态构造兜底（短语横跨分隔符拼成）：整段退避为标记——不做子串手术。
-  return phrases.some((p) => text.includes(p)) ? token : text
-}
-
-/** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */
-const MASK_TOKENS = ['【禁语已脱敏】', '【已屏蔽】', '【内容已隐藏】'] as const
-
-/** 选首枚不含任何短语的标记——防「短语 ⊂ 标记」时标记自嵌泄漏（P2.2）。 */
-function pickMaskToken(phrases: readonly string[]): string {
-  for (const m of MASK_TOKENS) {
-    if (!phrases.some((p) => m.includes(p))) return m
-  }
-  return ''
-}
-
-/** 短语非空即必须有可用标记；全冲突（病态构造）fail-loud，不带短语回显。 */
-function requireMaskToken(phrases: readonly string[]): string {
-  const token = pickMaskToken(phrases)
-  if (token === '') {
-    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: 禁语短语与脱敏标记冲突')
-  }
-  return token
-}
-
-/**
- * ID 回指面：tool 层不改写命中（S2.3「每一分回指 ruleId 由 core 保证，工具层不改写」）。
- * 短语若撞进 ID 面（禁语 ⊂ ID 的构造形态），「不改写」与「零容忍」不可兼得——
- * fail-loud 拒绝产出（错误消息不回显短语），而非静默改写 ID 或放行短语。
- */
-const ID_FACE_KEYS: ReadonlySet<string> = new Set([
-  'id',
-  'ruleId',
-  'hitRuleIds',
-  'objectRef',
-  'candidateId',
-  'runId',
-  'scenarioId',
-  'check',
-  'missing',
-  'requireReviewFor',
-  'startedAt',
-  'ts',
-])
-
-/**
- * 工具出口策略执行（tool-face-policy P2.2，原 maskForbiddenPhrases）。
- * 整字段重遮 + ID 面 fail-loud + 断言闸门，禁止子串手术（嵌套残片/剥离不动点/
- * 标记自嵌等衍生病的根源已随子串替换一并废除）：
- * - `phrase` 字段空化（不回显短语本体，兼幂等锚点：二次执行清单为空即同引用返回）；
- * - ID 回指字段撞短语 fail-loud；其余字段含任一短语**整值替换**为占位标记；
- * - 执行后过断言闸门（与 I1 不变量测试同源函数）。
- * core/wire 人审面不经过本函数，保留完整短语。
- */
-export function enforceOutputPolicy(result: ScenarioRunResult): ScenarioRunResult {
-  const phrases = [...new Set((result.audit?.forbiddenPhraseHits ?? []).map((h) => h.phrase))].filter((p) => p !== '')
-  if (phrases.length === 0) return result
-  const token = requireMaskToken(phrases)
-  const walk = (v: unknown, key: string): unknown => {
-    if (typeof v === 'string') {
-      if (key === 'phrase') return '' // hits[].phrase 不回显短语本体（幂等锚点）
-      if (ID_FACE_KEYS.has(key)) {
-        if (phrases.some((p) => v.includes(p))) {
-          throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
-        }
-        return v
-      }
-      return phrases.some((p) => v.includes(p)) ? token : v
-    }
-    if (Array.isArray(v)) return v.map((x) => walk(x, key))
-    if (isRecord(v)) {
-      const out: Record<string, unknown> = {}
-      for (const [k, item] of Object.entries(v)) out[k] = walk(item, k)
-      return out
-    }
-    return v
-  }
-  const out = walk(result, '') as ScenarioRunResult
-  assertNoForbiddenPhrases(out, phrases)
-  return out
-}
-
-/** 断言闸门（I1）：模型面任何字符串不得含禁语短语；违规受控失败，错误不回显短语。 */
-export function assertNoForbiddenPhrases(value: unknown, phrases: readonly string[]): void {
-  const real = phrases.filter((p) => p !== '')
-  if (real.length === 0) return
-  const walk = (v: unknown): void => {
-    if (typeof v === 'string') {
-      if (real.some((p) => v.includes(p))) {
-        throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: 禁语短语泄漏到模型可见面')
-      }
-      return
-    }
-    if (Array.isArray(v)) {
-      for (const x of v) walk(x)
-      return
-    }
-    if (isRecord(v)) {
-      for (const item of Object.values(v)) walk(item)
-    }
-  }
-  walk(value)
-}
-
-/* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */
-
-/** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */
-export interface ToolContractEntry {
-  id: string
-  objectId?: string
-  relationId?: string
-  grantScope: string
-  idRule?: string | null
-  inputs: string[]
-  outputs: string[]
-}
-
-/** 逐字段裁剪到 grant 面，防御意外扩面。 */
-export function projectByContract(raw: unknown): ToolContractEntry {
-  const r = isRecord(raw) ? raw : {}
-  const entry: ToolContractEntry = {
-    id: String(r.id ?? ''),
-    grantScope: String(r.grantScope ?? ''),
-    inputs: Array.isArray(r.inputs) ? r.inputs.map(String) : [],
-    outputs: Array.isArray(r.outputs) ? r.outputs.map(String) : [],
-  }
-  if (typeof r.objectId === 'string') entry.objectId = r.objectId
-  if (typeof r.relationId === 'string') entry.relationId = r.relationId
-  if (r.idRule === null) entry.idRule = null
-  else if (typeof r.idRule === 'string') entry.idRule = r.idRule
-  return entry
-}
-
-/** 读取派生收权清单；先过加载门禁，漂移即拒绝。顶层 `idRules` 按 objectId join 进条目（derive 实际格式）。 */
-export function readToolContracts(versionDir: string): ToolContractEntry[] {
-  let gate: ReturnType<typeof verifyDerived>
-  try {
-    gate = verifyDerived(versionDir)
-  } catch {
-    // 门禁内部读取失败（TOCTOU/文件锁）：按不可加载处理；不回显底层 message（含绝对路径）。
-    throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: 派生门禁不可读')
-  }
-  if (!gate.ok) {
-    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
-  }
-  let tools: unknown[]
-  let idRules: Array<{ objectId: string; idRule: string | null }> = []
-  try {
-    const raw = loadYaml(readFileSync(join(versionDir, DERIVED_FILES.toolContracts), 'utf8')) as {
-      tools?: unknown[]
-      idRules?: unknown[]
-    }
-    tools = Array.isArray(raw?.tools) ? raw.tools : []
-    idRules = Array.isArray(raw?.idRules)
-      ? raw.idRules.flatMap((r) => {
-          if (!isRecord(r) || typeof r.objectId !== 'string') return []
-          return [{ objectId: r.objectId, idRule: r.idRule === null ? null : String(r.idRule ?? '') }]
-        })
-      : []
-  } catch (e) {
-    // 门禁通过后仍失败（如 TOCTOU 删文件）：按不可加载处理；只回错误码，
-    // 不拼 e.message（ENOENT 的 message 含全路径）。
-    const code =
-      e instanceof Error && 'code' in e && typeof (e as { code?: unknown }).code === 'string'
-        ? (e as { code: string }).code
-        : ''
-    throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: tool-contracts 不可读${code ? `（${code}）` : ''}`)
-  }
-  const idRuleByObject = new Map(idRules.map((r) => [r.objectId, r.idRule]))
-  return tools.map((t) => {
-    const entry = projectByContract(t)
-    if (entry.idRule === undefined && entry.objectId !== undefined && idRuleByObject.has(entry.objectId)) {
-      entry.idRule = idRuleByObject.get(entry.objectId) ?? null
-    }
-    return entry
-  })
-}
-
-/** grant 判定的主体：运行时引用带实例段（`OBJ-AML-ACCOUNT:x`），收权是对象粒度，按类型段匹配。 */
-function grantSubject(objectId: string): string {
-  const i = objectId.indexOf(':')
-  return i >= 0 ? objectId.slice(0, i) : objectId
-}
-
-/** grantScope 判定：objectId（可含 `:实例` 段）必须落在收权清单内，否则拒绝。 */
-export function grantMatches(entry: ToolContractEntry, objectId: string): boolean {
-  const subject = grantSubject(objectId)
-  if (subject === '') return false
-  return entry.grantScope === subject || entry.objectId === subject || entry.relationId === subject
-}
-
-export function checkGrant(contracts: ToolContractEntry[], objectId: string | undefined): string | undefined {
-  if (objectId === undefined) return undefined
-  const hit = contracts.some((c) => grantMatches(c, objectId))
-  return hit ? undefined : `OBJECT_NOT_GRANTED: ${objectId}`
-}
-
-/** guard 判定纯函数：args 带 objectId/objectRef 即须过收权；缺 name/version 一律拒绝。 */
-export function grantGuardDecision(
-  toolName: string,
-  args: unknown,
-  readContracts: (name: string, version: string) => ToolContractEntry[],
-): string | undefined {
-  if (!ONTOOL_NAMES.has(toolName)) return undefined
-  const a = isRecord(args) ? args : {}
-  // args 含 objectId/objectRef 即须过收权（S2.4）：非字符串/空串一律拒绝，
-  // 不静默跳过；null/undefined 视为未提供。
-  const scoped: string[] = []
-  for (const key of ['objectId', 'objectRef'] as const) {
-    const v = a[key]
-    if (v === undefined || v === null) continue
-    if (typeof v !== 'string' || v.length === 0) {
-      return `OBJECT_NOT_GRANTED: ${key} 非法（须为非空字符串）`
-    }
-    scoped.push(v)
-  }
-  if (scoped.length === 0) return undefined
-  if (typeof a.name !== 'string' || typeof a.version !== 'string') {
-    return `OBJECT_NOT_GRANTED: ${scoped.join(', ')}（缺少 name/version，无法核对收权清单）`
-  }
-  try {
-    const contracts = readContracts(a.name, a.version)
-    for (const objectId of scoped) {
-      const denial = checkGrant(contracts, objectId)
-      if (denial !== undefined) return denial
-    }
-    return undefined
-  } catch (e) {
-    // 保留机器可读错误码（AgentToolError / PackageStoreError——后者 message 只含调用方入参），
-    // 拒绝语义不丢码；其余错误不回显底层 message。
-    if (e instanceof AgentToolError) return `${e.code}: ${e.message}`
-    if (e instanceof PackageStoreError) return `${e.code}: ${e.message}`
-    return 'UNKNOWN_ERROR: 收权清单读取失败'
-  }
-}
-
-/**
- * dataset 收权（run_scenario 双通道解析后、`runScenario` 之前）：
- * `candidates[].objectRef` 逐条解析到类型后过 grantScope——
- * - 实例 id（无 `:`）→ `objects[].type`；裸 ref 不在图中按自身匹配（未命中即拒）；
- * - `TYPE:inst` 形态：实例在图中时**以声明类型为准**，与类型段不符即拒（防伪托）；
- *   实例不在图中才回退 `:` 前类型段匹配（运行时实例段，如 `OBJ-AML-ACCOUNT:x`）；
- * - 实例 id 重复（无论同型异型）→ 解析歧义，一律拒绝；
- * - 无法解析或未收权一律 OBJECT_NOT_GRANTED（deny-by-default，不以放行掩盖越权）。
- * 顶层 args 由 guard 收口、dataset 由本函数收口，两层覆盖全部入参面。
- */
-export function assertDatasetGranted(
-  dataset: RuntimeDataset,
-  contracts: ToolContractEntry[],
-): void {
-  // 实例 id → 类型；重复 id 视为解析歧义（同 id 异型可伪托已收权类型），从解析表剔除。
-  const typeByInstanceId = new Map<string, string>()
-  const ambiguousIds = new Set<string>()
-  for (const o of dataset.objects) {
-    if (ambiguousIds.has(o.id)) continue
-    if (typeByInstanceId.has(o.id)) {
-      typeByInstanceId.delete(o.id)
-      ambiguousIds.add(o.id)
-      continue
-    }
-    typeByInstanceId.set(o.id, o.type)
-  }
-  for (const c of dataset.candidates) {
-    const subject = resolveDatasetSubject(c.objectRef, typeByInstanceId, ambiguousIds)
-    if (subject === undefined) {
-      throw new AgentToolError(
-        'OBJECT_NOT_GRANTED',
-        `dataset 候选 ${c.candidateId} 的 objectRef ${c.objectRef} 解析歧义或类型段与实例声明不符`,
-      )
-    }
-    if (checkGrant(contracts, subject) !== undefined) {
-      throw new AgentToolError(
-        'OBJECT_NOT_GRANTED',
-        `dataset 候选 ${c.candidateId} 的 objectRef ${c.objectRef}（类型 ${subject}）不在收权清单`,
-      )
-    }
-  }
-}
-
-/** objectRef → 收权主体；无法安全解析返回 undefined（调用方 deny-by-default）。 */
-function resolveDatasetSubject(
-  objectRef: string,
-  typeByInstanceId: ReadonlyMap<string, string>,
-  ambiguousIds: ReadonlySet<string>,
-): string | undefined {
-  // 完整 ref 命中实例表 → 声明类型（裸实例 id 形态，examples 的 ACCT-001 同此）。
-  // 声明类型不得含实例段：夹带冒号的类型会在 grantSubject 二次剥段时被截成
-  // 已收权前缀（类型段伪托）——形状校验已拦，此处兜底直调路径（deny-by-default）。
-  const direct = typeByInstanceId.get(objectRef)
-  if (direct !== undefined) return direct.includes(':') ? undefined : direct
-  if (ambiguousIds.has(objectRef)) return undefined
-  const colon = objectRef.indexOf(':')
-  if (colon >= 0) {
-    const typeSeg = objectRef.slice(0, colon)
-    const inst = objectRef.slice(colon + 1)
-    if (ambiguousIds.has(inst)) return undefined
-    const declared = typeByInstanceId.get(inst)
-    if (declared !== undefined) {
-      // 实例在图中：声明类型是唯一事实；类型段不符即拒（不以放行掩盖越权）。
-      return declared === typeSeg ? declared : undefined
-    }
-    // 实例不在图中：回退类型段匹配（运行时实例段 OBJ-AML-ACCOUNT:x；空类型段永不命中）。
-    return typeSeg === '' ? undefined : typeSeg
-  }
-  // 裸 ref 不在图中：按自身匹配 grantScope（未命中即 deny-by-default）。
-  return objectRef === '' ? undefined : objectRef
-}
-
 /* ───────────────────────── 只读查询投影 ───────────────────────── */
-
-/**
- * list_tool_contracts 过滤：与 guard 同口径——null/undefined 视为未提供（返回全部）；
- * 非法值拒绝，不静默退化。
- */
-export function pickContracts(
-  contracts: ToolContractEntry[],
-  objectId: unknown,
-): ToolContractEntry[] {
-  if (objectId === undefined || objectId === null) return contracts
-  if (typeof objectId !== 'string' || objectId.length === 0) {
-    throw new AgentToolError('OBJECT_NOT_GRANTED', 'objectId 非法（须为非空字符串）')
-  }
-  return contracts.filter((c) => grantMatches(c, objectId))
-}
-
-/**
- * core 场景执行异常 → 工具错误：保留机器码与业务语义，
- * 但剥离 message 中的绝对 versionDir（不回显服务端路径）。
- */
-export function wrapRunError(e: unknown, versionDir: string): AgentToolError {
-  const code =
-    e instanceof Error && 'code' in e && typeof (e as { code?: unknown }).code === 'string'
-      ? (e as { code: string }).code
-      : 'RUN_FAILED'
-  const raw = e instanceof Error ? e.message : String(e)
-  // versionDir 为空（versionDir() 消毒拒绝时尚无路径）时不剥；
-  // Windows 路径大小写不敏感，按小写定位整段替换，防大小写变体漏剥。
-  let msg = raw
-  if (versionDir !== '') {
-    const esc = versionDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    msg = raw.replace(new RegExp(esc, 'gi'), '<pkg>')
-  }
-  return new AgentToolError(code, msg)
-}
 
 export function summarizePackage(pkg: OntologyPackage): Record<string, unknown> {
   return {
@@ -786,6 +348,8 @@ export const inject = ['tools']
 
 export function apply(ctx: Context): void {
   const dataDir = resolveDataDir(ctx)
+  // 错误信封剥除清单：工具错误不再回显 dataDir 派生的任何服务端路径（P2.4）。
+  registerServerDir(dataDir)
   const ws = new PackageWorkspace(join(dataDir, 'workspace'))
   const knowledge = new KnowledgeStore(dataDir)
 
@@ -831,9 +395,7 @@ export function apply(ctx: Context): void {
               .join('\n') || '（无包）',
           ),
       },
-      async execute() {
-        return { packages: projectPackageList(ws.listVersions()) }
-      },
+      execute: toolExecute(() => ({ packages: projectPackageList(ws.listVersions()) })),
     }),
   )
 
@@ -849,9 +411,9 @@ export function apply(ctx: Context): void {
         schema: { type: 'object', additionalProperties: true, properties: {} },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      async execute(args) {
-        return toolOut(summarizePackage(load(args.name, args.version)))
-      },
+      execute: toolExecute((args: { name: string; version: string }) =>
+        toolOut(summarizePackage(load(args.name, args.version))),
+      ),
     }),
   )
 
@@ -869,9 +431,9 @@ export function apply(ctx: Context): void {
         schema: { type: 'object', additionalProperties: true, properties: {} },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      async execute(args) {
-        return toolOut(ruleDossier(load(args.name, args.version), args.ruleId))
-      },
+      execute: toolExecute((args: { name: string; version: string; ruleId?: string }) =>
+        toolOut(ruleDossier(load(args.name, args.version), args.ruleId)),
+      ),
     }),
   )
 
@@ -894,10 +456,10 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      async execute(args) {
+      execute: toolExecute((args: { name: string; version: string; objectId?: string }) => {
         const contracts = readToolContracts(ws.versionDir(args.name, args.version))
         return toolOut({ contracts: pickContracts(contracts, args.objectId) })
-      },
+      }),
     }),
   )
 
@@ -917,9 +479,9 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(renderScenarioList(value.scenarios)),
       },
-      async execute(args) {
-        return toolOut(scenarioCatalog(load(args.name, args.version)))
-      },
+      execute: toolExecute((args: { name: string; version: string }) =>
+        toolOut(scenarioCatalog(load(args.name, args.version))),
+      ),
     }),
   )
 
@@ -955,26 +517,26 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(renderRunText(value as unknown as ScenarioRunResult)),
       },
-      async execute(args) {
+      execute: toolExecute((args: {
+        name: string
+        version: string
+        scenarioId: string
+        datasetPath?: string
+        dataset?: unknown
+      }) => {
         const dataset = loadDatasetFromArgs(args)
-        let versionDir: string
-        try {
-          versionDir = ws.versionDir(args.name, args.version)
-        } catch (e) {
-          // versionDir 消毒拒绝（穿越输入）：保留机器码，message 不含服务端路径。
-          throw wrapRunError(e, '')
-        }
+        const pkg = load(args.name, args.version)
+        const versionDir = ws.versionDir(args.name, args.version)
+        const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
         const contracts = readToolContracts(versionDir)
         assertDatasetGranted(dataset, contracts)
-        let result: ScenarioRunResult
-        try {
-          result = runScenario(versionDir, args.scenarioId, dataset)
-        } catch (e) {
-          throw wrapRunError(e, versionDir)
-        }
+        const result = runScenario(versionDir, args.scenarioId, dataset)
         assertRunContract(result)
-        return toolOut(enforceOutputPolicy(result))
-      },
+        // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
+        const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
+        rememberPhrases(result.runId, phrases)
+        return toolOut(enforceOutputPolicy(result, phrases))
+      }),
     }),
   )
 
@@ -1003,15 +565,15 @@ export function apply(ctx: Context): void {
         },
         render: (_args, value) => textBlock(JSON.stringify(value, null, 2)),
       },
-      async execute(args) {
-        const source = uploadKnowledgeForPkg(knowledge, ws.listVersions(), {
-          packageId: args.packageId,
-          sourceType: args.sourceType as SourceType,
-          name: args.name,
-          content: args.content,
-        })
+      execute: toolExecute((args: {
+        packageId: string
+        sourceType: SourceType
+        name: string
+        content: string
+      }) => {
+        const source = uploadKnowledgeForPkg(knowledge, ws.listVersions(), args)
         return toolOut({ source: sourceSummary(source) })
-      },
+      }),
     }),
   )
 }

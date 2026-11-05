@@ -10,20 +10,25 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AgentToolError,
-  assertDatasetGranted,
+  assertNoForbiddenPhrases,
   assertRunContract,
+  asToolError,
+  enforceOutputPolicy,
+  renderRunText,
+} from '../dist/agent-policy.js'
+import {
+  assertDatasetGranted,
   checkGrant,
   grantGuardDecision,
   grantMatches,
-  loadDatasetFromArgs,
-  loadToolPackage,
-  enforceOutputPolicy,
-  assertNoForbiddenPhrases,
   pickContracts,
   projectByContract,
-  projectPackageList,
   readToolContracts,
-  renderRunText,
+} from '../dist/agent-grants.js'
+import {
+  loadDatasetFromArgs,
+  loadToolPackage,
+  projectPackageList,
   renderScenarioList,
   requireExistingPackage,
   ruleDossier,
@@ -32,7 +37,6 @@ import {
   summarizePackage,
   uploadKnowledgeForPkg,
   validateDatasetShape,
-  wrapRunError,
 } from '../dist/agent-tools.js'
 import {
   HeuristicLlm,
@@ -620,32 +624,37 @@ test('list_tool_contracts 过滤：与 guard 同口径（null 未提供、非法
   assert.ok(picked.every((c) => grantMatches(c, 'OBJ-AML-ACCOUNT')))
 })
 
-test('run_scenario 错误包装：保留错误码、剥离绝对 versionDir', () => {
+test('错误信封：保留错误码与业务语义、剥服务端目录；原生 fs 错误只留机器码', () => {
   const dir = 'D:\\secret\\workspace\\aml\\1.0.0'
   const e = Object.assign(new Error(`missing package.yaml meta in ${dir}`), {
     code: 'PACKAGE_MALFORMED',
   })
-  const wrapped = wrapRunError(e, dir)
+  const wrapped = asToolError(e, [dir])
   assert.ok(wrapped instanceof AgentToolError, `期望 AgentToolError，得到 ${wrapped}`)
   assert.equal(wrapped.code, 'PACKAGE_MALFORMED')
   assert.ok(!wrapped.message.includes('D:\\secret'), `不应泄露路径: ${wrapped.message}`)
   assert.ok(wrapped.message.includes('<pkg>'))
   // 非 Error / 无 code → RUN_FAILED
-  assert.equal(wrapRunError('boom', dir).code, 'RUN_FAILED')
-  // 不含 versionDir 的业务语义原样保留
+  assert.equal(asToolError('boom', [dir]).code, 'RUN_FAILED')
+  // 不含服务端目录的业务语义原样保留
   const nf = Object.assign(new Error('场景不存在: SCN-X'), { code: 'SCENARIO_NOT_FOUND' })
-  assert.equal(wrapRunError(nf, dir).message, '场景不存在: SCN-X')
-  // 空 versionDir（versionDir() 消毒拒绝时尚无路径）不剥串——split('') 会逐字符打散
-  const plain = wrapRunError(new Error('invalid package path: x@../y'), '')
+  assert.equal(asToolError(nf, [dir]).message, '场景不存在: SCN-X')
+  // 空 redact 项不剥串——split('') 会逐字符打散
+  const plain = asToolError(new Error('invalid package path: x@../y'), [''])
   assert.equal(plain.message, 'invalid package path: x@../y')
   // Windows 路径大小写不敏感：大小写变体同样剥离
-  const cased = wrapRunError(
-    Object.assign(new Error('ENOENT: open C:\\Users\\Demo\\pkg\\package.yaml'), { code: 'ENOENT' }),
-    'c:\\users\\demo\\pkg',
+  const cased = asToolError(
+    Object.assign(new Error('missing package.yaml meta in C:\\Users\\Demo\\pkg'), { code: 'PACKAGE_MALFORMED' }),
+    ['c:\\users\\demo\\pkg'],
   )
-  assert.equal(cased.code, 'ENOENT')
   assert.ok(!cased.message.toLowerCase().includes('demo\\pkg'), `大小写变体不得回显: ${cased.message}`)
   assert.ok(cased.message.includes('<pkg>'))
+  // 原生 fs 错误（errno 词形码）：只留机器码，原文（含绝对路径）不入模型面（I2）
+  const fsErr = Object.assign(new Error('ENOENT: open C:\\Users\\Demo\\pkg\\package.yaml'), { code: 'ENOENT' })
+  const enoent = asToolError(fsErr, ['c:\\users\\demo\\pkg'])
+  assert.equal(enoent.code, 'ENOENT')
+  assert.ok(!enoent.message.includes('open'), `fs 原文不得回显: ${enoent.message}`)
+  assert.ok(!enoent.message.toLowerCase().includes('demo\\pkg'))
 })
 
 test('list_packages 输出投影：同包多版本按 semver 升序（1.9.0 先于 1.10.0）', () => {
