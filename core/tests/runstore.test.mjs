@@ -135,6 +135,67 @@ test('loadRunRecord 错误信封：非法 INVALID_ARGS / 缺失 NOT_FOUND / 损�
   }
 })
 
+test('loadRunRecord 元素级错型 → PACKAGE_MALFORMED（compare 消费面不裸抛 TypeError）', () => {
+  const ws = mkWorkspace()
+  try {
+    const dir = join(ws.root, 'runs')
+    mkdirSync(dir, { recursive: true })
+    const base = buildRunRecord({
+      package: { name: 'test-pkg', version: '1.0.0' },
+      dataset: fakeDataset(),
+      result: fakeResult({ runId: 'run-el000000' }),
+      redlines: [],
+    })
+    // compareRunRecords 消费的元素形错型（hitRuleIds 非数组 / excluded null / pendingChecks null）
+    const badShapes = [
+      {
+        ...base,
+        runId: 'run-el000001',
+        result: {
+          ...base.result,
+          candidates: [{ candidateId: 'C', riskScore: 0.5, hitRuleIds: 'not-array', pendingChecks: [] }],
+        },
+      },
+      { ...base, runId: 'run-el000002', result: { ...base.result, excluded: [null] } },
+      {
+        ...base,
+        runId: 'run-el000003',
+        result: {
+          ...base.result,
+          candidates: [{ candidateId: 'C', riskScore: 0.5, hitRuleIds: [], pendingChecks: [null] }],
+        },
+      },
+      {
+        ...base,
+        runId: 'run-el000004',
+        result: {
+          ...base.result,
+          candidates: [{ candidateId: 'C', riskScore: 'x', hitRuleIds: [], pendingChecks: [] }],
+        },
+      },
+    ]
+    for (const rec of badShapes) {
+      writeFileSync(join(dir, `${rec.runId}.json`), JSON.stringify(rec), 'utf8')
+      assert.throws(
+        () => loadRunRecord(ws.root, rec.runId),
+        (e) => e.code === 'PACKAGE_MALFORMED',
+        `${rec.runId} 应在加载期拒`,
+      )
+    }
+    // 合法记录仍可加载（深验不误伤）
+    const good = buildRunRecord({
+      package: { name: 'test-pkg', version: '1.0.0' },
+      dataset: fakeDataset(),
+      result: fakeResult({ runId: 'run-el000005' }),
+      redlines: [],
+    })
+    saveRunRecord(ws.root, good)
+    assert.equal(loadRunRecord(ws.root, 'run-el000005').runId, 'run-el000005')
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
 test('saveRunRecord 拒非法 runId，不落盘', () => {
   const ws = mkWorkspace()
   try {

@@ -108,6 +108,33 @@ function assertInsideRoot(root: string, dir: string): void {
   }
 }
 
+/** compare 消费的候选元素形：错型元素在加载期即 PACKAGE_MALFORMED，不带到调用方 TypeError。 */
+function isCandidateShaped(c: unknown): boolean {
+  if (typeof c !== 'object' || c === null) return false
+  const v = c as Record<string, unknown>
+  return (
+    typeof v.candidateId === 'string' &&
+    (v.riskScore === null || (typeof v.riskScore === 'number' && Number.isFinite(v.riskScore))) &&
+    Array.isArray(v.hitRuleIds) &&
+    v.hitRuleIds.every((x) => typeof x === 'string') &&
+    Array.isArray(v.pendingChecks) &&
+    v.pendingChecks.every(
+      (p) =>
+        typeof p === 'object' && p !== null &&
+        typeof (p as Record<string, unknown>).note === 'string' &&
+        ((p as Record<string, unknown>).ruleId === undefined ||
+          typeof (p as Record<string, unknown>).ruleId === 'string'),
+    )
+  )
+}
+
+/** excluded 元素形（compareRunRecords 的 exKey 消费面）。 */
+function isExcludedShaped(x: unknown): boolean {
+  if (typeof x !== 'object' || x === null) return false
+  const v = x as Record<string, unknown>
+  return typeof v.candidateId === 'string' && typeof v.ruleId === 'string'
+}
+
 /** 轻形状校验：加载器验形（损坏记录 fail-loud，不裸抛 TypeError）。 */
 function isRunRecord(value: unknown): value is RunRecord {
   if (typeof value !== 'object' || value === null) return false
@@ -128,7 +155,9 @@ function isRunRecord(value: unknown): value is RunRecord {
     v.redlines.every((p) => typeof p === 'string') &&
     typeof result === 'object' && result !== null &&
     Array.isArray(result.candidates) &&
+    result.candidates.every(isCandidateShaped) &&
     Array.isArray(result.excluded) &&
+    result.excluded.every(isExcludedShaped) &&
     result.humanReviewRequired === true &&
     typeof audit === 'object' && audit !== null &&
     Array.isArray(audit.forbiddenPhraseHits)

@@ -461,15 +461,21 @@ export function exportSummaryOf(exported: { locator: string; archive: RunArchive
   }
 }
 
-/** 解析批量场景清单：显式列表去重保序，缺省全场景；条目须为非空字符串。 */
+/** 解析批量场景清单：缺省（undefined/null/空数组）全场景；显式列表去重保序，错型 fail-fast。 */
 export function resolveBatchIds(scenarioIds: unknown, pkg: OntologyPackage): string[] {
-  if (Array.isArray(scenarioIds) && scenarioIds.length > 0) {
-    if (scenarioIds.some((x) => typeof x !== 'string' || x === '')) {
-      throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要非空字符串条目')
-    }
-    return [...new Set(scenarioIds as string[])]
+  if (scenarioIds === undefined || scenarioIds === null) {
+    return pkg.scenarios.map((s) => s.id)
   }
-  return pkg.scenarios.map((s) => s.id)
+  if (!Array.isArray(scenarioIds)) {
+    throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要数组')
+  }
+  if (scenarioIds.length === 0) {
+    return pkg.scenarios.map((s) => s.id)
+  }
+  if (scenarioIds.some((x) => typeof x !== 'string' || x === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要非空字符串条目')
+  }
+  return [...new Set(scenarioIds as string[])]
 }
 
 /**
@@ -803,7 +809,8 @@ export function apply(ctx: Context): void {
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
-        render: (_args, value) => textBlock(renderRunDiffText(value as unknown as RunDiff)),
+        render: (args, value) =>
+          textBlock(renderRunDiffText(value as unknown as RunDiff, redlinesForRuns(ws, args))),
       },
       execute: toolExecute(
         (args: { runIdA: string; runIdB: string }) => {

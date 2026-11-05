@@ -402,6 +402,12 @@ export function assertDiffContract(diff: RunDiff): void {
   if (typeof diff.scenarioA !== 'string' || typeof diff.scenarioB !== 'string') {
     throw invalidOutput('diff scenarioA/scenarioB 需要字符串')
   }
+  for (const key of ['packageA', 'packageB'] as const) {
+    const p = diff[key]
+    if (!isRecord(p) || typeof p.name !== 'string' || typeof p.version !== 'string') {
+      throw invalidOutput(`diff ${key} 需要 name/version 字符串`)
+    }
+  }
   if (typeof diff.sameDataset !== 'boolean') {
     throw invalidOutput('diff sameDataset 需要布尔')
   }

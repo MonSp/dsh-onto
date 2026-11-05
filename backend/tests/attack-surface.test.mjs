@@ -815,6 +815,9 @@ test('I5 新出口契约验形：diff/batch 畸形落 INVALID_TOOL_OUTPUT（不�
     { ...diffBase(), candidates: [{ candidateId: 'C', riskScoreA: NaN, riskScoreB: 1, riskScoreDelta: null, hitRuleIdsAdded: [], hitRuleIdsRemoved: [], pendingChecksAdded: [], pendingChecksRemoved: [] }] },
     { ...diffBase(), humanReviewRequired: false },
     { ...diffBase(), excludedAdded: [{ candidateId: 1, ruleId: 'R' }] },
+    // packageA/packageB 漏验会让 renderRunDiffText 裸抛 TypeError——I5 须兜住
+    { ...diffBase(), packageA: null },
+    { ...diffBase(), packageB: { name: 1, version: '1.0.0' } },
   ]
   for (const d of badDiff) {
     assert.throws(() => assertDiffContract(d), (e) => {

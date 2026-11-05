@@ -262,8 +262,10 @@ function cmdRun(args: Args): void {
       )
       runRecord = result.runId
     }
-  } catch {
+  } catch (e) {
     runRecord = null
+    // 落盘失败（磁盘满/权限/结构异常）显式告警，不与「结构不可达跳过」混为一谈。
+    console.error(`warn: run record not saved (${e instanceof Error ? e.message : String(e)})`)
   }
   const out = typeof args.flags['out'] === 'string' ? args.flags['out'] : null
   if (out) {

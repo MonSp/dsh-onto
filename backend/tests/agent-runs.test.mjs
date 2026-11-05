@@ -237,13 +237,17 @@ test('summarizeRunResult：计数摘要 + humanReviewRequired 恒真', () => {
   assert.equal(s.humanReviewRequired, true)
 })
 
-test('resolveBatchIds：显式去重保序 / 缺省全场景 / 错型拒', () => {
+test('resolveBatchIds：显式去重保序 / 缺省全场景 / 错型拒（含非数组 fail-fast）', () => {
   const pkg = { scenarios: [{ id: 'SCN-A' }, { id: 'SCN-B' }] }
   assert.deepEqual(resolveBatchIds(undefined, pkg), ['SCN-A', 'SCN-B'])
+  assert.deepEqual(resolveBatchIds(null, pkg), ['SCN-A', 'SCN-B'])
   assert.deepEqual(resolveBatchIds([], pkg), ['SCN-A', 'SCN-B'])
   assert.deepEqual(resolveBatchIds(['SCN-B', 'SCN-B', 'SCN-A'], pkg), ['SCN-B', 'SCN-A'])
   assert.throws(() => resolveBatchIds(['SCN-A', ''], pkg), (e) => e.code === 'INVALID_ARGS')
   assert.throws(() => resolveBatchIds([1], pkg), (e) => e.code === 'INVALID_ARGS')
+  // 非数组（模型手误传字符串/对象）不得静默回退全场景——fail-fast
+  assert.throws(() => resolveBatchIds('SCN-A', pkg), (e) => e.code === 'INVALID_ARGS')
+  assert.throws(() => resolveBatchIds({ id: 'SCN-A' }, pkg), (e) => e.code === 'INVALID_ARGS')
 })
 
 test('assertBatchContract：ok/error 形态验形，NaN 计数拒（I5）', () => {
