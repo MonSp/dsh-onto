@@ -8,7 +8,7 @@
  * @module @dsh-onto/backend/agent-tools
  */
 import { readFileSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
@@ -17,6 +17,8 @@ import {
   PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
+  isInsideDir,
+  isSafeRelPath,
   loadPackage,
   loadYaml,
   runScenario,
@@ -138,9 +140,13 @@ export function validateDatasetShape(value: unknown): RuntimeDataset {
 
 /**
  * datasetPath / dataset 二选一（决策 D2）。
- * datasetPath 绝对或相对进程 cwd；内联形态为完整 RuntimeDataset。
+ * datasetPath 绝对或相对工作目录，且必须落在工作目录围栏内（tool-face-policy P2.1）；
+ * 内联形态为完整 RuntimeDataset。`opts.baseDir` 仅供测试指定围栏根，生产不传（默认进程 cwd）。
  */
-export function loadDatasetFromArgs(args: { datasetPath?: string; dataset?: unknown }): RuntimeDataset {
+export function loadDatasetFromArgs(
+  args: { datasetPath?: string; dataset?: unknown },
+  opts: { baseDir?: string } = {},
+): RuntimeDataset {
   const hasPath = typeof args.datasetPath === 'string' && args.datasetPath.length > 0
   const hasInline = args.dataset !== undefined && args.dataset !== null
   if (hasPath === hasInline) {
@@ -150,6 +156,12 @@ export function loadDatasetFromArgs(args: { datasetPath?: string; dataset?: unkn
     // 错误回显调用方原文，不回显 resolve() 后的绝对路径（不泄露进程 cwd）。
     const raw = args.datasetPath as string
     const path = isAbsolute(raw) ? raw : resolve(raw)
+    // 工作目录围栏：越界 / junction·符号链接逃逸 / ADS 冒号一律拒绝（I3）。
+    const baseDir = opts.baseDir ?? process.cwd()
+    const rel = relative(baseDir, path)
+    if (!isInsideDir(baseDir, path) || !isSafeRelPath(rel)) {
+      throw new AgentToolError('INVALID_ARGS', `dataset 文件越出工作目录: ${raw}`)
+    }
     let text: string
     try {
       text = readFileSync(path, 'utf8')
@@ -211,45 +223,55 @@ export function assertRunContract(result: ScenarioRunResult): void {
   }
 }
 
-/** 面向模型的合规渲染：候选摘要 + 强制合规页脚。 */
+/** 面向模型的合规渲染：候选摘要 + 强制合规页脚（tool-face-policy P2.2）。 */
 export function renderRunText(result: ScenarioRunResult): string {
+  const phrases = [...new Set(result.audit.forbiddenPhraseHits.map((h) => h.phrase))].filter((p) => p !== '')
+  const token = phrases.length > 0 ? requireMaskToken(phrases) : ''
+  // 自由文本片段级整值重遮；ID 回指片段不改写（撞短语 fail-loud）。
+  const face = (s: string) => (phrases.some((p) => s.includes(p)) ? token : s)
+  const idFace = (key: string, s: string) => {
+    if (phrases.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
   const lines: string[] = []
-  lines.push(`场景 ${result.scenarioId} · 运行 ${result.runId}`)
+  lines.push(`场景 ${idFace('scenarioId', result.scenarioId)} · 运行 ${idFace('runId', result.runId)}`)
   for (const c of result.candidates) {
-    lines.push(`- ${c.candidateId}（${c.objectRef}）riskScore=${c.riskScore}`)
-    lines.push(`  命中规则: ${c.hitRuleIds.join(', ') || '—'}`)
+    lines.push(`- ${idFace('candidateId', c.candidateId)}（${idFace('objectRef', c.objectRef)}）riskScore=${c.riskScore}`)
+    lines.push(`  命中规则: ${c.hitRuleIds.map((id) => idFace('hitRuleIds', id)).join(', ') || '—'}`)
     for (const e of c.evidenceChains) {
-      lines.push(`  证据[${e.ruleId}] ${e.evidence} (score=${e.score})`)
+      lines.push(`  证据[${idFace('ruleId', e.ruleId)}] ${face(e.evidence)} (score=${e.score})`)
     }
     for (const p of c.pendingChecks) {
-      const missing = p.missing && p.missing.length > 0 ? `（缺 ${p.missing.join(', ')}）` : ''
-      lines.push(`  待核实: ${p.note}${missing}`)
+      const missing =
+        p.missing && p.missing.length > 0 ? `（缺 ${p.missing.map((m) => idFace('missing', m)).join(', ')}）` : ''
+      lines.push(`  待核实: ${face(p.note)}${missing}`)
     }
     if (c.pendingVerification) lines.push('  pendingVerification=true')
-    for (const n of c.narrative) lines.push(`  叙述: ${n}`)
+    for (const n of c.narrative) lines.push(`  叙述: ${face(n)}`)
   }
   for (const x of result.excluded) {
-    lines.push(`排除: ${x.candidateId}（${x.ruleId}）`)
+    lines.push(`排除: ${idFace('candidateId', x.candidateId)}（${idFace('ruleId', x.ruleId)}）`)
   }
   lines.push('—— 合规 ——')
   lines.push('humanReviewRequired=true（认定出口只在人工复核）')
   const hits = result.audit.forbiddenPhraseHits
   lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
   for (const h of hits) {
-    // 命中清单只给位置；短语本体经 maskForbiddenPhrases 在结构面与渲染面统一脱敏。
-    lines.push(`  禁语命中 @ ${h.where}`)
+    // 命中清单只给位置；短语本体不经渲染面（P2.2）。
+    lines.push(`  禁语命中 @ ${face(h.where)}`)
   }
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
-  // 命中短语本身是禁语——渲染文本（模型可见面）整体脱敏（S2.3），只留位置；
-  // 叙述/证据/待核实等任何行都不得回显短语本体。输入已由 maskForbiddenPhrases
-  // 深脱敏时 phrase 已空化 → needle 空转（幂等）；core 直调的原始输入按真实短语脱敏。
-  return maskPhrases(lines.join('\n'), hits.map((h) => h.phrase))
+  const text = lines.join('\n')
+  // 病态构造兜底（短语横跨分隔符拼成）：整段退避为标记——不做子串手术。
+  return phrases.some((p) => text.includes(p)) ? token : text
 }
 
 /** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */
 const MASK_TOKENS = ['【禁语已脱敏】', '【已屏蔽】', '【内容已隐藏】'] as const
 
-/** 选首个不含任何短语的标记——防「禁语本体含『脱敏/禁语』」时标记自嵌残留（round-13 minor）。 */
+/** 选首枚不含任何短语的标记——防「短语 ⊂ 标记」时标记自嵌泄漏（P2.2）。 */
 function pickMaskToken(phrases: readonly string[]): string {
   for (const m of MASK_TOKENS) {
     if (!phrases.some((p) => m.includes(p))) return m
@@ -257,28 +279,13 @@ function pickMaskToken(phrases: readonly string[]): string {
   return ''
 }
 
-/**
- * 单一脱敏收口：占位标记替换 + 边界重组残留剥离到不动点
- * （剥离相位只删不增，每轮长度严格递减，必然终止）。
- * needle 取非空去重后**长语优先**（嵌套短语对先换长者，消「该+标记」残片）；
- * 幂等不靠过滤标记——phrase 字段空化已让二次调用 needle 为空，故真实短语
- * 恰为标记串时同样脱敏（换用备选标记）。
- */
-function maskPhrases(text: string, phrases: readonly string[]): string {
-  const real = [...new Set(phrases)].filter((p) => p !== '')
-  if (real.length === 0) return text
-  real.sort((a, b) => b.length - a.length)
-  const token = pickMaskToken(real)
-  let out = text
-  if (token !== '') {
-    for (const p of real) out = out.split(p).join(token)
+/** 短语非空即必须有可用标记；全冲突（病态构造）fail-loud，不带短语回显。 */
+function requireMaskToken(phrases: readonly string[]): string {
+  const token = pickMaskToken(phrases)
+  if (token === '') {
+    throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: 禁语短语与脱敏标记冲突')
   }
-  // token 与上下文边界可能拼出短语残留（及 token='' 全剥离路径）：剥离相位只删不增，
-  // 每轮长度严格递减（≥|p|），必然到达不动点——无需次数守卫。
-  while (real.some((p) => out.includes(p))) {
-    for (const p of real) out = out.split(p).join('')
-  }
-  return out
+  return token
 }
 
 /**
@@ -302,16 +309,18 @@ const ID_FACE_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * 工具出口禁语脱敏（S2.3）：canonical 出口与 render 同一口径——
- * **全字段深走**，任何字符串字段（narrative / evidence / pendingChecks / audit 等）
- * 命中即脱敏；ID 回指面不改写（撞短语则 fail-loud）；`where` 保留（含短语时一并脱敏）；
- * `phrase` 字段空化（不回显短语本体，同时是幂等锚点：二次调用 needle 为空即同引用返回）。
+ * 工具出口策略执行（tool-face-policy P2.2，原 maskForbiddenPhrases）。
+ * 整字段重遮 + ID 面 fail-loud + 断言闸门，禁止子串手术（嵌套残片/剥离不动点/
+ * 标记自嵌等衍生病的根源已随子串替换一并废除）：
+ * - `phrase` 字段空化（不回显短语本体，兼幂等锚点：二次执行清单为空即同引用返回）；
+ * - ID 回指字段撞短语 fail-loud；其余字段含任一短语**整值替换**为占位标记；
+ * - 执行后过断言闸门（与 I1 不变量测试同源函数）。
  * core/wire 人审面不经过本函数，保留完整短语。
  */
-export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResult {
-  const hits = result.audit?.forbiddenPhraseHits ?? []
-  const phrases = [...new Set(hits.map((h) => h.phrase))].filter((p) => p !== '')
+export function enforceOutputPolicy(result: ScenarioRunResult): ScenarioRunResult {
+  const phrases = [...new Set((result.audit?.forbiddenPhraseHits ?? []).map((h) => h.phrase))].filter((p) => p !== '')
   if (phrases.length === 0) return result
+  const token = requireMaskToken(phrases)
   const walk = (v: unknown, key: string): unknown => {
     if (typeof v === 'string') {
       if (key === 'phrase') return '' // hits[].phrase 不回显短语本体（幂等锚点）
@@ -321,7 +330,7 @@ export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResu
         }
         return v
       }
-      return maskPhrases(v, phrases)
+      return phrases.some((p) => v.includes(p)) ? token : v
     }
     if (Array.isArray(v)) return v.map((x) => walk(x, key))
     if (isRecord(v)) {
@@ -331,7 +340,31 @@ export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResu
     }
     return v
   }
-  return walk(result, '') as ScenarioRunResult
+  const out = walk(result, '') as ScenarioRunResult
+  assertNoForbiddenPhrases(out, phrases)
+  return out
+}
+
+/** 断言闸门（I1）：模型面任何字符串不得含禁语短语；违规受控失败，错误不回显短语。 */
+export function assertNoForbiddenPhrases(value: unknown, phrases: readonly string[]): void {
+  const real = phrases.filter((p) => p !== '')
+  if (real.length === 0) return
+  const walk = (v: unknown): void => {
+    if (typeof v === 'string') {
+      if (real.some((p) => v.includes(p))) {
+        throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: 禁语短语泄漏到模型可见面')
+      }
+      return
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x)
+      return
+    }
+    if (isRecord(v)) {
+      for (const item of Object.values(v)) walk(item)
+    }
+  }
+  walk(value)
 }
 
 /* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */
@@ -940,7 +973,7 @@ export function apply(ctx: Context): void {
           throw wrapRunError(e, versionDir)
         }
         assertRunContract(result)
-        return toolOut(maskForbiddenPhrases(result))
+        return toolOut(enforceOutputPolicy(result))
       },
     }),
   )

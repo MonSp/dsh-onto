@@ -1,32 +1,36 @@
 /**
  * 攻击面回归清单（round-13）：把 12 轮评审固化过的变体与本轮修复收进单表，
  * 防线改动必须全表重放。覆盖：收权 deny-by-default、出口契约、禁语脱敏组合、
- * 派生门禁、skills 去重确定性。
+ * 派生门禁、skills 去重确定性。末节按 tool-face-policy 不变量（I1–I5）穷举
+ * 路径/禁语同族等价类——发现一类问题即整族补测，不再逐旁路点名。
  */
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AgentToolError,
   assertDatasetGranted,
+  assertNoForbiddenPhrases,
   assertRunContract,
   grantGuardDecision,
   loadDatasetFromArgs,
   loadToolPackage,
-  maskForbiddenPhrases,
+  enforceOutputPolicy,
   readToolContracts,
   renderRunText,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
 import { dedupeSkillNames, isCurrentWinner, pickSkillSources } from '../dist/agent-skills.js'
-import { PackageWorkspace, runScenario } from '@dsh-onto/core'
+import { PackageStoreError, PackageWorkspace, runScenario, writeSourceFile } from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_DIR = join(REPO, 'packages', 'aml', '1.0.0')
 const AML_RUN = join(REPO, 'examples', 'aml-run.json')
+// datasetPath 工作目录围栏（tool-face-policy P2.1）：测试显式指定围栏根为仓库根。
+const BASE = { baseDir: REPO }
 
 function expectCode(fn, code) {
   try {
@@ -42,7 +46,7 @@ function expectCode(fn, code) {
 /* ── 出口契约：非有限证据分拦截 ─────────────────────────────────────── */
 
 test('出口契约：evidenceChains score 为 Infinity/NaN 即 INVALID_TOOL_OUTPUT', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   assert.doesNotThrow(() => assertRunContract(good))
   for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
@@ -105,7 +109,7 @@ test('类型段伪托兜底：绕过形状校验直调收权（声明类型夹�
 /* ── 禁语脱敏：组合路径（execute 深脱敏 → render 幂等） ──────────────── */
 
 test('禁语组合：canonical 深走全字段 + render 不回显 + 二次脱敏幂等', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const base = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   const phrase = '确定为洗钱'
   const raw = {
@@ -127,7 +131,7 @@ test('禁语组合：canonical 深走全字段 + render 不回显 + 二次脱敏
     },
   }
 
-  const masked = maskForbiddenPhrases(raw)
+  const masked = enforceOutputPolicy(raw)
   // canonical 全字段深走：结构面任何字符串面都不回显短语本体
   assert.ok(!JSON.stringify(masked).includes(phrase), 'canonical 结构面泄漏短语')
   // count/where 保留
@@ -144,7 +148,7 @@ test('禁语组合：canonical 深走全字段 + render 不回显 + 二次脱敏
   assert.match(text, /禁语扫描: 1 命中/)
 
   // 幂等：二次脱敏同引用（全部命中已是标记），render 不改写标记
-  assert.equal(maskForbiddenPhrases(masked), masked)
+  assert.equal(enforceOutputPolicy(masked), masked)
   assert.equal(renderRunText(masked), text)
 })
 
@@ -166,7 +170,7 @@ test('禁语自嵌：短语为标记子串（如「脱敏」）时换标记仍�
       passed: false,
     },
   }
-  const masked = maskForbiddenPhrases(raw)
+  const masked = enforceOutputPolicy(raw)
   assert.ok(!JSON.stringify(masked).includes(phrase), '标记含短语子串时必须换标记，不得自嵌残留')
   const text = renderRunText(masked)
   assert.ok(!text.includes(phrase))
@@ -197,7 +201,7 @@ const rawRun = (phrase, extra = {}) => ({
 test('ID 回指面不改写：ruleId/objectRef/candidateId 脱敏后原样（工具层不改写命中）', () => {
   const phrase = '确定为洗钱'
   const raw = rawRun(phrase)
-  const masked = maskForbiddenPhrases(raw)
+  const masked = enforceOutputPolicy(raw)
   assert.deepEqual(masked.candidates[0].hitRuleIds, ['RULE-AML-001'], 'hitRuleIds 不得被脱敏改写')
   assert.equal(masked.candidates[0].objectRef, 'g1', 'objectRef 不得被脱敏改写')
   assert.equal(masked.candidates[0].candidateId, 'C1', 'candidateId 不得被脱敏改写')
@@ -209,7 +213,7 @@ test('禁语撞入 ID 面（禁语⊂ruleId）fail-loud：拒绝产出且错误�
   const raw = rawRun(phrase)
   let err
   try {
-    maskForbiddenPhrases(raw)
+    enforceOutputPolicy(raw)
   } catch (e) {
     err = e
   }
@@ -218,7 +222,7 @@ test('禁语撞入 ID 面（禁语⊂ruleId）fail-loud：拒绝产出且错误�
   assert.ok(!err.message.includes(phrase), `错误消息不得回显短语: ${err.message}`)
 })
 
-test('嵌套禁语幂等：长短语对先换长者，二次脱敏同引用', () => {
+test('嵌套禁语：长短语对同现整字段重遮（不留「该+标记」残片），二次脱敏同引用', () => {
   const shortP = '账户涉嫌洗钱'
   const longP = '该账户涉嫌洗钱'
   const raw = rawRun(longP, {
@@ -232,17 +236,17 @@ test('嵌套禁语幂等：长短语对先换长者，二次脱敏同引用', ()
     },
   })
   raw.candidates[0].narrative = [`短语 ${shortP} 与长语 ${longP} 同现`]
-  const masked = maskForbiddenPhrases(raw)
+  const masked = enforceOutputPolicy(raw)
   const json = JSON.stringify(masked)
   assert.ok(!json.includes(shortP) && !json.includes(longP), '嵌套短语对均须清除')
   assert.ok(!json.includes('该【'), '长语优先替换，不得留「该+标记」残片')
-  assert.equal(maskForbiddenPhrases(masked), masked, '二次脱敏同引用（phrase 空化锚点）')
+  assert.equal(enforceOutputPolicy(masked), masked, '二次脱敏同引用（phrase 空化锚点）')
 })
 
 test('禁语恰为占位标记时仍脱敏（不因标记过滤而原样留存）', () => {
   const phrase = '【禁语已脱敏】' // 构造形态：禁语字面即默认标记
   const raw = rawRun(phrase)
-  const masked = maskForbiddenPhrases(raw)
+  const masked = enforceOutputPolicy(raw)
   const json = JSON.stringify(masked)
   assert.ok(!json.includes(phrase), '标记字面作为禁语时必须换标记清除')
   const text = renderRunText(masked)
@@ -407,4 +411,86 @@ test('skills 胜出者复核：stale/落选/异名 locator 一律拒载', () => 
   assert.equal(isCurrentWinner(winners, 'skl-tsp-gone', '/d/new', 'SKL-TSP-N'), false)
   // 空快照
   assert.equal(isCurrentWinner(new Map(), 'skl-tsp-n', '/d/new', 'SKL-TSP-N'), false)
+})
+
+/* ── tool-face-policy 不变量（I1–I5）：路径与禁语同族穷举 ────────────────── */
+
+test('I3 datasetPath 围栏：越界/穿越/ADS/junction 逃逸一律拒（I2：错误只回显原文）', () => {
+  const base = mkdtempSync(join(tmpdir(), 'onto-fence-'))
+  const outside = mkdtempSync(join(tmpdir(), 'onto-fence-out-'))
+  try {
+    const ds = JSON.stringify({ objects: [], relations: [], candidates: [] })
+    writeFileSync(join(base, 'ok.json'), ds)
+    writeFileSync(join(outside, 'secret.json'), ds)
+    // 合法：围栏内
+    assert.equal(loadDatasetFromArgs({ datasetPath: join(base, 'ok.json') }, { baseDir: base }).candidates.length, 0)
+    // 越界：围栏外绝对路径
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(outside, 'secret.json') }, { baseDir: base }), 'INVALID_ARGS')
+    // 穿越：`..` 逃出
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(base, '..', 'x.json') }, { baseDir: base }), 'INVALID_ARGS')
+    // ADS 冒号段（NTFS 隐藏流）
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(base, 'a:b.json') }, { baseDir: base }), 'INVALID_ARGS')
+    // junction 逃逸：围栏内链接指向围栏外
+    const link = join(base, 'link')
+    symlinkSync(outside, link, 'junction')
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(link, 'secret.json') }, { baseDir: base }), 'INVALID_ARGS')
+    // I2：围栏拒绝回显调用方原文，不回显 resolve 后绝对路径
+    const raw = 'no-such-relative.json'
+    try {
+      loadDatasetFromArgs({ datasetPath: raw }, { baseDir: base })
+      assert.fail('期望 INVALID_ARGS')
+    } catch (e) {
+      assert.ok(e instanceof AgentToolError && e.code === 'INVALID_ARGS')
+      assert.ok(e.message.includes(raw), `应回显调用方原文: ${e.message}`)
+      assert.ok(!e.message.includes(resolve(raw)), `不得回显 resolve 后绝对路径: ${e.message}`)
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('I3 写源围栏：writeSourceFile 本体拒绝穿越/ADS/绝对路径/junction 写穿（与 importVersion 同口径）', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-wsrc-'))
+  const outside = mkdtempSync(join(tmpdir(), 'onto-wsrc-out-'))
+  try {
+    const dir = join(tmp, 'pkg', '1.0.0')
+    mkdirSync(dir, { recursive: true })
+    const bad = (rel) => {
+      try {
+        writeSourceFile(dir, rel, 'x')
+        assert.fail(`期望拒绝: ${rel}`)
+      } catch (e) {
+        assert.ok(e instanceof PackageStoreError, `期望 PackageStoreError，得到 ${e}`)
+        assert.equal(e.code, 'PACKAGE_MALFORMED')
+      }
+    }
+    bad('../escape.yaml')
+    bad('a:b.yaml')
+    bad('sub/../../up.yaml')
+    bad('C:\\abs.yaml')
+    // junction 写穿：子目录指外也不得落盘
+    symlinkSync(outside, join(dir, 'sub'), 'junction')
+    bad('sub/evil.yaml')
+    assert.ok(!existsSync(join(outside, 'evil.yaml')), 'junction 指外不得写穿')
+    // 合法写入
+    writeSourceFile(dir, 'o1-objects/x.yaml', 'ok: true')
+    assert.ok(existsSync(join(dir, 'o1-objects', 'x.yaml')))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('I1 断言闸门：模型面残留短语即受控失败（错误不回显短语）', () => {
+  const phrase = '确定为洗钱'
+  assert.doesNotThrow(() => assertNoForbiddenPhrases({ narrative: ['clean'] }, [phrase]))
+  expectCode(() => assertNoForbiddenPhrases({ narrative: [`x${phrase}`] }, [phrase]), 'INVALID_TOOL_OUTPUT')
+  try {
+    assertNoForbiddenPhrases({ nested: [{ deep: phrase }] }, [phrase])
+    assert.fail('期望 INVALID_TOOL_OUTPUT')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
+    assert.ok(!e.message.includes(phrase), `错误消息不得回显短语: ${e.message}`)
+  }
 })

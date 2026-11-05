@@ -17,7 +17,8 @@ import {
   grantMatches,
   loadDatasetFromArgs,
   loadToolPackage,
-  maskForbiddenPhrases,
+  enforceOutputPolicy,
+  assertNoForbiddenPhrases,
   pickContracts,
   projectByContract,
   projectPackageList,
@@ -46,6 +47,9 @@ import {
 
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
 const AML_RUN = fileURLToPath(new URL('../../examples/aml-run.json', import.meta.url))
+const REPO = fileURLToPath(new URL('../../', import.meta.url))
+// datasetPath 工作目录围栏（tool-face-policy P2.1）：测试显式指定围栏根为仓库根。
+const BASE = { baseDir: REPO }
 
 function expectCode(fn, code) {
   try {
@@ -67,7 +71,7 @@ test('数据双通道：datasetPath 与 dataset 必须二选一', () => {
 })
 
 test('数据双通道：datasetPath 读取 examples/aml-run.json 成功', () => {
-  const ds = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const ds = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   assert.ok(Array.isArray(ds.candidates) && ds.candidates.length > 0)
   assert.ok(Array.isArray(ds.objects) && Array.isArray(ds.relations))
 })
@@ -77,7 +81,7 @@ test('数据双通道：坏路径与坏 JSON 均拒绝', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'onto-ds-'))
   try {
     writeFileSync(join(tmp, 'bad.json'), '{ not json', 'utf8')
-    expectCode(() => loadDatasetFromArgs({ datasetPath: join(tmp, 'bad.json') }), 'INVALID_ARGS')
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(tmp, 'bad.json') }, { baseDir: tmp }), 'INVALID_ARGS')
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
@@ -103,7 +107,7 @@ test('数据形状校验：缺数组与坏 candidate 拒绝', () => {
 })
 
 test('端到端：aml-analysis@1.0.0 跑 SCN-AML-FIND-CLUES，装配断言通过', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   assertRunContract(result)
   assert.equal(result.humanReviewRequired, true)
@@ -118,7 +122,7 @@ test('端到端：aml-analysis@1.0.0 跑 SCN-AML-FIND-CLUES，装配断言通过
 })
 
 test('装配断言：缺契约要件即 INVALID_TOOL_OUTPUT', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
 
   expectCode(() => assertRunContract({ ...good, humanReviewRequired: false }), 'INVALID_TOOL_OUTPUT')
@@ -134,7 +138,7 @@ test('装配断言：缺契约要件即 INVALID_TOOL_OUTPUT', () => {
 })
 
 test('renderRunText：合规页脚成立且渲染文本不触发禁语', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   const text = renderRunText(result)
 
@@ -501,7 +505,7 @@ test('收权：多级实例段 TYPE:a:b 按首个冒号前类型段判定', () =
 })
 
 test('装配断言：null/错型字段拒绝，不产出残缺结果', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   assert.doesNotThrow(() => assertRunContract(good))
 
@@ -703,7 +707,7 @@ test('数据形状校验：features 缺失与 tags 错型拒绝', () => {
 })
 
 test('装配断言：candidates 非数组与 pendingChecks 错型拒绝', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   expectCode(() => assertRunContract({ ...good, candidates: 'not-array' }), 'INVALID_TOOL_OUTPUT')
   const nullPending = {
@@ -784,7 +788,7 @@ test('dataset 收权：实例 id 解析到类型过 grantScope，未收权/无�
 
 test('dataset 收权：验收样例 aml-run.json 引用全部在收权面内（防误伤）', () => {
   const contracts = readToolContracts(AML_DIR)
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   assertDatasetGranted(dataset, contracts)
 })
 
@@ -940,7 +944,7 @@ test('dataset 形状：object 实例 ID 重复一律拒绝（收权解析歧义�
 })
 
 test('装配断言：excluded 形状校验（非数组/畸形条目即 INVALID_TOOL_OUTPUT）', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const good = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   assert.doesNotThrow(() => assertRunContract(good))
   expectCode(() => assertRunContract({ ...good, excluded: 'not-array' }), 'INVALID_TOOL_OUTPUT')
@@ -949,7 +953,7 @@ test('装配断言：excluded 形状校验（非数组/畸形条目即 INVALID_T
 })
 
 test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行），排除行在场', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   const text = renderRunText(result)
   // aml-run.json 实产出排除项（CAND-003 / RULE-AML-EXCL-WHITELIST）
@@ -959,7 +963,7 @@ test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行）
   }
   assert.ok(result.excluded.some((x) => x.candidateId === 'CAND-003'), '验收样例应排除 CAND-003')
   // 真实命中形态：短语在 narrative/evidence 里（特征插值/模板回填），命中登记指向这些位置——
-  // 渲染文本（模型可见面）必须整体脱敏；core/wire 人审面保留原文（工具出口由 maskForbiddenPhrases 收口）。
+  // 渲染文本（模型可见面）必须整体脱敏；core/wire 人审面保留原文（工具出口由 enforceOutputPolicy 收口）。
   const hitPhrase = '确定为洗钱'
   const hit = {
     ...result,
@@ -988,7 +992,7 @@ test('renderRunText：禁语命中时渲染文本脱敏（含叙述/证据行）
   assert.ok(hitText.includes('【禁语已脱敏】'), '脱敏标记在场')
   assert.match(hitText, /禁语扫描: 2 命中/)
   assert.match(hitText, /禁语命中 @ candidates\[0\]\.narrative\[0\]/)
-  // core/wire 人审面保留完整短语（renderRunText 不改写入参；工具出口 canonical 值经 maskForbiddenPhrases 裁剪）
+  // core/wire 人审面保留完整短语（renderRunText 不改写入参；工具出口 canonical 值经 enforceOutputPolicy 裁剪）
   assert.equal(hit.audit.forbiddenPhraseHits[0].phrase, hitPhrase)
   assert.ok(
     hit.candidates[0].narrative.some((n) => n.includes(hitPhrase)),
@@ -1020,7 +1024,7 @@ test('数据形状：空串 id/objectRef/type 一律拒绝（与顶层 guard 口
 })
 
 test('工具出口禁语脱敏：结构面不回显短语本体（count/where 保留）', () => {
-  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN })
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', dataset)
   const hitPhrase = '确定为洗钱'
   const hit = {
@@ -1031,7 +1035,7 @@ test('工具出口禁语脱敏：结构面不回显短语本体（count/where �
       forbiddenPhraseHits: [{ phrase: hitPhrase, where: 'candidates[0].narrative[0]' }],
     },
   }
-  const masked = maskForbiddenPhrases(hit)
+  const masked = enforceOutputPolicy(hit)
   const face = JSON.stringify(masked.audit)
   assert.ok(!face.includes(hitPhrase), `工具出口结构面不得回显短语: ${face}`)
   assert.ok(face.includes('【禁语已脱敏】'), '脱敏标记在场')
@@ -1044,7 +1048,7 @@ test('工具出口禁语脱敏：结构面不回显短语本体（count/where �
   // 候选/证据面原样（裁剪只发生在 audit）
   assert.deepEqual(masked.candidates, result.candidates)
   // 无命中时原样返回（同引用，零拷贝开销）
-  assert.equal(maskForbiddenPhrases(result), result)
+  assert.equal(enforceOutputPolicy(result), result)
   // renderRunText 对已脱敏结果幂等（不再回显、计数不变）
   const text = renderRunText(masked)
   assert.ok(!text.includes(hitPhrase))

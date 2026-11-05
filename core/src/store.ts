@@ -178,7 +178,13 @@ export function readSourceFile(versionDir: string, relPath: string): string {
 /** 写入单个源文件（带签发守卫）。 */
 export function writeSourceFile(versionDir: string, relPath: string, text: string): void {
   assertWritable(versionDir)
+  // 本体校验（tool-face-policy P2.1），与 importVersion 同一口径：
+  // rel 形态拒绝 + 落点 containment（junction 子目录指外也不得写穿）。
+  // 调用方不得自带路径口径；wire 层同口径校验保留为纵深防御。
   const full = join(versionDir, relPath)
+  if (!isSafeRelPath(relPath) || !isInsideDir(versionDir, full)) {
+    throw new PackageStoreError('PACKAGE_MALFORMED', `invalid source path: ${relPath}`)
+  }
   mkdirSync(dirname(full), { recursive: true })
   writeFileSync(full, text, 'utf8')
 }

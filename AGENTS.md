@@ -1,6 +1,7 @@
 # AGENTS.md
 
-dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture.md](docs/architecture.md)，自包含），
+dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture.md](docs/architecture.md)，自包含；
+工具面信任边界与三策略收口见 [docs/compose/spec/tool-face-policy.md](docs/compose/spec/tool-face-policy.md)），
 以 dsh plugin bundle 形态承载：`backend/`（@dsh-onto/backend 统一后端 wire 服务）、
 `workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）。
 示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0），场景样例在 `examples/`。
@@ -22,10 +23,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 
 ## 验证阶梯（改动后必跑）
 
-1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（65 项验收测试全绿）。
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（72 项验收测试全绿）。
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`；backend 另跑 `pnpm run test`
-   （agent 工具/技能纯函数）。
+   （agent 工具/技能纯函数，81 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
 3. `scripts/dump-config.ps1` — 硬断言 `@dsh-onto/backend`、`@dsh-onto/workbench` 均在组合结果中。
 4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「dsh-onto」→ 五个 tab
    （包管理/建模/知识库/校验派生/场景运行）；选中 aml-analysis@1.0.0 → 场景运行
