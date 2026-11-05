@@ -32,6 +32,17 @@ interface Ctx {
   slots: SlotsRuntime
   remote: Record<string, Record<string, RemoteFn> | undefined>
   provide(name: string, value: unknown): void
+  /** 右栏 tab 类型注册表（shell 的 ui-sidebar-right reflect 服务；结构面手写，零 import）。 */
+  sidebarRightTabs: { register(def: SidebarRightTabDefinitionLike): () => void }
+}
+
+/** SidebarRightTabDefinition 最小结构面（与 ui-sidebar-right 对齐）。 */
+interface SidebarRightTabDefinitionLike {
+  id: string
+  kind: string
+  priority?: 'extension' | 'builtin' | 'fallback'
+  title: (address: string) => string
+  guide?: Array<{ id: string; order: number; title: () => string; description?: () => string }>
 }
 
 interface ModuleRequire {
@@ -59,6 +70,9 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-onto.workbench'
     const PANEL_ID = 'dsh-onto-workbench'
+    /** 右栏「本体图谱」页型：kind 为打开名，id 为实现身份（pane.tab 的 key）。 */
+    const GRAPH_TAB_ID = '@dsh-onto/workbench'
+    const GRAPH_TAB_KIND = 'ontology-graph'
 
     const zh = {
       panel: 'dsh-onto',
@@ -236,6 +250,9 @@ window.__ModuleLoader__.load({
       attrCount: '属性',
       draftCount: '待审草案',
       revision: '修订',
+      graphTabTitle: '本体图谱',
+      graphTabDesc: '对话旁的常驻画布：每轮起草自动长出节点',
+      rightSelected: '图谱包',
     }
     const en = {
       panel: 'dsh-onto',
@@ -413,6 +430,9 @@ window.__ModuleLoader__.load({
       attrCount: 'Attributes',
       draftCount: 'Pending drafts',
       revision: 'Rev',
+      graphTabTitle: 'Ontology graph',
+      graphTabDesc: 'Persistent canvas beside chat: drafts grow nodes per turn',
+      rightSelected: 'Graph package',
     }
 
     function errText(e: unknown): string {
@@ -438,6 +458,39 @@ window.__ModuleLoader__.load({
 
     function fmt(n: number | undefined, digits = 3): string {
       return typeof n === 'number' ? n.toFixed(digits) : '—'
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+     * 包选中共享态：主区工作台与右栏图谱同一来源（conversational-modeling P1 修正）
+     * ═══════════════════════════════════════════════════════════════════ */
+
+    interface SelectedPkg {
+      name: string
+      version: string
+    }
+
+    const selectedStore = {
+      value: null as SelectedPkg | null,
+      listeners: new Set<() => void>(),
+      get(): SelectedPkg | null {
+        return this.value
+      },
+      set(next: SelectedPkg | null): void {
+        this.value = next
+        for (const fn of [...this.listeners]) fn()
+      },
+      subscribe(fn: () => void): () => void {
+        this.listeners.add(fn)
+        return () => {
+          this.listeners.delete(fn)
+        }
+      },
+    }
+
+    function useSharedSelected(): [SelectedPkg | null, (next: SelectedPkg | null) => void] {
+      const [v, setV] = useState<SelectedPkg | null>(selectedStore.get())
+      useEffect(() => selectedStore.subscribe(() => setV(selectedStore.get())), [])
+      return [v, (next) => selectedStore.set(next)]
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -503,6 +556,8 @@ window.__ModuleLoader__.load({
       '.ogc-draft{display:flex;gap:8px;align-items:flex-start;}',
       '.ogc-draft textarea{flex:1;min-height:46px;resize:vertical;}',
       '.ogc-node{cursor:pointer;}',
+      '.ogc-right .ogc-grid{grid-template-columns:1fr;}',
+      '.ogc-right{max-width:none;}',
       '.ogc-node:hover text{text-decoration:underline;}',
       '.ogc-lbl{font-size:10px;fill:var(--dsw-alias-label-primary,#1c2333);pointer-events:none;}',
       '.ogc-edge{stroke-width:1;fill:none;opacity:.65;}',
@@ -806,6 +861,7 @@ window.__ModuleLoader__.load({
         'remote.ontoDerive',
         'remote.ontoKnowledge',
         'remote.ontoRuntime',
+        'sidebarRightTabs',
       ],
       apply(ctx: Ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-onto-workbench: dictionaries')
@@ -1431,24 +1487,21 @@ window.__ModuleLoader__.load({
           return h('div', { className: 'ogc-insp' }, h('h4', null, node.id), ...rows)
         }
 
-        function ModelPanel(props: {
+        /* ═══════════════════════════════════════════════════════════════
+         * GraphWorkbench —— 画布工作台（主区建模视图与右栏图谱 tab 共用）
+         * 状态自带：图谱轮询 / 对话起草 / 人审物化 / 骨架门（P1/P3）
+         * ═══════════════════════════════════════════════════════════════ */
+
+        function GraphWorkbench(props: {
           t: (k: string) => string
           apis: Ctx
           selected: { name: string; version: string } | null
+          /** 主区视图传入：物化后刷新 pkg/统计（右栏 tab 不传）。 */
+          onChanged?: () => void
         }) {
-          const { t, apis, selected } = props
-          const [pkg, setPkg] = useState<Record<string, unknown> | null>(null)
-          const [files, setFiles] = useState<Record<string, string>>({})
-          const [yamlPath, setYamlPath] = useState('o1-objects/object-types.yaml')
-          const [yamlText, setYamlText] = useState('')
-          const [busy, setBusy] = useState('')
-          const [error, setError] = useState('')
-          const [info, setInfo] = useState('')
-          const [edit, setEdit] = useState<ElemEdit | null>(null)
+          const { t, apis, selected, onChanged } = props
           const api = apis.remote['ontoModel']
           const kApi = apis.remote['ontoKnowledge']
-          // 对话式建模（P1）：画布主视图 + 检视器 + 对话起草 + 骨架门
-          const [view, setView] = useState<'canvas' | 'list'>('canvas')
           const [graph, setGraph] = useState<OgGraph | null>(null)
           const [selNode, setSelNode] = useState<string | null>(null)
           const [draftText, setDraftText] = useState('')
@@ -1457,26 +1510,10 @@ window.__ModuleLoader__.load({
           const [skelIds, setSkelIds] = useState('')
           const [skelCode, setSkelCode] = useState('')
           const [skelConfirmed, setSkelConfirmed] = useState(false)
-
-          const reload = useCallback(async () => {
-            if (!api || !selected) return
-            setBusy('load')
-            setError('')
-            try {
-              const p = unwrap<{ pkg: Record<string, unknown> }>(await api.load({ name: selected.name, version: selected.version }))
-              setPkg(p.pkg)
-              const f = unwrap<{ files: Record<string, string> }>(await api.readSources({ name: selected.name, version: selected.version }))
-              setFiles(f.files)
-            } catch (e) {
-              setError(errText(e))
-            } finally {
-              setBusy('')
-            }
-          }, [apis, selected])
-
-          useEffect(() => {
-            void reload()
-          }, [reload])
+          const [busy, setBusy] = useState('')
+          const [error, setError] = useState('')
+          const [info, setInfo] = useState('')
+          const [pkg, setPkg] = useState<Record<string, unknown> | null>(null)
 
           const loadGraph = useCallback(async () => {
             if (!api || !kApi || !selected) return
@@ -1489,8 +1526,12 @@ window.__ModuleLoader__.load({
                 await kApi.listCandidates({ packageId: selected.name }),
               )
               setCandidates(cq.items)
+              const p = unwrap<{ pkg: Record<string, unknown> }>(
+                await api.load({ name: selected.name, version: selected.version }),
+              )
+              setPkg(p.pkg)
             } catch {
-              /* 画布刷新失败不阻塞清单视图（DRAFT/空包轮询静默） */
+              /* 画布刷新失败静默（DRAFT/空包轮询） */
             }
           }, [apis, selected])
 
@@ -1513,6 +1554,310 @@ window.__ModuleLoader__.load({
               setSkelConfirmed(graph.skeleton ? graph.skeleton.confirmed : false)
             }
           }, [graph, skelOpen])
+
+          const readOnly = graph?.status === 'ISSUED'
+
+          const draftTurn = (): void => {
+            const text = draftText.trim()
+            if (!text || !selected || readOnly || !kApi) return
+            void (async () => {
+              setBusy('draft')
+              setError('')
+              setInfo('')
+              try {
+                const src = unwrap<{ source: { id: string } }>(
+                  await kApi.uploadSource({
+                    packageId: `${selected.name}@${selected.version}`,
+                    sourceType: 'CONVERSATION',
+                    name: `turn-${Date.now()}`,
+                    content: text,
+                  }),
+                )
+                const rep = unwrap<{ added?: Array<{ id: string }>; report?: { accepted?: number } }>(
+                  await kApi.parseSource({ sourceId: src.source.id }),
+                )
+                await loadGraph()
+                onChanged?.()
+                const n = rep.added?.length ?? rep.report?.accepted ?? 0
+                setInfo(`✓ ${t('draftTurn')}: ${n}`)
+                setDraftText('')
+                // 自动弹右栏暂缓：harness 的 openTab 只置展开旗标、面板可能不挂载
+                //（半开态风险）。图谱经引导卡打开一次后常驻，轮询继续生长（P1）。
+              } catch (e) {
+                setError(errText(e))
+              } finally {
+                setBusy('')
+              }
+            })()
+          }
+
+          const draftAction = (id: string, action: 'approve' | 'reject'): void => {
+            if (!selected || readOnly || !kApi) return
+            void (async () => {
+              setBusy(action)
+              setError('')
+              setInfo('')
+              try {
+                unwrap(await kApi.reviewCandidate({ id, action }))
+                if (action === 'approve') {
+                  const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
+                    await kApi.materialize({ name: selected.name, version: selected.version, ids: [id] }),
+                  )
+                  setInfo(
+                    res.applied.length > 0
+                      ? `✓ ${t('approveMat')}`
+                      : `✓ ${t('approve')} — ${res.skipped.map((s) => s.reason).join('; ') || t('empty')}`,
+                  )
+                } else {
+                  setInfo(`✓ ${t('reject')}`)
+                }
+                await loadGraph()
+                onChanged?.()
+              } catch (e) {
+                setError(errText(e))
+                void loadGraph()
+              } finally {
+                setBusy('')
+              }
+            })()
+          }
+
+          const saveSkeleton = (): void => {
+            if (!selected || !kApi) return
+            const domainCode = skelCode.trim() || skelDomainFallback(graph)
+            const ids = skelIds
+              .split('\n')
+              .map((s) => s.trim())
+              .filter(Boolean)
+            void (async () => {
+              setBusy('skel')
+              setError('')
+              setInfo('')
+              try {
+                unwrap(
+                  await kApi.saveSkeleton({
+                    name: selected.name,
+                    version: selected.version,
+                    domainCode,
+                    confirmed: skelConfirmed,
+                    ids,
+                  }),
+                )
+                await loadGraph()
+                setInfo(`✓ ${t('skelSave')}`)
+              } catch (e) {
+                setError(errText(e))
+              } finally {
+                setBusy('')
+                setSkelOpen(false)
+              }
+            })()
+          }
+
+          if (!selected) return h('p', { className: 'ow-note' }, t('none'))
+
+          const EMPTY_GRAPH: OgGraph = { package: '', version: '', status: '', nodes: [], edges: [], issues: [], revision: 0 }
+          const g = graph ?? EMPTY_GRAPH
+          const nodeObj: OgNode | null = selNode ? g.nodes.find((nd) => nd.id === selNode) ?? null : null
+          const pkgIssues = g.issues.filter((i) => i.where === 'package' && i.level !== 'info')
+          const draftCount = g.nodes.filter((nd) => nd.draft).length
+          const domain = skelDomainFallback(graph)
+
+          const canvasChildren: ReactNode[] = []
+          if (graph) {
+            canvasChildren.push(
+              h(
+                'div',
+                { key: 'skel', className: 'ogc-skel' },
+                h(Tag, {
+                  text: t('skeleton'),
+                  tone: graph.skeleton ? (graph.skeleton.confirmed ? 'ok' : 'warn') : undefined,
+                }),
+                h(
+                  'span',
+                  { className: 'ow-note' },
+                  graph.skeleton
+                    ? `${graph.skeleton.confirmed ? t('skelConfirmed') : t('skelUnconfirmed')} · ${graph.skeleton.ids.length} ID`
+                    : t('skelNone'),
+                ),
+                readOnly
+                  ? null
+                  : h('button', {
+                      className: 'ow-btn ghost',
+                      disabled: !!busy,
+                      onClick: () => setSkelOpen((v) => !v),
+                    }, t('skelEdit')),
+                skelOpen
+                  ? h(
+                      'div',
+                      { className: 'ow-form', style: { width: '100%' } },
+                      h(Field, { label: t('skelCode') },
+                        h('input', {
+                          className: 'ow-in',
+                          value: skelCode,
+                          placeholder: domain,
+                          onChange: (e: { target: { value: string } }) => setSkelCode(e.target.value),
+                        })),
+                      h(Field, { label: t('skelIds') },
+                        h('textarea', {
+                          className: 'ow-textarea',
+                          style: { minHeight: 90 },
+                          value: skelIds,
+                          onChange: (e: { target: { value: string } }) => setSkelIds(e.target.value),
+                        })),
+                      h(
+                        'div',
+                        { className: 'ow-row' },
+                        h('label', { className: 'ow-note', style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                          h('input', {
+                            type: 'checkbox',
+                            checked: skelConfirmed,
+                            onChange: (e: { target: { checked: boolean } }) => setSkelConfirmed(e.target.checked),
+                          }),
+                          t('skelConfirmed')),
+                        h('button', { className: 'ow-btn', disabled: !!busy, onClick: saveSkeleton }, t('skelSave')),
+                        h('button', { className: 'ow-btn ghost', onClick: () => setSkelOpen(false) }, t('cancel')),
+                      ),
+                    )
+                  : null,
+              ),
+            )
+          }
+          if (!readOnly) {
+            canvasChildren.push(
+              h(
+                'div',
+                { key: 'draft', className: 'ogc-draft', style: { marginTop: 10 } },
+                h('textarea', {
+                  className: 'ow-textarea',
+                  placeholder: t('draftPlaceholder'),
+                  value: draftText,
+                  onChange: (e: { target: { value: string } }) => setDraftText(e.target.value),
+                  onKeyDown: (e: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      draftTurn()
+                    }
+                  },
+                }),
+                h('button', {
+                  className: 'ow-btn',
+                  disabled: !!busy || !draftText.trim(),
+                  onClick: draftTurn,
+                }, busy === 'draft' ? t('busy') : t('draftTurn')),
+              ),
+              h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')),
+            )
+          }
+          canvasChildren.push(
+            h(
+              'div',
+              { key: 'grid', className: 'ogc-grid' },
+              graph
+                ? h(
+                    'div',
+                    { className: 'ogc-box' },
+                    h(GraphCanvas, { graph, selected: selNode, onSelect: setSelNode }),
+                    h(
+                      'div',
+                      { className: 'ogc-legend' },
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O1, border: '1.5px solid #4a6fa5' } }), ' O1'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O2, border: '1.5px solid #e8933a' } }), ' O2'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O3, border: '1.5px solid #3d9970' } }), ' O3'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px dashed #999' } }), ` ${t('queue')}`),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #dc2626' } }), ' error / run-hit'),
+                    ),
+                  )
+                : h('p', { className: 'ow-note' }, t('loading')),
+              h(InspectorView, {
+                t,
+                graph: g,
+                node: nodeObj,
+                pkg,
+                candidates,
+                busy,
+                readOnly,
+                onDraftAction: draftAction,
+              }),
+            ),
+          )
+          if (pkgIssues.length > 0) {
+            canvasChildren.push(
+              h(
+                'div',
+                { key: 'pkgissues', style: { marginTop: 8 } },
+                h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
+                ...pkgIssues.slice(0, 12).map((i, k) =>
+                  h(
+                    'div',
+                    { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
+                    h('b', null, i.code),
+                    ' ',
+                    i.message,
+                  )),
+              ),
+            )
+          }
+
+          return h(
+            'div',
+            { className: 'ogc-work' },
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('span', { className: 'ow-stat' }, `${t('draftCount')} ${draftCount}`),
+              graph ? h('span', { className: 'ow-stat' }, `${t('revision')} ${graph.revision}`) : null,
+              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => void loadGraph() }, t('refresh')),
+            ),
+            h(ErrorBanner, { text: error }),
+            h(OkBanner, { text: info }),
+            ...canvasChildren,
+          )
+        }
+
+        /** 骨架域码回退：无图谱时用包 ID 派生的占位（保存时优先 skelCode 输入）。 */
+        function skelDomainFallback(graph: OgGraph | null): string {
+          if (graph && graph.package) return (graph.package.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'GEN')
+          return 'GEN'
+        }
+
+        function ModelPanel(props: {
+          t: (k: string) => string
+          apis: Ctx
+          selected: { name: string; version: string } | null
+        }) {
+          const { t, apis, selected } = props
+          const [pkg, setPkg] = useState<Record<string, unknown> | null>(null)
+          const [files, setFiles] = useState<Record<string, string>>({})
+          const [yamlPath, setYamlPath] = useState('o1-objects/object-types.yaml')
+          const [yamlText, setYamlText] = useState('')
+          const [busy, setBusy] = useState('')
+          const [error, setError] = useState('')
+          const [info, setInfo] = useState('')
+          const [edit, setEdit] = useState<ElemEdit | null>(null)
+          const api = apis.remote['ontoModel']
+          // 画布状态与动作在 GraphWorkbench（主区视图与右栏 tab 共用；P1 修正）
+          const [view, setView] = useState<'canvas' | 'list'>('canvas')
+
+          const reload = useCallback(async () => {
+            if (!api || !selected) return
+            setBusy('load')
+            setError('')
+            try {
+              const p = unwrap<{ pkg: Record<string, unknown> }>(await api.load({ name: selected.name, version: selected.version }))
+              setPkg(p.pkg)
+              const f = unwrap<{ files: Record<string, string> }>(await api.readSources({ name: selected.name, version: selected.version }))
+              setFiles(f.files)
+            } catch (e) {
+              setError(errText(e))
+            } finally {
+              setBusy('')
+            }
+          }, [apis, selected])
+
+          useEffect(() => {
+            void reload()
+          }, [reload])
 
           const savePkg = async (mutate: (p: Record<string, unknown>) => void, label: string): Promise<boolean> => {
             if (!api || !selected || !pkg) return false
@@ -1607,101 +1952,6 @@ window.__ModuleLoader__.load({
             }, idx < 0 ? `add ${edit.kind}` : `edit ${edit.kind}`).then((ok) => {
               if (ok) setEdit(null)
             })
-          }
-
-          /* ── 对话式建模动作（P1/P3）：起草入 CONVERSATION 管线、人审物化、骨架门 ── */
-
-          const draftTurn = (): void => {
-            const text = draftText.trim()
-            if (!text || !selected || readOnly || !kApi) return
-            void (async () => {
-              setBusy('draft')
-              setError('')
-              setInfo('')
-              try {
-                const src = unwrap<{ source: { id: string } }>(
-                  await kApi.uploadSource({
-                    packageId: `${selected.name}@${selected.version}`,
-                    sourceType: 'CONVERSATION',
-                    name: `turn-${Date.now()}`,
-                    content: text,
-                  }),
-                )
-                const rep = unwrap<{ added?: Array<{ id: string }>; report?: { accepted?: number } }>(
-                  await kApi.parseSource({ sourceId: src.source.id }),
-                )
-                await Promise.all([reload(), loadGraph()])
-                const n = rep.added?.length ?? rep.report?.accepted ?? 0
-                setInfo(`✓ ${t('draftTurn')}: ${n}`)
-                setDraftText('')
-              } catch (e) {
-                setError(errText(e))
-              } finally {
-                setBusy('')
-              }
-            })()
-          }
-
-          const draftAction = (id: string, action: 'approve' | 'reject'): void => {
-            if (!selected || readOnly || !kApi) return
-            void (async () => {
-              setBusy(action)
-              setError('')
-              setInfo('')
-              try {
-                unwrap(await kApi.reviewCandidate({ id, action }))
-                if (action === 'approve') {
-                  const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
-                    await kApi.materialize({ name: selected.name, version: selected.version, ids: [id] }),
-                  )
-                  setInfo(
-                    res.applied.length > 0
-                      ? `✓ ${t('approveMat')}`
-                      : `✓ ${t('approve')} — ${res.skipped.map((s) => s.reason).join('; ') || t('empty')}`,
-                  )
-                } else {
-                  setInfo(`✓ ${t('reject')}`)
-                }
-                await Promise.all([reload(), loadGraph()])
-              } catch (e) {
-                setError(errText(e))
-                void loadGraph()
-              } finally {
-                setBusy('')
-              }
-            })()
-          }
-
-          const saveSkeleton = (): void => {
-            if (!selected || !kApi) return
-            const domainCode = skelCode.trim() || String((pkg as { meta?: { domain?: string } } | null)?.meta?.domain ?? 'GEN')
-            const ids = skelIds
-              .split('\n')
-              .map((s) => s.trim())
-              .filter(Boolean)
-            void (async () => {
-              setBusy('skel')
-              setError('')
-              setInfo('')
-              try {
-                unwrap(
-                  await kApi.saveSkeleton({
-                    name: selected.name,
-                    version: selected.version,
-                    domainCode,
-                    confirmed: skelConfirmed,
-                    ids,
-                  }),
-                )
-                await loadGraph()
-                setInfo(`✓ ${t('skelSave')}`)
-              } catch (e) {
-                setError(errText(e))
-              } finally {
-                setBusy('')
-                setSkelOpen(false)
-              }
-            })()
           }
 
           function elemTable(kind: ElemKind) {
@@ -1865,151 +2115,6 @@ window.__ModuleLoader__.load({
             return h('div', { className: 'ow-form' }, ...children)
           }
 
-          /* ── 画布子节点（canvas 主视图；list 保留原表格 + YAML 通道） ── */
-
-          const EMPTY_GRAPH: OgGraph = { package: '', version: '', status: '', nodes: [], edges: [], issues: [], revision: 0 }
-          const g = graph ?? EMPTY_GRAPH
-          const nodeObj: OgNode | null = selNode ? g.nodes.find((nd) => nd.id === selNode) ?? null : null
-          const pkgIssues = g.issues.filter((i) => i.where === 'package' && i.level !== 'info')
-          const draftCount = g.nodes.filter((nd) => nd.draft).length
-          const domain = String((pkg as { meta?: { domain?: string } } | null)?.meta?.domain ?? 'GEN')
-
-          const canvasChildren: ReactNode[] = []
-          if (graph) {
-            canvasChildren.push(
-              h(
-                'div',
-                { key: 'skel', className: 'ogc-skel' },
-                h(Tag, {
-                  text: t('skeleton'),
-                  tone: graph.skeleton ? (graph.skeleton.confirmed ? 'ok' : 'warn') : undefined,
-                }),
-                h(
-                  'span',
-                  { className: 'ow-note' },
-                  graph.skeleton
-                    ? `${graph.skeleton.confirmed ? t('skelConfirmed') : t('skelUnconfirmed')} · ${graph.skeleton.ids.length} ID`
-                    : t('skelNone'),
-                ),
-                readOnly
-                  ? null
-                  : h('button', {
-                      className: 'ow-btn ghost',
-                      disabled: !!busy,
-                      onClick: () => setSkelOpen((v) => !v),
-                    }, t('skelEdit')),
-                skelOpen
-                  ? h(
-                      'div',
-                      { className: 'ow-form', style: { width: '100%' } },
-                      h(Field, { label: t('skelCode') },
-                        h('input', {
-                          className: 'ow-in',
-                          value: skelCode,
-                          placeholder: domain,
-                          onChange: (e: { target: { value: string } }) => setSkelCode(e.target.value),
-                        })),
-                      h(Field, { label: t('skelIds') },
-                        h('textarea', {
-                          className: 'ow-textarea',
-                          style: { minHeight: 90 },
-                          value: skelIds,
-                          onChange: (e: { target: { value: string } }) => setSkelIds(e.target.value),
-                        })),
-                      h(
-                        'div',
-                        { className: 'ow-row' },
-                        h('label', { className: 'ow-note', style: { display: 'flex', gap: 6, alignItems: 'center' } },
-                          h('input', {
-                            type: 'checkbox',
-                            checked: skelConfirmed,
-                            onChange: (e: { target: { checked: boolean } }) => setSkelConfirmed(e.target.checked),
-                          }),
-                          t('skelConfirmed')),
-                        h('button', { className: 'ow-btn', disabled: !!busy, onClick: saveSkeleton }, t('skelSave')),
-                        h('button', { className: 'ow-btn ghost', onClick: () => setSkelOpen(false) }, t('cancel')),
-                      ),
-                    )
-                  : null,
-              ),
-            )
-          }
-          if (!readOnly) {
-            canvasChildren.push(
-              h(
-                'div',
-                { key: 'draft', className: 'ogc-draft', style: { marginTop: 10 } },
-                h('textarea', {
-                  className: 'ow-textarea',
-                  placeholder: t('draftPlaceholder'),
-                  value: draftText,
-                  onChange: (e: { target: { value: string } }) => setDraftText(e.target.value),
-                  onKeyDown: (e: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      draftTurn()
-                    }
-                  },
-                }),
-                h('button', {
-                  className: 'ow-btn',
-                  disabled: !!busy || !draftText.trim(),
-                  onClick: draftTurn,
-                }, busy === 'draft' ? t('busy') : t('draftTurn')),
-              ),
-              h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')),
-            )
-          }
-          canvasChildren.push(
-            h(
-              'div',
-              { key: 'grid', className: 'ogc-grid' },
-              graph
-                ? h(
-                    'div',
-                    { className: 'ogc-box' },
-                    h(GraphCanvas, { graph, selected: selNode, onSelect: setSelNode }),
-                    h(
-                      'div',
-                      { className: 'ogc-legend' },
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O1, border: '1.5px solid #4a6fa5' } }), ' O1'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O2, border: '1.5px solid #e8933a' } }), ' O2'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O3, border: '1.5px solid #3d9970' } }), ' O3'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px dashed #999' } }), ` ${t('queue')}`),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #dc2626' } }), ' error / run-hit'),
-                    ),
-                  )
-                : h('p', { className: 'ow-note' }, t('loading')),
-              h(InspectorView, {
-                t,
-                graph: g,
-                node: nodeObj,
-                pkg,
-                candidates,
-                busy,
-                readOnly,
-                onDraftAction: draftAction,
-              }),
-            ),
-          )
-          if (pkgIssues.length > 0) {
-            canvasChildren.push(
-              h(
-                'div',
-                { key: 'pkgissues', style: { marginTop: 8 } },
-                h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
-                ...pkgIssues.slice(0, 12).map((i, k) =>
-                  h(
-                    'div',
-                    { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
-                    h('b', null, i.code),
-                    ' ',
-                    i.message,
-                  )),
-              ),
-            )
-          }
-
           return h(
             'div',
             { className: 'ow-card' },
@@ -2034,8 +2139,6 @@ window.__ModuleLoader__.load({
               h('span', { className: 'ow-stat' }, `${t('exclusionRules')} ${(model['exclusionRules'] ?? []).length}`),
               h('span', { className: 'ow-stat' }, `${t('skillTemplates')} ${(model['skillTemplates'] ?? []).length}`),
               h('span', { className: 'ow-stat' }, `${t('scenarios')} ${(model['scenarios'] ?? []).length}`),
-              h('span', { className: 'ow-stat' }, `${t('draftCount')} ${draftCount}`),
-              graph ? h('span', { className: 'ow-stat' }, `${t('revision')} ${graph.revision}`) : null,
             ),
             h(
               'div',
@@ -2048,10 +2151,9 @@ window.__ModuleLoader__.load({
                 className: view === 'list' ? 'ow-btn' : 'ow-btn ghost',
                 onClick: () => setView('list'),
               }, t('listView')),
-              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => void loadGraph() }, t('refresh')),
             ),
             ...(view === 'canvas'
-              ? canvasChildren
+              ? [h(GraphWorkbench, { key: 'gw', t, apis, selected, onChanged: reload })]
               : [
                   ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
             h(
@@ -3148,7 +3250,8 @@ window.__ModuleLoader__.load({
           const { t, ctx: apis } = props
           const [tab, setTab] = useState('packages')
           const [versions, setVersions] = useState<VersionRow[]>([])
-          const [selected, setSelected] = useState<{ name: string; version: string } | null>(null)
+          // 与右栏图谱 tab 共享的包选中态（P1 修正）
+          const [selected, setSelected] = useSharedSelected()
           const [listError, setListError] = useState('')
 
           const reload = useCallback(async () => {
@@ -3221,6 +3324,98 @@ window.__ModuleLoader__.load({
                     : h(RunPanel, { t, apis, selected }),
           )
         }
+
+        /* ═══════════════════════════════════════════════════════════════
+         * 右栏「本体图谱」tab：对话留 main，图谱常驻右栏（P1 修正）
+         * ═══════════════════════════════════════════════════════════════ */
+
+        function GraphRightTab() {
+          const [selected, setSelected] = useSharedSelected()
+          const [versions, setVersions] = useState<VersionRow[]>([])
+          const [listError, setListError] = useState('')
+          useEffect(() => {
+            const api = ctx.remote['ontoWorkspace']
+            if (!api) return
+            void (async () => {
+              try {
+                const out = unwrap<VersionRow[]>(await api.listVersions())
+                const rows = Array.isArray(out) ? out : []
+                setVersions(rows)
+                setListError('')
+                // 未选包时自动选第一个（右栏首开即有图）
+                if (!selectedStore.get() && rows.length > 0) {
+                  selectedStore.set({ name: rows[0].name, version: rows[0].version })
+                }
+              } catch (e) {
+                setListError(errText(e))
+              }
+            })()
+          }, [])
+          const selValue = selected ? `${selected.name}@${selected.version}` : ''
+          return h(
+            'div',
+            { className: 'ow-wrap ogc-right' },
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('span', { className: 'ow-label' }, t('rightSelected')),
+              h(
+                'select',
+                {
+                  className: 'ow-sel',
+                  value: selValue,
+                  onChange: (e: { target: { value: string } }) => {
+                    const v = e.target.value
+                    const at = v.lastIndexOf('@')
+                    if (at > 0) setSelected({ name: v.slice(0, at), version: v.slice(at + 1) })
+                  },
+                },
+                versions.length === 0
+                  ? h('option', { key: '', value: '' }, t('none'))
+                  : null,
+                ...versions.map((v) =>
+                  h(
+                    'option',
+                    { key: `${v.name}@${v.version}`, value: `${v.name}@${v.version}` },
+                    `${v.name}@${v.version}（${v.status}）`,
+                  )),
+              ),
+            ),
+            listError ? h(ErrorBanner, { text: listError }) : null,
+            selected
+              ? h(GraphWorkbench, { t, apis: ctx, selected })
+              : h('p', { className: 'ow-note' }, t('none')),
+          )
+        }
+
+        // 右栏 tab 类型（guide 卡片可发现）+ tab 内容席位
+        ctx.effect(
+          () =>
+            ctx.sidebarRightTabs.register({
+              id: GRAPH_TAB_ID,
+              kind: GRAPH_TAB_KIND,
+              title: () => t('graphTabTitle'),
+              guide: [
+                {
+                  id: 'main',
+                  order: 100,
+                  title: () => t('graphTabTitle'),
+                  description: () => t('graphTabDesc'),
+                },
+              ],
+            }),
+          'dsh-onto-workbench: ontology-graph tab',
+        )
+        ctx.effect(
+          () =>
+            ctx.slots.inject('sidebar.right.pane.tab', () =>
+              ctx.slots.register(
+                { name: 'sidebar.right.pane.tab', key: GRAPH_TAB_ID, locale: NS },
+                GraphRightTab,
+              ),
+            ),
+          'dsh-onto-workbench: ontology-graph body',
+        )
 
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS }, Workbench),

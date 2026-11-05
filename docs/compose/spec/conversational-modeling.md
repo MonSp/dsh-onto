@@ -22,9 +22,13 @@ updated: 2026-11-05
 | **对话面**（L5，dsh 会话） | 口述 / 文档 / 指令进入；AI 起草草案（带置信度、理由、结论性标记） | 每轮对话 → `ModelDelta` |
 | **图谱画布**（workbench 面板） | 增量长出节点与引用边；节点检视器做人审动作 | 模型版本号递增 → 订阅刷新 |
 
-- 布局：画布组件 `GraphCanvas` 在 workbench（支持 sidebar / main 两种 slot）；对话
-  主路径用 dsh 主会话（建模动作经 agent 工具驱动，同一管线同时服务脚本化调用）。
-  workbench 内可留轻量输入框直达同一管线，但不另建第二套对话历史。
+- 布局（P1 修正）：**对话留在 `main[key=conversation]`（dsh 原生会话），图谱常驻右栏 tab**
+  ——`ui-sidebar-right` 的 `ontology-graph` 页型（guide 卡片可发现；栏体打开一次后常驻，
+  4s 轮询持续生长；自动弹出暂缓——harness `openTab` 只置展开旗标、面板可能不挂载，
+  半开态风险，待布局契约明确后再做）。画布组件 `GraphWorkbench` 由主区建模视图与
+  右栏 tab 共用，包选中状态经工厂闭包共享。左侧 dsh-onto 行保留五 tab 管理工作台
+  （包管理/知识库/校验/运行）；dsh 主会话经 agent 工具（draft_elements 等）驱动同一
+  管线，workbench 内轻量输入框直达同管线，不建第二套对话历史。
 - 每轮协议（turn → delta → 审定）：
   1. 用户输入解析为建模意图（新增元素 / 改权重 / 查询图 / 运行场景）；
   2. AI 产出 `ModelDelta`：`drafts[]`（DraftCandidate）+ `edges[]`（引用边）+
