@@ -8,7 +8,7 @@
  * core/wire 人审面不经过本模块。
  * @module @dsh-onto/backend/agent-policy
  */
-import type { ScenarioRunResult } from '@dsh-onto/core'
+import type { RunDiff, ScenarioRunResult } from '@dsh-onto/core'
 
 /* ───────────────────────── 错误面（P2.4） ───────────────────────── */
 
@@ -125,6 +125,19 @@ export function collectPhrases(result: ScenarioRunResult, extra: readonly string
 const phraseRegistry = new Map<string, string[]>()
 const PHRASE_REGISTRY_MAX = 256
 
+/**
+ * 持久后端（spec run-insight S2.1，关 backlog #2）：RunRecord.redlines 是清单的落盘面，
+ * rememberPhrases 写内存；recallPhrases 内存未命中介后端回读（跨进程/跨会话 render 仍遮蔽）。
+ * 清单仅用于遮蔽，永不随渲染文本出模型面。未配置时行为不变（纯函数测试路径）。
+ */
+export type PhraseRecall = (runId: string) => readonly string[] | undefined
+let phraseRecall: PhraseRecall | null = null
+
+export function configurePhraseStore(recall: PhraseRecall | null): void {
+  phraseRecall = recall
+  phraseRegistry.clear()
+}
+
 export function rememberPhrases(runId: string, phrases: readonly string[]): void {
   if (typeof runId !== 'string' || runId === '') return
   if (phraseRegistry.size >= PHRASE_REGISTRY_MAX) {
@@ -135,7 +148,10 @@ export function rememberPhrases(runId: string, phrases: readonly string[]): void
 }
 
 export function recallPhrases(runId: string): string[] | undefined {
-  return phraseRegistry.get(runId)
+  const hit = phraseRegistry.get(runId)
+  if (hit !== undefined) return hit
+  const loaded = phraseRecall?.(runId)
+  return loaded === undefined ? undefined : [...new Set(loaded.filter((p) => typeof p === 'string' && p !== ''))]
 }
 
 /** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */
@@ -170,7 +186,11 @@ const ID_FACE_KEYS: ReadonlySet<string> = new Set([
   'objectRef',
   'candidateId',
   'runId',
+  'runIdA',
+  'runIdB',
   'scenarioId',
+  'scenarioA',
+  'scenarioB',
   'check',
   'missing',
   'requireReviewFor',
@@ -183,13 +203,13 @@ const ID_FACE_KEYS: ReadonlySet<string> = new Set([
  * walk 带 copy-on-write：无变化返回同引用——幂等是结构性的，不依赖清单为空。
  * `phrase` 字段空化兼幂等锚点；core/wire 人审面不经过本函数。
  */
-export function enforceOutputPolicy(
-  result: ScenarioRunResult,
+export function enforceOutputPolicy<T>(
+  result: T,
   phrases?: readonly string[],
-): ScenarioRunResult {
+): T {
   const list = phrases !== undefined
     ? [...new Set(phrases.filter((p) => p !== ''))]
-    : collectPhrases(result)
+    : collectPhrases(result as unknown as ScenarioRunResult)
   if (list.length === 0) return result
   const token = requireMaskToken(list)
   const walk = (v: unknown, key: string): unknown => {
@@ -224,7 +244,7 @@ export function enforceOutputPolicy(
     }
     return v
   }
-  const out = walk(result, '') as ScenarioRunResult
+  const out = walk(result, '') as T
   assertNoForbiddenPhrases(out, list)
   return out
 }
@@ -372,4 +392,258 @@ export function assertRunContract(result: ScenarioRunResult): void {
       throw invalidOutput('forbiddenPhraseHits 条目需要字符串 phrase 与 where')
     }
   }
+}
+
+/** diff 装配断言（I5）：RunDiff 逐字段验形，分数有限或 null，不产出残缺对比。 */
+export function assertDiffContract(diff: RunDiff): void {
+  if (typeof diff.runIdA !== 'string' || typeof diff.runIdB !== 'string') {
+    throw invalidOutput('diff runIdA/runIdB 需要字符串')
+  }
+  if (typeof diff.scenarioA !== 'string' || typeof diff.scenarioB !== 'string') {
+    throw invalidOutput('diff scenarioA/scenarioB 需要字符串')
+  }
+  if (typeof diff.sameDataset !== 'boolean') {
+    throw invalidOutput('diff sameDataset 需要布尔')
+  }
+  if (!Array.isArray(diff.candidates)) {
+    throw invalidOutput('diff candidates 不是数组')
+  }
+  for (const c of diff.candidates) {
+    if (!isRecord(c) || typeof c.candidateId !== 'string') {
+      throw invalidOutput('diff 候选需要字符串 candidateId')
+    }
+    for (const key of ['riskScoreA', 'riskScoreB', 'riskScoreDelta'] as const) {
+      const v = c[key]
+      if (v !== null && !(typeof v === 'number' && Number.isFinite(v))) {
+        throw invalidOutput(`diff ${c.candidateId} ${key} 需要有限数或 null`)
+      }
+    }
+    for (const key of ['hitRuleIdsAdded', 'hitRuleIdsRemoved', 'pendingChecksAdded', 'pendingChecksRemoved'] as const) {
+      if (!Array.isArray(c[key]) || (c[key] as unknown[]).some((x) => typeof x !== 'string')) {
+        throw invalidOutput(`diff ${c.candidateId} ${key} 需要字符串数组`)
+      }
+    }
+  }
+  for (const key of ['excludedAdded', 'excludedRemoved'] as const) {
+    const list = diff[key]
+    if (!Array.isArray(list)) {
+      throw invalidOutput(`diff ${key} 不是数组`)
+    }
+    for (const x of list) {
+      if (!isRecord(x) || typeof x.candidateId !== 'string' || typeof x.ruleId !== 'string') {
+        throw invalidOutput(`diff ${key} 条目需要字符串 candidateId 与 ruleId`)
+      }
+    }
+  }
+  if (typeof diff.auditPassedA !== 'boolean' || typeof diff.auditPassedB !== 'boolean') {
+    throw invalidOutput('diff auditPassedA/B 需要布尔')
+  }
+  if (diff.humanReviewRequired !== true) {
+    throw invalidOutput('humanReviewRequired 必须为 true')
+  }
+}
+
+/**
+ * diff 面向模型的渲染（render 闸同口径：片段级重遮 + ID 面 fail-loud + 拼接后兜底）。
+ * 清单缺省取 recallPhrases(runIdA/B)（持久后端回读 RunRecord.redlines）。
+ */
+export function renderRunDiffText(diff: RunDiff, phrases?: readonly string[]): string {
+  const list = phrases !== undefined
+    ? [...new Set(phrases.filter((p) => p !== ''))]
+    : [
+        ...new Set(
+          [...(recallPhrases(diff.runIdA) ?? []), ...(recallPhrases(diff.runIdB) ?? [])].filter(
+            (p) => typeof p === 'string' && p !== '',
+          ),
+        ),
+      ]
+  const token = list.length > 0 ? requireMaskToken(list) : ''
+  const face = (s: string) => (list.some((p) => s.includes(p)) ? token : s)
+  const idFace = (key: string, s: string) => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines: string[] = []
+  lines.push(`对比 运行 ${idFace('runIdA', diff.runIdA)} → ${idFace('runIdB', diff.runIdB)}`)
+  lines.push(
+    `包 ${idFace('packageA', diff.packageA.name)}@${idFace('packageA', diff.packageA.version)}（${idFace('scenarioA', diff.scenarioA)}）` +
+      ` → ${idFace('packageB', diff.packageB.name)}@${idFace('packageB', diff.packageB.version)}（${idFace('scenarioB', diff.scenarioB)}）`,
+  )
+  lines.push(`同数据: ${diff.sameDataset ? 'yes' : 'no'}`)
+  for (const c of diff.candidates) {
+    const a = c.riskScoreA === null ? '—' : String(c.riskScoreA)
+    const b = c.riskScoreB === null ? '—' : String(c.riskScoreB)
+    const d = c.riskScoreDelta === null ? '' : `（Δ=${c.riskScoreDelta}）`
+    lines.push(`- ${idFace('candidateId', c.candidateId)} riskScore ${a} → ${b}${d}`)
+    if (c.hitRuleIdsAdded.length > 0) {
+      lines.push(`  命中+: ${c.hitRuleIdsAdded.map((x) => idFace('hitRuleIds', x)).join(', ')}`)
+    }
+    if (c.hitRuleIdsRemoved.length > 0) {
+      lines.push(`  命中-: ${c.hitRuleIdsRemoved.map((x) => idFace('hitRuleIds', x)).join(', ')}`)
+    }
+    if (c.pendingChecksAdded.length > 0) lines.push(`  待核实+: ${c.pendingChecksAdded.map(face).join('; ')}`)
+    if (c.pendingChecksRemoved.length > 0) lines.push(`  待核实-: ${c.pendingChecksRemoved.map(face).join('; ')}`)
+  }
+  for (const x of diff.excludedAdded) {
+    lines.push(`排除+: ${idFace('candidateId', x.candidateId)}（${idFace('ruleId', x.ruleId)}）`)
+  }
+  for (const x of diff.excludedRemoved) {
+    lines.push(`排除-: ${idFace('candidateId', x.candidateId)}（${idFace('ruleId', x.ruleId)}）`)
+  }
+  lines.push('—— 合规 ——')
+  lines.push('humanReviewRequired=true（认定出口只在人工复核）')
+  lines.push(`三层闭合: A=${diff.auditPassedA ? 'passed' : 'failed'} · B=${diff.auditPassedB ? 'passed' : 'failed'}`)
+  const text = lines.join('\n')
+  return list.some((p) => text.includes(p)) ? token : text
+}
+
+/* ───────────────────────── 批量执行契约（S2.3） ───────────────────────── */
+
+export interface BatchRunSummary {
+  candidateCount: number
+  hitRuleCount: number
+  excludedCount: number
+  auditPassed: boolean
+  forbiddenPhraseHitCount: number
+  humanReviewRequired: true
+}
+
+export interface BatchRunItem {
+  scenarioId: string
+  status: 'ok' | 'error'
+  runId?: string
+  summary?: BatchRunSummary
+  error?: { code: string; message: string }
+}
+
+export interface BatchRunOutput {
+  results: BatchRunItem[]
+  humanReviewRequired: true
+}
+
+/** 批量装配断言（I5）：单项要么完整 ok 形态、要么 error 形态；摘要计数有限且人审恒真。 */
+export function assertBatchContract(out: BatchRunOutput): void {
+  if (out.humanReviewRequired !== true) {
+    throw invalidOutput('humanReviewRequired 必须为 true')
+  }
+  if (!Array.isArray(out.results)) {
+    throw invalidOutput('results 不是数组')
+  }
+  for (const item of out.results) {
+    if (!isRecord(item) || typeof item.scenarioId !== 'string') {
+      throw invalidOutput('批量条目需要字符串 scenarioId')
+    }
+    if (item.status === 'ok') {
+      const s = item.summary
+      if (typeof item.runId !== 'string' || !isRecord(s)) {
+        throw invalidOutput(`${item.scenarioId} ok 条目需要 runId 与 summary`)
+      }
+      for (const key of ['candidateCount', 'hitRuleCount', 'excludedCount', 'forbiddenPhraseHitCount'] as const) {
+        if (typeof s[key] !== 'number' || !Number.isFinite(s[key]) || s[key] < 0) {
+          throw invalidOutput(`${item.scenarioId} summary.${key} 需要非负有限数`)
+        }
+      }
+      if (typeof s.auditPassed !== 'boolean' || s.humanReviewRequired !== true) {
+        throw invalidOutput(`${item.scenarioId} summary 需要布尔 auditPassed 且 humanReviewRequired=true`)
+      }
+    } else if (item.status === 'error') {
+      const e = item.error
+      if (!isRecord(e) || typeof e.code !== 'string' || typeof e.message !== 'string') {
+        throw invalidOutput(`${item.scenarioId} error 条目需要字符串 code 与 message`)
+      }
+    } else {
+      throw invalidOutput(`${item.scenarioId} status 需要 ok 或 error`)
+    }
+  }
+}
+
+/** 批量结果渲染（render 闸同口径：error.message 片段重遮 + 拼接后兜底 + 合规页脚）。 */
+export function renderBatchText(out: BatchRunOutput, phrases?: readonly string[]): string {
+  // 清单 = 显式（包级全红线）∪ recall（各 runId 命中∪场景红线）——
+  // 二者缺一即窄于双源：模板固定字面碰撞/失败场景红线可经拼接漏出（挂点病同族）。
+  const list = [
+    ...new Set(
+      [
+        ...(phrases ?? []),
+        ...out.results
+          .flatMap((item) => (item.runId ? (recallPhrases(item.runId) ?? []) : []))
+          .filter((p) => typeof p === 'string' && p !== ''),
+      ].filter((p) => typeof p === 'string' && p !== ''),
+    ),
+  ]
+  const token = list.length > 0 ? requireMaskToken(list) : ''
+  const face = (s: string) => (list.some((p) => s.includes(p)) ? token : s)
+  const idFace = (key: string, s: string) => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines: string[] = []
+  lines.push(`批量运行 ${out.results.length} 个场景`)
+  for (const item of out.results) {
+    if (item.status === 'ok' && item.summary) {
+      const s = item.summary
+      lines.push(
+        `- ${idFace('scenarioId', item.scenarioId)} ok 运行 ${idFace('runId', item.runId ?? '')} ` +
+          `候选=${s.candidateCount} 命中规则=${s.hitRuleCount} 排除=${s.excludedCount} ` +
+          `审计=${s.auditPassed ? 'passed' : 'failed'} 禁语=${s.forbiddenPhraseHitCount}`,
+      )
+    } else if (item.error) {
+      lines.push(`- ${idFace('scenarioId', item.scenarioId)} error ${item.error.code}: ${face(item.error.message)}`)
+    } else {
+      lines.push(`- ${idFace('scenarioId', item.scenarioId)} 不完整条目`)
+    }
+  }
+  lines.push('—— 合规 ——')
+  lines.push('humanReviewRequired=true（认定出口只在人工复核）')
+  const text = lines.join('\n')
+  return list.some((p) => text.includes(p)) ? token : text
+}
+
+/**
+ * export 摘要渲染（render 闸同口径，S2.4）：禁纯序列化直出——JSON.stringify 无拼接后
+ * 兜底，跨分隔符重组/模板碰撞同族可漏（评审 critical）。清单缺省 recall(runId)
+ * （持久后端回读 RunRecord.redlines），片段重遮 + 整段兜底。
+ */
+export function renderExportText(
+  out: {
+    runId: string
+    locator: string
+    auditPassed: boolean
+    candidateCount: number
+    hitRuleCount: number
+    excludedCount: number
+    forbiddenPhraseHitCount: number
+  },
+  phrases?: readonly string[]): string {
+  const list = [
+    ...new Set(
+      [
+        ...(phrases ?? []),
+        ...(recallPhrases(out.runId) ?? []),
+      ].filter((p) => typeof p === 'string' && p !== ''),
+    ),
+  ]
+  const token = list.length > 0 ? requireMaskToken(list) : ''
+  const face = (s: string) => (list.some((p) => s.includes(p)) ? token : s)
+  const idFace = (key: string, s: string) => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines: string[] = []
+  lines.push(`审计导出 运行 ${idFace('runId', out.runId)}`)
+  lines.push(`归档 ${face(out.locator)}`)
+  lines.push(
+    `候选=${out.candidateCount} 命中规则=${out.hitRuleCount} 排除=${out.excludedCount} ` +
+      `审计=${out.auditPassed ? 'passed' : 'failed'} 禁语=${out.forbiddenPhraseHitCount}`,
+  )
+  lines.push('—— 合规 ——')
+  lines.push('humanReviewRequired=true（认定出口只在人工复核）')
+  const text = lines.join('\n')
+  return list.some((p) => text.includes(p)) ? token : text
 }

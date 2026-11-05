@@ -13,20 +13,29 @@
  *   dsh-onto derive <versionDir>                          # derived/** + manifest
  *   dsh-onto gate <versionDir>                            # 加载门禁（DERIVED_DRIFT）
  *   dsh-onto run <versionDir> <scenarioId> --data run.json [--out result.json]
+ *   dsh-onto runs list|show <runId>|compare <a> <b>|export <runId> [--root <ws>]
  *   dsh-onto knowledge upload --package P --type T --name N --file F [--root <ws>]
  *   dsh-onto knowledge parse --source <id> [--llm heuristic|deepseek] [--root <ws>]
  *   dsh-onto knowledge queue [--package P] [--root <ws>]
  *   dsh-onto knowledge review --id <cid> --action approve|reject|merge [--merge-into NAME]
  *   dsh-onto knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
  */
-import { readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
 import { KnowledgeStore } from './knowledge.js'
 import { DeepSeekLlm, HeuristicLlm } from './llm.js'
 import { verifyDerived } from './loadgate.js'
+import {
+  buildRunRecord,
+  compareRunRecords,
+  exportRunArchive,
+  listRunRecords,
+  loadRunRecord,
+  saveRunRecord,
+} from './runstore.js'
 import { runScenario } from './scenario.js'
-import { PackageWorkspace } from './store.js'
+import { loadPackage, PackageWorkspace, readPackageMeta } from './store.js'
 import type { RuntimeDataset, SourceType } from './types.js'
 import { SOURCE_TYPES } from './types.js'
 import { buildQualityReport, writeQualityReport } from './validate.js'
@@ -102,6 +111,8 @@ function main(): void {
       return cmdGate(args)
     case 'run':
       return cmdRun(args)
+    case 'runs':
+      return cmdRuns(sub, args)
     case 'knowledge':
       return cmdKnowledge(sub, args)
     case 'help':
@@ -122,6 +133,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   derive <versionDir>
   gate <versionDir>
   run <versionDir> <scenarioId> --data run.json [--out result.json]
+  runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
   knowledge upload|parse|queue|review|materialize
 通用: --root <workspaceDir>（默认 ./workspace）
 `
@@ -208,13 +220,51 @@ function cmdGate(args: Args): void {
   if (!result.ok) process.exit(2)
 }
 
+/** versionDir（<ws>/packages/<name>/<version>）上溯 workspace root；结构不符返回 null。 */
+function workspaceRootOfVersionDir(versionDir: string): string | null {
+  const packagesDir = dirname(dirname(versionDir))
+  if (basename(packagesDir) !== 'packages') return null
+  return dirname(packagesDir)
+}
+
 function cmdRun(args: Args): void {
   const dir = args._[1]
   const scenarioId = args._[2]
   if (!dir || !scenarioId) fail('run requires <versionDir> <scenarioId>')
   const dataPath = flagStr(args, 'data')
   const dataset = JSON.parse(readFileSync(dataPath, 'utf8')) as RuntimeDataset
-  const result = runScenario(resolve(dir), scenarioId, dataset)
+  const versionDir = resolve(dir)
+  const result = runScenario(versionDir, scenarioId, dataset)
+  // 运行留痕（run-insight S2.1）：root 由 versionDir 上溯、--root 显式覆盖；不可达跳过不破坏既有契约。
+  let runRecord: string | null = null
+  try {
+    const root =
+      typeof args.flags['root'] === 'string' ? resolve(args.flags['root']) : workspaceRootOfVersionDir(versionDir)
+    if (root !== null) {
+      const meta = readPackageMeta(versionDir)
+      const scenario = loadPackage(versionDir).scenarios.find((s) => s.id === scenarioId)
+      const redlines = [
+        ...new Set(
+          [
+            ...result.audit.forbiddenPhraseHits.map((h) => h.phrase),
+            ...(scenario?.outputContract.forbiddenPhrases ?? []),
+          ].filter((p) => typeof p === 'string' && p !== ''),
+        ),
+      ]
+      saveRunRecord(
+        root,
+        buildRunRecord({
+          package: { name: meta.name, version: meta.version },
+          dataset,
+          result,
+          redlines,
+        }),
+      )
+      runRecord = result.runId
+    }
+  } catch {
+    runRecord = null
+  }
   const out = typeof args.flags['out'] === 'string' ? args.flags['out'] : null
   if (out) {
     writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
@@ -225,12 +275,56 @@ function cmdRun(args: Args): void {
       excluded: result.excluded.length,
       humanReviewRequired: result.humanReviewRequired,
       forbiddenPhraseHits: result.audit.forbiddenPhraseHits.length,
+      runRecord: runRecord ?? 'skipped',
       out,
     })
   } else {
     print(result)
   }
   if (!result.audit.passed) process.exit(3)
+}
+
+/** 运行记录组（run-insight S2.6）：list / show / compare / export —— CLI 人审面（完整短语）。 */
+function cmdRuns(sub: string | undefined, args: Args): void {
+  const root = workspaceOf(args).root
+  switch (sub) {
+    case 'list': {
+      print({
+        runs: listRunRecords(root).map((r) => ({
+          runId: r.runId,
+          scenarioId: r.scenarioId,
+          package: r.package,
+          datasetDigest: r.datasetDigest.slice(0, 12),
+          auditPassed: r.result.audit.passed === true,
+          startedAt: r.startedAt,
+          savedAt: r.savedAt,
+        })),
+      })
+      return
+    }
+    case 'show': {
+      const runId = args._[2]
+      if (!runId) fail('runs show requires <runId>')
+      print(loadRunRecord(root, runId))
+      return
+    }
+    case 'compare': {
+      const a = args._[2]
+      const b = args._[3]
+      if (!a || !b) fail('runs compare requires <runIdA> <runIdB>')
+      print(compareRunRecords(loadRunRecord(root, a), loadRunRecord(root, b)))
+      return
+    }
+    case 'export': {
+      const runId = args._[2]
+      if (!runId) fail('runs export requires <runId>')
+      const { locator, archive } = exportRunArchive(root, runId)
+      print({ ok: true, locator, archivedAt: archive.archivedAt, humanReviewRequired: true })
+      return
+    }
+    default:
+      fail(`unknown runs subcommand ${String(sub)}`)
+  }
 }
 
 function cmdKnowledge(sub: string | undefined, args: Args): void {

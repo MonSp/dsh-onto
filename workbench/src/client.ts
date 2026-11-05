@@ -189,6 +189,17 @@ window.__ModuleLoader__.load({
       invalidDrop: '非法丢弃',
       engine: '引擎',
       runHistory: '运行历史',
+      runRecords: '运行记录',
+      selHint: '勾选 A/B 两条记录后对比（A=基准）',
+      compareBtn: '对比两轮',
+      diffTitle: '对比结果（B 相对 A）',
+      sameDataset: '同数据',
+      scoreAB: '风险分 A→B',
+      changes: '变更（±）',
+      exportAuditBtn: '导出审计',
+      locator: '归档位置',
+      savedAt: '落盘时间',
+      digest: '数据指纹',
       emptyPipeline: '（空 pipeline）',
       errFinite: '须为有限数字',
       errIdName: 'id / name 必填',
@@ -331,6 +342,17 @@ window.__ModuleLoader__.load({
       invalidDrop: 'Invalid dropped',
       engine: 'Engine',
       runHistory: 'Run history',
+      runRecords: 'Run records',
+      selHint: 'Select A/B records to compare (A = base)',
+      compareBtn: 'Compare two runs',
+      diffTitle: 'Diff (B vs A)',
+      sameDataset: 'Same dataset',
+      scoreAB: 'Score A→B',
+      changes: 'Changes (±)',
+      exportAuditBtn: 'Export audit',
+      locator: 'Archive locator',
+      savedAt: 'Saved at',
+      digest: 'Dataset digest',
       emptyPipeline: '(empty pipeline)',
       errFinite: 'must be a finite number',
       errIdName: 'id / name required',
@@ -2054,7 +2076,32 @@ window.__ModuleLoader__.load({
           // P1：本地暂存最近 N 次运行（不持久化，v0.4 再入库）
           const [history, setHistory] = useState<Array<{ hid: string; label: string; result: Record<string, unknown> }>>([])
           const [viewHid, setViewHid] = useState('')
+          // 持久运行记录（run-insight S2.5）：workspace runs/ 落盘面，两轮对比 + 审计导出。
+          const [runs, setRuns] = useState<Array<{
+            runId: string
+            scenarioId: string
+            package: { name: string; version: string }
+            datasetDigest: string
+            auditPassed: boolean
+            savedAt: string
+          }>>([])
+          const [selA, setSelA] = useState('')
+          const [selB, setSelB] = useState('')
+          const [diff, setDiff] = useState<Record<string, unknown> | null>(null)
+          const [exportInfo, setExportInfo] = useState('')
           const api = apis.remote['ontoRuntime']
+
+          const loadRuns = () => {
+            if (!api) return
+            void (async () => {
+              try {
+                const out = unwrap<{ runs: typeof runs }>(await api.listRuns())
+                setRuns(out.runs)
+              } catch (e) {
+                setError(errText(e))
+              }
+            })()
+          }
 
           useEffect(() => {
             if (!api || !selected) return
@@ -2070,6 +2117,10 @@ window.__ModuleLoader__.load({
               }
             })()
           }, [apis, selected])
+
+          useEffect(() => {
+            loadRuns()
+          }, [apis])
 
           if (!selected) return h('div', { className: 'ow-card' }, h('p', { className: 'ow-note' }, t('none')))
           const res = (viewHid ? history.find((x) => x.hid === viewHid)?.result : result) as {
@@ -2125,6 +2176,7 @@ window.__ModuleLoader__.load({
                         const hid = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
                         const label = `${scenarioId} @ ${new Date().toLocaleTimeString()}`
                         setHistory((hlist) => [{ hid, label, result: out.result }, ...hlist].slice(0, 10))
+                        loadRuns()
                       } catch (e) {
                         setError(errText(e))
                       } finally {
@@ -2223,7 +2275,175 @@ window.__ModuleLoader__.load({
                   ),
                 )
               : null,
+            // 持久运行记录（S2.5）：列表 + 两轮对比 + 审计导出（只读薄视图）。
+            h('h4', { className: 'ow-h2' }, t('runRecords')),
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('span', { className: 'ow-note' }, t('selHint')),
+              h(
+                'button',
+                {
+                  className: 'ow-btn',
+                  disabled: !!busy || !selA || !selB || selA === selB,
+                  onClick: () =>
+                    void (async () => {
+                      setBusy('compare')
+                      setError('')
+                      setDiff(null)
+                      try {
+                        const out = unwrap<{ diff: Record<string, unknown> }>(
+                          await api!.compareRuns({ runIdA: selA, runIdB: selB }),
+                        )
+                        setDiff(out.diff)
+                      } catch (e) {
+                        setError(errText(e))
+                      } finally {
+                        setBusy('')
+                      }
+                    })(),
+                },
+                busy === 'compare' ? t('busy') : t('compareBtn'),
+              ),
+              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => loadRuns() }, t('refresh')),
+            ),
+            runs.length > 0
+              ? h(
+                  'table',
+                  { className: 'ow-table' },
+                  h(
+                    'thead',
+                    null,
+                    h('tr', null,
+                      h('th', null, 'A'), h('th', null, 'B'), h('th', null, 'runId'), h('th', null, t('scenario')),
+                      h('th', null, t('name')), h('th', null, t('digest')), h('th', null, t('audit')),
+                      h('th', null, t('savedAt')), h('th', null, t('actions'))),
+                  ),
+                  h(
+                    'tbody',
+                    null,
+                    ...runs.map((r) =>
+                      h(
+                        'tr',
+                        { key: r.runId },
+                        h('td', null, h('input', {
+                          type: 'radio', name: 'onto-run-a', checked: selA === r.runId,
+                          onChange: () => setSelA(r.runId),
+                        })),
+                        h('td', null, h('input', {
+                          type: 'radio', name: 'onto-run-b', checked: selB === r.runId,
+                          onChange: () => setSelB(r.runId),
+                        })),
+                        h('td', { className: 'ow-mono' }, r.runId),
+                        h('td', null, r.scenarioId),
+                        h('td', null, `${r.package.name}@${r.package.version}`),
+                        h('td', { className: 'ow-mono' }, r.datasetDigest),
+                        h('td', null, h(Tag, {
+                          text: r.auditPassed ? t('passed') : t('failed'),
+                          tone: r.auditPassed ? 'ok' : 'err',
+                        })),
+                        h('td', null, r.savedAt),
+                        h('td', null, h(
+                          'button',
+                          {
+                            className: 'ow-btn ghost',
+                            disabled: !!busy,
+                            onClick: () =>
+                              void (async () => {
+                                setBusy('export')
+                                setError('')
+                                try {
+                                  const out = unwrap<{ locator: string }>(
+                                    await api!.exportAudit({ runId: r.runId }),
+                                  )
+                                  setExportInfo(out.locator)
+                                } catch (e) {
+                                  setError(errText(e))
+                                } finally {
+                                  setBusy('')
+                                }
+                              })(),
+                          },
+                          t('exportAuditBtn'),
+                        )),
+                      ),
+                    ),
+                  ),
+                )
+              : h('p', { className: 'ow-note' }, t('empty')),
+            exportInfo
+              ? h('p', { className: 'ow-note ow-mono' }, `${t('locator')}: ${exportInfo}`)
+              : null,
+            ...diffView(),
           )
+
+          function diffView(): ReactNode[] {
+            if (!diff) return []
+            const d = diff as unknown as {
+              runIdA: string
+              runIdB: string
+              sameDataset: boolean
+              auditPassedA: boolean
+              auditPassedB: boolean
+              candidates: Array<{
+                candidateId: string
+                riskScoreA: number | null
+                riskScoreB: number | null
+                riskScoreDelta: number | null
+                hitRuleIdsAdded: string[]
+                hitRuleIdsRemoved: string[]
+                pendingChecksAdded: string[]
+                pendingChecksRemoved: string[]
+              }>
+              excludedAdded: Array<{ candidateId: string; ruleId: string }>
+              excludedRemoved: Array<{ candidateId: string; ruleId: string }>
+            }
+            return [
+              h('h4', { className: 'ow-h2' }, t('diffTitle')),
+              h(
+                'div',
+                { className: 'ow-row' },
+                h(Tag, { text: `${d.runIdA} → ${d.runIdB}` }),
+                h(Tag, {
+                  text: `${t('sameDataset')}: ${d.sameDataset ? t('passed') : t('failed')}`,
+                  tone: d.sameDataset ? 'ok' : 'err',
+                }),
+                h(Tag, { text: `A ${d.auditPassedA ? t('passed') : t('failed')}`, tone: d.auditPassedA ? 'ok' : 'err' }),
+                h(Tag, { text: `B ${d.auditPassedB ? t('passed') : t('failed')}`, tone: d.auditPassedB ? 'ok' : 'err' }),
+                h(Tag, { text: t('humanReview'), tone: 'warn' }),
+              ),
+              h(
+                'table',
+                { className: 'ow-table' },
+                h('thead', null, h('tr', null,
+                  h('th', null, 'ID'), h('th', null, t('scoreAB')), h('th', null, t('hits')), h('th', null, t('pending')))),
+                h(
+                  'tbody',
+                  null,
+                  ...d.candidates.map((c) =>
+                    h(
+                      'tr',
+                      { key: c.candidateId },
+                      h('td', null, c.candidateId),
+                      h('td', { className: 'ow-mono' },
+                        `${c.riskScoreA ?? '—'} → ${c.riskScoreB ?? '—'}${c.riskScoreDelta === null ? '' : ` (Δ=${c.riskScoreDelta})`}`),
+                      h('td', { className: 'ow-mono' },
+                        [...c.hitRuleIdsAdded.map((x) => `+${x}`), ...c.hitRuleIdsRemoved.map((x) => `-${x}`)].join('\n') || '—'),
+                      h('td', { className: 'ow-mono' },
+                        [...c.pendingChecksAdded.map((x) => `+${x}`), ...c.pendingChecksRemoved.map((x) => `-${x}`)].join('\n') || '—'),
+                    ),
+                  ),
+                ),
+              ),
+              d.excludedAdded.length + d.excludedRemoved.length > 0
+                ? h('p', { className: 'ow-note' },
+                    `${t('excluded')}: ${[
+                      ...d.excludedAdded.map((x) => `+${x.candidateId}←${x.ruleId}`),
+                      ...d.excludedRemoved.map((x) => `-${x.candidateId}←${x.ruleId}`),
+                    ].join(', ')}`)
+                : null,
+            ]
+          }
 
           function cand(x: { candidateId: string }): string {
             return x.candidateId
