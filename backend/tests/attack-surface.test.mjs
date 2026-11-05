@@ -174,6 +174,81 @@ test('禁语自嵌：短语为标记子串（如「脱敏」）时换标记仍�
   assert.ok(!JSON.stringify(masked).includes('【禁语已脱敏】'), '默认标记含命中短语时须退避')
 })
 
+/* ── round-13 复审修复：ID 回指面 / 嵌套幂等 / 标记短语 ─────────────────── */
+
+const rawRun = (phrase, extra = {}) => ({
+  scenarioId: 'S', runId: 'R', startedAt: 't',
+  candidates: [{
+    candidateId: 'C1', objectRef: 'g1', riskScore: 0.5, hitRuleIds: ['RULE-AML-001'],
+    evidenceChains: [], pendingChecks: [],
+    pendingVerification: false, narrative: [`叙述${phrase}`],
+  }],
+  excluded: [], humanReviewRequired: true,
+  reviewGate: { threshold: 0.5, required: true, requireReviewFor: [] },
+  ruleHitLog: [],
+  audit: {
+    checks: [],
+    forbiddenPhraseHits: [{ phrase, where: 'candidates[0].narrative[0]' }],
+    passed: false,
+  },
+  ...extra,
+})
+
+test('ID 回指面不改写：ruleId/objectRef/candidateId 脱敏后原样（工具层不改写命中）', () => {
+  const phrase = '确定为洗钱'
+  const raw = rawRun(phrase)
+  const masked = maskForbiddenPhrases(raw)
+  assert.deepEqual(masked.candidates[0].hitRuleIds, ['RULE-AML-001'], 'hitRuleIds 不得被脱敏改写')
+  assert.equal(masked.candidates[0].objectRef, 'g1', 'objectRef 不得被脱敏改写')
+  assert.equal(masked.candidates[0].candidateId, 'C1', 'candidateId 不得被脱敏改写')
+  assert.ok(!JSON.stringify(masked).includes(phrase), '叙述面仍须脱敏')
+})
+
+test('禁语撞入 ID 面（禁语⊂ruleId）fail-loud：拒绝产出且错误消息不回显短语', () => {
+  const phrase = 'AML' // 构造形态：禁语为 ruleId 子串
+  const raw = rawRun(phrase)
+  let err
+  try {
+    maskForbiddenPhrases(raw)
+  } catch (e) {
+    err = e
+  }
+  assert.ok(err instanceof AgentToolError, '不改写与零容忍不可兼得时必须受控失败')
+  assert.equal(err.code, 'INVALID_TOOL_OUTPUT')
+  assert.ok(!err.message.includes(phrase), `错误消息不得回显短语: ${err.message}`)
+})
+
+test('嵌套禁语幂等：长短语对先换长者，二次脱敏同引用', () => {
+  const shortP = '账户涉嫌洗钱'
+  const longP = '该账户涉嫌洗钱'
+  const raw = rawRun(longP, {
+    audit: {
+      checks: [],
+      forbiddenPhraseHits: [
+        { phrase: shortP, where: 'a' },
+        { phrase: longP, where: 'b' },
+      ],
+      passed: false,
+    },
+  })
+  raw.candidates[0].narrative = [`短语 ${shortP} 与长语 ${longP} 同现`]
+  const masked = maskForbiddenPhrases(raw)
+  const json = JSON.stringify(masked)
+  assert.ok(!json.includes(shortP) && !json.includes(longP), '嵌套短语对均须清除')
+  assert.ok(!json.includes('该【'), '长语优先替换，不得留「该+标记」残片')
+  assert.equal(maskForbiddenPhrases(masked), masked, '二次脱敏同引用（phrase 空化锚点）')
+})
+
+test('禁语恰为占位标记时仍脱敏（不因标记过滤而原样留存）', () => {
+  const phrase = '【禁语已脱敏】' // 构造形态：禁语字面即默认标记
+  const raw = rawRun(phrase)
+  const masked = maskForbiddenPhrases(raw)
+  const json = JSON.stringify(masked)
+  assert.ok(!json.includes(phrase), '标记字面作为禁语时必须换标记清除')
+  const text = renderRunText(masked)
+  assert.ok(!text.includes(phrase))
+})
+
 /* ── 派生门禁：工具面单一收口（loadToolPackage） ────────────────────── */
 
 test('门禁：干净包加载成功；未派生/篡改源/不存在分别受控失败', () => {
@@ -303,6 +378,20 @@ test('skills 去重：等价版本/撞名平局与输入序无关（readdir 序�
   assert.ok(d1 && d2)
   assert.equal(d1.versionDir, d2.versionDir, '撞名平局必须与输入序无关')
   assert.equal(d1.template.id, d2.template.id)
+
+  // 同 versionDir+同模板 id 但模板内容不同（round-13 nit：JSON 判别收口）→ 双序同胜者
+  const t1 = { versionDir: '/d/t', status: 'DRAFT', version: '1.0.0', template: { id: 'SKL-TSP-T', name: '甲', weights: {} } }
+  const t2 = { versionDir: '/d/t', status: 'DRAFT', version: '1.0.0', template: { id: 'SKL-TSP-T', name: '乙', weights: {} } }
+  const w1 = pickSkillSources([t1, t2]).get('SKL-TSP-T')
+  const w2 = pickSkillSources([t2, t1]).get('SKL-TSP-T')
+  assert.equal(w1.template.name, w2.template.name, '同目录同 id 撞名平局必须与输入序无关')
+
+  // 四源乱序 → 同一胜者（全序稳定）
+  const pool = [a, b, x, y]
+  const orders = [pool, [...pool].reverse(), [pool[1], pool[3], pool[0], pool[2]]]
+  const winners = orders.map((o) => dedupeSkillNames(o).get('skl-tsp-x'))
+  assert.equal(winners[0].template.id, winners[1].template.id)
+  assert.equal(winners[1].template.id, winners[2].template.id)
 })
 
 test('skills 胜出者复核：stale/落选/异名 locator 一律拒载', () => {

@@ -83,6 +83,12 @@ packageId 守卫/sha256 id/materialize 归一），测试补至 core 72 / backen
 验证阶梯 1-4 全绿（build/test、node --check、dump-config 2/2、dev-web + Tabbit
 冒烟：五 tab、aml-analysis 场景运行 6/6 断言、会话内 run_scenario 调用
 humanReviewRequired=true + 禁语 0 命中 + 规则 ID/证据链齐全）。
+第十三轮后外部复审收敛判定「已收敛，可合并」（无新 critical/major），并清零其
+3 minor + 3 nit：禁语脱敏 ID 回指面不改写（撞短语 fail-loud）、嵌套短语长者优先
+消残片 + phrase 字段空化（恢复同引用幂等，兼消「禁语恰为标记」原样留存问题）、
+writeSource relPath 与 importVersion 同一口径（isSafeRelPath：ADS 冒号拒绝，
+封死 NTFS 隐藏流）、compareSources 全序收口至模板序列化判别、skills list()
+包含性过滤（junction 指外不进目录）；测试补至 core 72 / backend 78。
 
 ## [S1] Problem
 
@@ -142,9 +148,13 @@ wire 服务里可达；dsh 会话中的 agent 无法消费：用户不能在对�
   每一分回指 ruleId 由 core 保证，工具层不改写分数与命中。
 - **出口禁语脱敏**（S2.3）：canonical 出口与 render 同一口径——`maskForbiddenPhrases`
   **全字段深走**（narrative / evidenceChains / pendingChecks / audit 等任何字符串面命中即
-  脱敏，自嵌短语换标记退避，剥离相位兜底到不动点）；count/where 保留（字段在场，
-  含短语时其内短语一并脱敏）；core/wire 人审面不经过本函数、保留完整短语；
-  重复脱敏幂等（全部命中已是标记时同引用返回）。
+  脱敏；自嵌短语换标记退避、嵌套短语长者优先消残片、剥离相位兜底到不动点）；
+  **ID 回指面不改写**（ruleId / hitRuleIds / objectRef / candidateId 等——
+  「工具层不改写命中」；短语撞进 ID 面的构造形态下「不改写」与「零容忍」不可兼得，
+  fail-loud 抛 `INVALID_TOOL_OUTPUT` 拒绝产出，错误消息不回显短语）；
+  `forbiddenPhraseHits[].phrase` 空化（不回显短语本体，兼作幂等锚点——二次调用
+  needle 为空即同引用返回）；`where` 保留（字段在场，含短语时其内短语一并脱敏）；
+  core/wire 人审面不经过本函数、保留完整短语。
 - **render 合规页脚**：候选摘要行（candidateId、riskScore、命中 ruleId、证据链摘要、待核实点）
   之后强制输出：`humanReviewRequired=true`、禁语扫描命中数（0 = 通过）、三层闭合 passed。
   渲染文本自身不得触发场景 `forbiddenPhrases`（narrative 来自 SKL 模板，只回填不认定）。

@@ -92,9 +92,9 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * 全序比较：ISSUED 优先 → 版本降序 → 版本串字典序 → 模板 id → 版本目录。
- * 末两级平局收口（`1.0.0+a`≡`1.0.0+b`、双 ISSUED 同版等）——结果与 readdir/模板
- * 输入序无关，保证去重确定性（round-13 minor）。
+ * 全序比较：ISSUED 优先 → 版本降序 → 版本串字典序 → 模板 id → 版本目录 → 模板序列化。
+ * 末级判别收口（`1.0.0+a`≡`1.0.0+b`、双 ISSUED 同版等）——结果与 readdir/模板输入序
+ * 无关；仅当两源全字段等价（同目录同模板）才平局，此时取任一结果不可区分（round-13 nit）。
  */
 function compareSources(a: SklSource, b: SklSource): number {
   const issuedA = a.status === 'ISSUED' ? 1 : 0
@@ -104,7 +104,10 @@ function compareSources(a: SklSource, b: SklSource): number {
   if (v !== 0) return v
   if (a.version !== b.version) return a.version > b.version ? 1 : -1
   if (a.template.id !== b.template.id) return a.template.id > b.template.id ? 1 : -1
-  return a.versionDir > b.versionDir ? 1 : a.versionDir < b.versionDir ? -1 : 0
+  if (a.versionDir !== b.versionDir) return a.versionDir > b.versionDir ? 1 : -1
+  const ja = JSON.stringify(a.template)
+  const jb = JSON.stringify(b.template)
+  return ja > jb ? 1 : ja < jb ? -1 : 0
 }
 
 function betterThan(a: SklSource, b: SklSource): boolean {
@@ -262,6 +265,9 @@ export function apply(ctx: Context): void {
       async list(_options: SkillLookupOptions): Promise<SkillCandidate[]> {
         const out: SkillCandidate[] = []
         for (const [name, s] of dedupeSkillNames(scan().values())) {
+          // 包含性过滤（与 get() 同口径）：packages 内 junction 指外的外来模板不进目录
+          // （round-13 nit：此前 list 会列出 get 必拒的 stale/外来候选）。
+          if (!locatorInWorkspace(s.versionDir, wsRoot)) continue
           out.push({
             name,
             description: s.template.description ?? s.template.name,

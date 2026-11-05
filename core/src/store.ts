@@ -89,6 +89,16 @@ function isPlainSegment(s: string): boolean {
   return s !== '' && s !== '.' && s !== '..' && !s.includes('/') && !s.includes('\\')
 }
 
+/**
+ * 归档/写源 rel 校验（importVersion 与 wire writeSource 同一口径）：
+ * 绝对路径、盘符·ADS 冒号、空段/`.`/`..` 一律拒绝。
+ * 冒号拒绝同时封死 NTFS ADS 隐藏流（`a:b.yaml` 落隐藏流，readdir/指纹双盲）。
+ */
+export function isSafeRelPath(rel: string): boolean {
+  if (rel === '' || isAbsolute(rel)) return false
+  return rel.split(/[\\/]/).every((s) => s.includes(':') ? false : isPlainSegment(s))
+}
+
 /** 源文件清单（派生 manifest 要登记指纹的全部源）。 */
 export const SOURCE_FILE_LAYOUT = {
   meta: 'package.yaml',
@@ -590,12 +600,7 @@ export class PackageWorkspace {
     for (const [rel, text] of Object.entries(archive.files)) {
       // rel 来自 wire 归档 JSON（外部输入）：绝对路径 / 盘符·ADS 冒号 / 多级下钻
       // 一律拒绝，落盘前再验包含（round-13：原实现 join(dir, rel) 直写可逃出版本目录）。
-      const segs = rel.split(/[\\/]/)
-      if (
-        isAbsolute(rel) ||
-        segs.some((s) => s.includes(':') || !isPlainSegment(s)) ||
-        !isInsideDir(dir, join(dir, rel))
-      ) {
+      if (!isSafeRelPath(rel) || !isInsideDir(dir, join(dir, rel))) {
         throw new PackageStoreError('PACKAGE_MALFORMED', `invalid archive path: ${rel}`)
       }
       files.push({ full: join(dir, rel), text })

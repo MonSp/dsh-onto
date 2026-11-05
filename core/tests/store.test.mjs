@@ -233,7 +233,7 @@ test('importVersion 归档 rel 逃逸拒绝（round-13：wire 导入面两遍式
     const meta = { ...minimalPkg().meta }
     const dirOf = () => ws.versionDir(meta.name, meta.version)
     // 逃逸形态：上钻 / 混合分隔符 / 绝对盘符
-    for (const evil of ['../evil.txt', 'a/../../evil.txt', '..\\evil.txt', 'C:\\evil.txt', '/abs/evil.txt', '']) {
+    for (const evil of ['../evil.txt', 'a/../../evil.txt', '..\\evil.txt', 'C:\\evil.txt', '/abs/evil.txt', 'a:b.yaml', 'sub/x:ads.yaml', '']) {
       throwsCode(() => ws.importVersion({ meta, files: { [evil]: 'x' } }), 'PACKAGE_MALFORMED')
     }
     // 合法 + 非法混合：整体拒绝且不留半写状态（校验在建目录之前）

@@ -28,6 +28,8 @@ import {
   SOURCE_TYPES,
   buildQualityReport,
   derivePackage,
+  isInsideDir,
+  isSafeRelPath,
   loadPackage,
   readPackageMeta,
   runScenario,
@@ -248,11 +250,12 @@ export class OntoModel extends TypertRemoteService {
       if (meta.status === 'ISSUED') {
         throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (read-only)`)
       }
-      // 防路径逃逸
-      if (request.relPath.includes('..') || request.relPath.startsWith('/') || request.relPath.includes('\\')) {
+      // 防路径逃逸：与 importVersion 同一口径（isSafeRelPath：绝对/ADS 冒号/多级下钻拒绝）
+      // ——round-13 复审：原实现只拦 `..`/前导 `/`/反斜杠，冒号可落 NTFS ADS 隐藏流。
+      const full = join(dir, request.relPath)
+      if (!isSafeRelPath(request.relPath) || !isInsideDir(dir, full)) {
         throw ontoError('onto/bad-request', 'illegal relPath')
       }
-      const full = join(dir, request.relPath)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, request.text, 'utf8')
       invalidateSkillCatalog()

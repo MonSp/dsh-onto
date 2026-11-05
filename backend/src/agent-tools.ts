@@ -242,21 +242,12 @@ export function renderRunText(result: ScenarioRunResult): string {
   lines.push(`三层闭合: ${result.audit.passed ? 'passed' : 'failed'}`)
   // 命中短语本身是禁语——渲染文本（模型可见面）整体脱敏（S2.3），只留位置；
   // 叙述/证据/待核实等任何行都不得回显短语本体。输入已由 maskForbiddenPhrases
-  // 深脱敏时 needle 全是占位标记 → 过滤后空转（幂等，防标记被二次改写）；
-  // core 直调的原始输入按真实短语脱敏。
-  return maskPhrases(
-    lines.join('\n'),
-    hits.map((h) => h.phrase).filter((p) => !isMaskToken(p)),
-  )
+  // 深脱敏时 phrase 已空化 → needle 空转（幂等）；core 直调的原始输入按真实短语脱敏。
+  return maskPhrases(lines.join('\n'), hits.map((h) => h.phrase))
 }
 
 /** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */
 const MASK_TOKENS = ['【禁语已脱敏】', '【已屏蔽】', '【内容已隐藏】'] as const
-
-/** 短语是否已是占位标记（脱敏幂等：标记不再作为 needle 参与再脱敏）。 */
-function isMaskToken(s: string): boolean {
-  return (MASK_TOKENS as readonly string[]).includes(s)
-}
 
 /** 选首个不含任何短语的标记——防「禁语本体含『脱敏/禁语』」时标记自嵌残留（round-13 minor）。 */
 function pickMaskToken(phrases: readonly string[]): string {
@@ -268,12 +259,15 @@ function pickMaskToken(phrases: readonly string[]): string {
 
 /**
  * 单一脱敏收口：占位标记替换 + 边界重组残留剥离到不动点
- * （剥离相位只删不增，每轮严格减长，必然终止）。
- * 入参约定：调用方须先滤掉占位标记（幂等）与空串，本函数只处理真实短语。
+ * （剥离相位只删不增，每轮长度严格递减，必然终止）。
+ * needle 取非空去重后**长语优先**（嵌套短语对先换长者，消「该+标记」残片）；
+ * 幂等不靠过滤标记——phrase 字段空化已让二次调用 needle 为空，故真实短语
+ * 恰为标记串时同样脱敏（换用备选标记）。
  */
 function maskPhrases(text: string, phrases: readonly string[]): string {
   const real = [...new Set(phrases)].filter((p) => p !== '')
   if (real.length === 0) return text
+  real.sort((a, b) => b.length - a.length)
   const token = pickMaskToken(real)
   let out = text
   if (token !== '') {
@@ -288,28 +282,56 @@ function maskPhrases(text: string, phrases: readonly string[]): string {
 }
 
 /**
+ * ID 回指面：tool 层不改写命中（S2.3「每一分回指 ruleId 由 core 保证，工具层不改写」）。
+ * 短语若撞进 ID 面（禁语 ⊂ ID 的构造形态），「不改写」与「零容忍」不可兼得——
+ * fail-loud 拒绝产出（错误消息不回显短语），而非静默改写 ID 或放行短语。
+ */
+const ID_FACE_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'ruleId',
+  'hitRuleIds',
+  'objectRef',
+  'candidateId',
+  'runId',
+  'scenarioId',
+  'check',
+  'missing',
+  'requireReviewFor',
+  'startedAt',
+  'ts',
+])
+
+/**
  * 工具出口禁语脱敏（S2.3）：canonical 出口与 render 同一口径——
  * **全字段深走**，任何字符串字段（narrative / evidence / pendingChecks / audit 等）
- * 命中即脱敏；count/where 保留（字段在场，含短语时其内短语一并脱敏）。
- * core/wire 人审面不经过本函数，保留完整短语。幂等：全部命中已是标记时原样返回。
+ * 命中即脱敏；ID 回指面不改写（撞短语则 fail-loud）；`where` 保留（含短语时一并脱敏）；
+ * `phrase` 字段空化（不回显短语本体，同时是幂等锚点：二次调用 needle 为空即同引用返回）。
+ * core/wire 人审面不经过本函数，保留完整短语。
  */
 export function maskForbiddenPhrases(result: ScenarioRunResult): ScenarioRunResult {
   const hits = result.audit?.forbiddenPhraseHits ?? []
-  // 已是占位标记的命中（重复脱敏）过滤掉 → 全标记时原样返回（幂等）。
-  // 实战中禁语本体是结论句而非标记串，此过滤不会漏掩真实短语。
-  const phrases = hits.map((h) => h.phrase).filter((p) => p !== '' && !isMaskToken(p))
+  const phrases = [...new Set(hits.map((h) => h.phrase))].filter((p) => p !== '')
   if (phrases.length === 0) return result
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return maskPhrases(v, phrases)
-    if (Array.isArray(v)) return v.map(walk)
+  const walk = (v: unknown, key: string): unknown => {
+    if (typeof v === 'string') {
+      if (key === 'phrase') return '' // hits[].phrase 不回显短语本体（幂等锚点）
+      if (ID_FACE_KEYS.has(key)) {
+        if (phrases.some((p) => v.includes(p))) {
+          throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+        }
+        return v
+      }
+      return maskPhrases(v, phrases)
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, key))
     if (isRecord(v)) {
       const out: Record<string, unknown> = {}
-      for (const [k, item] of Object.entries(v)) out[k] = walk(item)
+      for (const [k, item] of Object.entries(v)) out[k] = walk(item, k)
       return out
     }
     return v
   }
-  return walk(result) as ScenarioRunResult
+  return walk(result, '') as ScenarioRunResult
 }
 
 /* ───────────────────────── 对象粒度收权（S2.4） ───────────────────────── */

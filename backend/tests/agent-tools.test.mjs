@@ -1037,7 +1037,9 @@ test('工具出口禁语脱敏：结构面不回显短语本体（count/where �
   assert.ok(face.includes('【禁语已脱敏】'), '脱敏标记在场')
   assert.equal(masked.audit.forbiddenPhraseHits.length, 1)
   assert.equal(masked.audit.forbiddenPhraseHits[0].where, 'candidates[0].narrative[0]')
-  assert.equal(masked.audit.forbiddenPhraseHits[0].phrase, '【禁语已脱敏】')
+  // phrase 字段空化：不回显短语本体（round-13 复审改定——同时是幂等锚点：
+  // 二次脱敏时 needle 为空即同引用返回，不依赖「标记 vs 短语恰为标记」的歧义判断）
+  assert.equal(masked.audit.forbiddenPhraseHits[0].phrase, '')
   assert.equal(masked.humanReviewRequired, true)
   // 候选/证据面原样（裁剪只发生在 audit）
   assert.deepEqual(masked.candidates, result.candidates)
