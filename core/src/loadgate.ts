@@ -6,8 +6,13 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readManifest, sha256Text, sourceDigestOf, sourceFileSha256 } from './derive.js'
-import { listSourceFiles, readPackageMeta, readSourceFile } from './store.js'
+import { isSafeRelPath, listSourceFiles, readPackageMeta, readSourceFile } from './store.js'
 import type { LoadGateResult } from './types.js'
+
+/** manifest 条目路径必须是安全 rel（tool-face-policy P2.1 读写成对）；恶意清单直接漂移拒绝。 */
+function safeEntryPath(rel: string): boolean {
+  return isSafeRelPath(rel)
+}
 
 /**
  * 校验派生链指纹。任何不一致都拒绝加载，错误码 `DERIVED_DRIFT`。
@@ -27,6 +32,9 @@ export function verifyDerived(versionDir: string): LoadGateResult {
     }
   }
   for (const entry of manifest.sources) {
+    if (!safeEntryPath(entry.path)) {
+      return { ok: false, code: 'DERIVED_DRIFT', reason: `unsafe manifest path: ${entry.path}` }
+    }
     const full = join(versionDir, entry.path)
     if (!existsSync(full)) {
       return { ok: false, code: 'DERIVED_DRIFT', reason: `source file missing: ${entry.path}` }
@@ -43,6 +51,9 @@ export function verifyDerived(versionDir: string): LoadGateResult {
 
   // 派生物指纹
   for (const entry of manifest.derived) {
+    if (!safeEntryPath(entry.path)) {
+      return { ok: false, code: 'DERIVED_DRIFT', reason: `unsafe manifest path: ${entry.path}` }
+    }
     const full = join(versionDir, entry.path)
     if (!existsSync(full)) {
       return { ok: false, code: 'DERIVED_DRIFT', reason: `derived file missing: ${entry.path}` }

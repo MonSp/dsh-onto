@@ -19,11 +19,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   O1ApiSource,
   O1Dictionary,
@@ -47,6 +48,55 @@ export class PackageStoreError extends Error {
     this.name = 'PackageStoreError'
     this.code = code
   }
+}
+
+/**
+ * 规范化路径：两侧必须同策略——对最近**存在**的祖先做 realpath（解析符号链接/junction），
+ * 再把尚不存在的尾段按词法拼回。若 root 走 realpath 而目标直接 lexical resolve，
+ * 数据目录经 junction 访问时 root 与目标落在不同命名空间，fresh 路径（create/fork
+ * 新版本尚不存在）会被 isInsideDir 误判越界（round-13 major：junction 下误拒）。
+ */
+function canonPath(p: string): string {
+  const abs = resolve(p)
+  const tail: string[] = []
+  let cur = abs
+  for (;;) {
+    try {
+      const real = realpathSync(cur)
+      return tail.length === 0 ? real : join(real, ...tail.reverse())
+    } catch {
+      const parent = dirname(cur)
+      if (parent === cur) return abs // 已到根仍不可达（盘符根必存在，仅防御）
+      tail.push(basename(cur))
+      cur = parent
+    }
+  }
+}
+
+/**
+ * dir 必须严格落在 root 内（相对 root 有余段且首段非 `..`）；防 name/version 目录穿越。
+ * 两侧经 canonPath 同策略规范化：workspace 内符号链接/junction 指向外部时拒绝
+ * （逃逸目标不存在则解析最近存在祖先 + 词法尾段，与 root 侧口径一致）。
+ */
+export function isInsideDir(root: string, dir: string): boolean {
+  const rel = relative(canonPath(root), canonPath(dir))
+  if (rel === '' || isAbsolute(rel)) return false
+  return rel.split(/[\\/]/)[0] !== '..'
+}
+
+/** 单段路径名校验：空/`.`/`..`/含分隔符均拒绝——防多级下钻与穿越（防逃出也防越界）。 */
+function isPlainSegment(s: string): boolean {
+  return s !== '' && s !== '.' && s !== '..' && !s.includes('/') && !s.includes('\\')
+}
+
+/**
+ * 归档/写源 rel 校验（importVersion 与 wire writeSource 同一口径）：
+ * 绝对路径、盘符·ADS 冒号、空段/`.`/`..` 一律拒绝。
+ * 冒号拒绝同时封死 NTFS ADS 隐藏流（`a:b.yaml` 落隐藏流，readdir/指纹双盲）。
+ */
+export function isSafeRelPath(rel: string): boolean {
+  if (rel === '' || isAbsolute(rel)) return false
+  return rel.split(/[\\/]/).every((s) => s.includes(':') ? false : isPlainSegment(s))
 }
 
 /** 源文件清单（派生 manifest 要登记指纹的全部源）。 */
@@ -120,15 +170,26 @@ export function listSourceFiles(versionDir: string): string[] {
   return rel
 }
 
-/** 读取单个源文件文本（相对版本目录）。 */
+/** 读取单个源文件文本（相对版本目录）。读写成对围栏（tool-face-policy P2.1）：
+ * rel 形态拒绝 + 落点 containment——manifest 等外部清单里的越界路径不读围栏外文件。 */
 export function readSourceFile(versionDir: string, relPath: string): string {
-  return readFileSync(join(versionDir, relPath), 'utf8')
+  const full = join(versionDir, relPath)
+  if (!isSafeRelPath(relPath) || !isInsideDir(versionDir, full)) {
+    throw new PackageStoreError('PACKAGE_MALFORMED', `invalid source path: ${relPath}`)
+  }
+  return readFileSync(full, 'utf8')
 }
 
 /** 写入单个源文件（带签发守卫）。 */
 export function writeSourceFile(versionDir: string, relPath: string, text: string): void {
   assertWritable(versionDir)
+  // 本体校验（tool-face-policy P2.1），与 importVersion 同一口径：
+  // rel 形态拒绝 + 落点 containment（junction 子目录指外也不得写穿）。
+  // 调用方不得自带路径口径；wire 层同口径校验保留为纵深防御。
   const full = join(versionDir, relPath)
+  if (!isSafeRelPath(relPath) || !isInsideDir(versionDir, full)) {
+    throw new PackageStoreError('PACKAGE_MALFORMED', `invalid source path: ${relPath}`)
+  }
   mkdirSync(dirname(full), { recursive: true })
   writeFileSync(full, text, 'utf8')
 }
@@ -141,7 +202,7 @@ export function writeSourceFile(versionDir: string, relPath: string, text: strin
 export function readPackageMeta(versionDir: string): PackageMeta {
   const doc = readYamlFile<Partial<PackageMeta>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
   if (!doc.name || !doc.version) {
-    throw new PackageStoreError('PACKAGE_MALFORMED', `missing package.yaml meta in ${versionDir}`)
+    throw new PackageStoreError('PACKAGE_MALFORMED', 'missing package.yaml meta')
   }
   return {
     kind: 'BusinessOntologyPackage',
@@ -366,12 +427,26 @@ export class PackageWorkspace {
   /**
    * 解析包版本目录。优先 `packages/<name>/<version>`；
    * 若目录键与 meta.name 不一致（如按域命名的目录），按 meta.name 扫描回退。
+   * name/version 必须是单段且落在 packagesDir 内——多级下钻与穿越输入 fail-loud。
    */
   versionDir(name: string, version: string): string {
+    if (!isPlainSegment(name) || !isPlainSegment(version)) {
+      throw new PackageStoreError('PACKAGE_MALFORMED', `invalid package path: ${name}@${version}`)
+    }
     const direct = join(this.packagesDir, name, version)
+    if (!isInsideDir(this.packagesDir, direct)) {
+      throw new PackageStoreError('PACKAGE_MALFORMED', `invalid package path: ${name}@${version}`)
+    }
     if (existsSync(join(direct, SOURCE_FILE_LAYOUT.meta))) return direct
     for (const v of this.listVersions()) {
-      if (v.name === name && v.version === version) return v.dir
+      if (v.name === name && v.version === version) {
+        // 扫描回退的 dir 由 readdir 拼出（词法必在包内），仍过一次 realpath 兜底：
+        // packages 内 junction 指向外部时拒绝返回逃逸路径。
+        if (!isInsideDir(this.packagesDir, v.dir)) {
+          throw new PackageStoreError('PACKAGE_MALFORMED', `invalid package path: ${name}@${version}`)
+        }
+        return v.dir
+      }
     }
     return direct
   }
@@ -531,11 +606,20 @@ export class PackageWorkspace {
     if (existsSync(join(dir, SOURCE_FILE_LAYOUT.meta))) {
       throw new PackageStoreError('PACKAGE_EXISTS', `${name}@${version} already exists`)
     }
-    mkdirSync(dir, { recursive: true })
+    // 两遍式：先全量校验 rel，再建目录落盘——恶意归档在校验期整体拒绝，不留半写状态。
+    const files: Array<{ full: string; text: string }> = []
     for (const [rel, text] of Object.entries(archive.files)) {
-      const full = join(dir, rel)
-      mkdirSync(dirname(full), { recursive: true })
-      writeFileSync(full, text, 'utf8')
+      // rel 来自 wire 归档 JSON（外部输入）：绝对路径 / 盘符·ADS 冒号 / 多级下钻
+      // 一律拒绝，落盘前再验包含（round-13：原实现 join(dir, rel) 直写可逃出版本目录）。
+      if (!isSafeRelPath(rel) || !isInsideDir(dir, join(dir, rel))) {
+        throw new PackageStoreError('PACKAGE_MALFORMED', `invalid archive path: ${rel}`)
+      }
+      files.push({ full: join(dir, rel), text })
+    }
+    mkdirSync(dir, { recursive: true })
+    for (const f of files) {
+      mkdirSync(dirname(f.full), { recursive: true })
+      writeFileSync(f.full, f.text, 'utf8')
     }
     return dir
   }

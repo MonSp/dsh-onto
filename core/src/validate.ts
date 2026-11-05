@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractAttrRefs, parseAttrRef, UNREFERENCED_EXEMPT_PREFIXES } from './ids.js'
+import { validateExpression } from './rules.js'
 import { listSourceFiles, loadPackage, readPackageMeta, QUALITY_REPORT_FILE } from './store.js'
 import type { OntologyPackage, QualityReport, ValidationIssue } from './types.js'
 import { loadYaml } from './yamlio.js'
@@ -221,6 +222,19 @@ export function validatePackage(
       if (!Number.isFinite(r.weight) || r.weight < 0) {
         err('WEIGHT_SUM', `RULE ${r.id}`, `权重非法: ${r.weight}`)
       }
+      // 表达式语法在门禁拦截（round-13）：坏语法若漏到运行时，排除规则求值异常
+      // 会被静默吞成「不匹配」（方向保守但不可见），打分规则则落待核实。
+      const exprErr = validateExpression(r.expression)
+      if (exprErr !== null) {
+        err('EXPR_INVALID', `RULE ${r.id}`, `打分表达式语法错误: ${exprErr}`)
+      }
+    }
+  }
+  // 排除条件语法独立于权重分支检查（scoreRules 为空也必须过闸）。
+  for (const r of pkg.exclusionRules) {
+    const condErr = validateExpression(r.condition)
+    if (condErr !== null) {
+      err('EXPR_INVALID', `RULE ${r.id}`, `排除条件语法错误: ${condErr}`)
     }
   }
   for (const s of pkg.skillTemplates) {

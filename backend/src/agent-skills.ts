@@ -1,0 +1,318 @@
+/**
+ * SKL 方法论模板 → agent skill provider（S2.5）。
+ *
+ * 每个 O2SkillTemplate 暴露为一个 kebab-case skill；同一 SKL id 多版本并存时
+ * 优先 ISSUED，再按版本号降序取一条。包写入路径经 agent-hooks 失效目录。
+ * @module @dsh-onto/backend/agent-skills
+ */
+import { join } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
+import type {
+  SkillCandidate,
+  SkillDefinition,
+  SkillLookupOptions,
+  SkillProvider,
+} from '@deepseek-ai/dsh-skill'
+import {
+  PackageWorkspace,
+  isInsideDir,
+  loadPackage,
+  type O2SkillTemplate,
+  type OntologyPackage,
+} from '@dsh-onto/core'
+import { registerSkillInvalidator } from './agent-hooks.js'
+import { resolveDataDir } from './services.js'
+
+/** SKL id → skill 名（`SKL-AML-NARRATIVE` → `skl-aml-narrative`）；不可用 id 返回空串。 */
+export function skillNameFromId(sklId: string): string {
+  return sklId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** 一个 SKL 模板的来源版本（用于跨版本去重）。 */
+export interface SklSource {
+  versionDir: string
+  status: string
+  version: string
+  template: O2SkillTemplate
+}
+
+function splitPrerelease(version: string): [core: string, prerelease: string] {
+  // build metadata（`+...`）不参与优先级（semver §11）；先剥再拆预发布，
+  // 否则 `1.0.0+build-1` 会被误拆成 core=`1.0.0+build`、pre=`1`。
+  const noBuild = version.split('+')[0]
+  const i = noBuild.indexOf('-')
+  return i < 0 ? [noBuild, ''] : [noBuild.slice(0, i), noBuild.slice(i + 1)]
+}
+
+/** semver 式预发布标识符比较：数字段按数值，数字段低于字母段，逐段直到分出胜负。 */
+function comparePrerelease(a: string, b: string): number {
+  const pa = a.split('.')
+  const pb = b.split('.')
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i += 1) {
+    const x = pa[i]
+    const y = pb[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    const nx = /^\d+$/.test(x) ? Number.parseInt(x, 10) : Number.NaN
+    const ny = /^\d+$/.test(y) ? Number.parseInt(y, 10) : Number.NaN
+    if (!Number.isNaN(nx) && !Number.isNaN(ny)) return nx - ny
+    if (!Number.isNaN(nx)) return -1
+    if (!Number.isNaN(ny)) return 1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+
+/** semver 式版本比较（数字段数值序、预发布低于正式版）；skills 去重与 list_packages 展示序共用。 */
+export function compareVersions(a: string, b: string): number {
+  const [aCore, aPre] = splitPrerelease(a)
+  const [bCore, bPre] = splitPrerelease(b)
+  const pa = aCore.split('.')
+  const pb = bCore.split('.')
+  // 非数字段（如 `1.x.0`）不猜测为 0：回退核心串比较，保证确定性。
+  if (pa.some((s) => !/^\d+$/.test(s)) || pb.some((s) => !/^\d+$/.test(s))) {
+    if (aCore !== bCore) return aCore < bCore ? -1 : 1
+  } else {
+    const na = pa.map((s) => Number.parseInt(s, 10))
+    const nb = pb.map((s) => Number.parseInt(s, 10))
+    for (let i = 0; i < Math.max(na.length, nb.length); i += 1) {
+      const d = (na[i] ?? 0) - (nb[i] ?? 0)
+      if (d !== 0) return d
+    }
+  }
+  if (aPre === bPre) return 0
+  if (aPre === '') return 1
+  if (bPre === '') return -1
+  return comparePrerelease(aPre, bPre)
+}
+
+/**
+ * 全序比较：ISSUED 优先 → 版本降序 → 版本串字典序 → 模板 id → 版本目录 → 模板序列化。
+ * 末级判别收口（`1.0.0+a`≡`1.0.0+b`、双 ISSUED 同版等）——结果与 readdir/模板输入序
+ * 无关；仅当两源全字段等价（同目录同模板）才平局，此时取任一结果不可区分（round-13 nit）。
+ */
+function compareSources(a: SklSource, b: SklSource): number {
+  const issuedA = a.status === 'ISSUED' ? 1 : 0
+  const issuedB = b.status === 'ISSUED' ? 1 : 0
+  if (issuedA !== issuedB) return issuedA - issuedB
+  const v = compareVersions(a.version, b.version)
+  if (v !== 0) return v
+  if (a.version !== b.version) return a.version > b.version ? 1 : -1
+  if (a.template.id !== b.template.id) return a.template.id > b.template.id ? 1 : -1
+  if (a.versionDir !== b.versionDir) return a.versionDir > b.versionDir ? 1 : -1
+  const ja = JSON.stringify(a.template)
+  const jb = JSON.stringify(b.template)
+  return ja > jb ? 1 : ja < jb ? -1 : 0
+}
+
+function betterThan(a: SklSource, b: SklSource): boolean {
+  return compareSources(a, b) > 0
+}
+
+/** 同 SKL id 去重：ISSUED 优先，再版本号降序。 */
+export function pickSkillSources(sources: SklSource[]): Map<string, SklSource> {
+  const best = new Map<string, SklSource>()
+  for (const s of sources) {
+    const cur = best.get(s.template.id)
+    if (cur === undefined || betterThan(s, cur)) best.set(s.template.id, s)
+  }
+  return best
+}
+
+/**
+ * 跨 SKL id 的 skill 名去重：不同 id 规范化到同名时以 ISSUED 优先、版本降序胜出。
+ * 撞名不再静默遮蔽——后到者按同一胜出序让位，结果确定。
+ */
+export function dedupeSkillNames(sources: Iterable<SklSource>): Map<string, SklSource> {
+  const byName = new Map<string, SklSource>()
+  for (const s of sources) {
+    const name = skillNameFromId(s.template.id)
+    if (name === '') continue
+    const cur = byName.get(name)
+    if (cur === undefined || betterThan(s, cur)) byName.set(name, s)
+  }
+  return byName
+}
+
+/**
+ * 候选名必须与 locator.sklId 归一结果一致才可加载——
+ * stale/spoofed 候选拒载，不回放错名（get() 前置校验）。
+ */
+export function candidateNameForSkl(candidateName: unknown, sklId: string): string | undefined {
+  const name = skillNameFromId(sklId)
+  return name !== '' && name === candidateName ? name : undefined
+}
+
+/**
+ * 胜出者复核（get() 前置校验）：locator 仍须是当前扫描快照下该名的去重胜出者——
+ * 失效目录（fork/transition 后出现更优版本）之外，落选 DRAFT/旧版 locator 一律拒载
+ * （round-13 minor：stale 候选绕过 ISSUED 优先）。
+ */
+export function isCurrentWinner(
+  winners: ReadonlyMap<string, SklSource>,
+  name: string,
+  versionDir: string,
+  sklId: string,
+): boolean {
+  const w = winners.get(name)
+  return w !== undefined && w.versionDir === versionDir && w.template.id === sklId
+}
+
+/**
+ * 扫描一组包版本目录，收集 SKL 模板并跨版本去重。
+ * 单包不可加载时经 `onSkip` 上抛给调用方（可观测：损坏包不再无声消失）。
+ */
+export function collectSkillSources(
+  entries: ReadonlyArray<{ dir: string; status: string; version: string }>,
+  onSkip?: (dir: string, error: unknown) => void,
+): Map<string, SklSource> {
+  const sources: SklSource[] = []
+  for (const v of entries) {
+    let pkg: OntologyPackage
+    try {
+      pkg = loadPackage(v.dir)
+    } catch (e) {
+      onSkip?.(v.dir, e)
+      continue
+    }
+    for (const template of pkg.skillTemplates) {
+      sources.push({ versionDir: v.dir, status: v.status, version: v.version, template })
+    }
+  }
+  return pickSkillSources(sources)
+}
+
+/** locator.versionDir 必须落在 workspace 内（防御纵深：registry 回放契约之外再拦一层；realpath 防符号链接逃逸）。 */
+export function locatorInWorkspace(versionDir: string, wsRoot: string): boolean {
+  if (typeof versionDir !== 'string' || versionDir === '') return false
+  return isInsideDir(wsRoot, versionDir)
+}
+
+/** skill locator 窄化：畸形输入返回 undefined，不裸抛 TypeError（get() 前置校验）。 */
+export function parseSkillLocator(locator: unknown): { versionDir: string; sklId: string } | undefined {
+  if (locator === undefined || locator === null || typeof locator !== 'object') return undefined
+  const versionDir = (locator as { versionDir?: unknown }).versionDir
+  const sklId = (locator as { sklId?: unknown }).sklId
+  if (typeof versionDir !== 'string' || typeof sklId !== 'string') return undefined
+  return { versionDir, sklId }
+}
+
+/** skill 正文：模板口径 + 红线声明。 */
+export function renderSkillBody(
+  template: O2SkillTemplate,
+  meta: { name: string; version: string; domain: string },
+): string {
+  const lines: string[] = []
+  lines.push(`# ${template.name}（${template.id}）`)
+  lines.push('')
+  lines.push(`来源包：${meta.name}@${meta.version}（${meta.domain}）`)
+  if (template.description) {
+    lines.push('')
+    lines.push(template.description)
+  }
+  if (template.steps && template.steps.length > 0) {
+    lines.push('')
+    lines.push('## 步骤')
+    template.steps.forEach((step, i) => {
+      lines.push(`${i + 1}. ${step}`)
+    })
+  }
+  const weights = Object.entries(template.weights)
+  if (weights.length > 0) {
+    lines.push('')
+    lines.push('## 权重集合')
+    for (const [ruleId, weight] of weights) {
+      lines.push(`- ${ruleId}: ${weight}`)
+    }
+  }
+  if (template.outputTemplate) {
+    lines.push('')
+    lines.push('## 输出模板')
+    lines.push(template.outputTemplate)
+  }
+  lines.push('')
+  lines.push('## 红线')
+  lines.push('- 叙述只回填模板与证据，禁止认定性表述（认定/确定为/已构成…）。')
+  lines.push('- 结论性表述只允许落场景卡 forbiddenPhrases 红线，不得进入输出契约。')
+  lines.push('- 分数与规则命中由规则引擎产生；本模板只做叙述装配，配合 run_scenario 的 SKILL_RUN 步骤使用。')
+  return lines.join('\n')
+}
+
+export const name = 'dsh-onto-agent-skills'
+export const inject = ['skills']
+
+export function apply(ctx: Context): void {
+  const dataDir = resolveDataDir(ctx)
+  const wsRoot = join(dataDir, 'workspace')
+  const ws = new PackageWorkspace(wsRoot)
+
+  const scan = (): Map<string, SklSource> =>
+    collectSkillSources(ws.listVersions(), (dir, error) => {
+      // 损坏包不再无声消失：经 cordis logger 暴露（目录本身是服务端数据路径，可入服务端日志）。
+      ctx.logger('dsh-onto').warn('skill 扫描跳过不可加载包 %s: %o', dir, error)
+    })
+
+  ctx.skills.registerProvider((control) => {
+    const unregister = registerSkillInvalidator(control.invalidate)
+    control.signal.addEventListener('abort', () => unregister(), { once: true })
+    const provider: SkillProvider = {
+      name: 'onto-skill-templates',
+      async list(_options: SkillLookupOptions): Promise<SkillCandidate[]> {
+        const out: SkillCandidate[] = []
+        for (const [name, s] of dedupeSkillNames(scan().values())) {
+          // 包含性过滤（与 get() 同口径）：packages 内 junction 指外的外来模板不进目录
+          // （round-13 nit：此前 list 会列出 get 必拒的 stale/外来候选）。
+          if (!locatorInWorkspace(s.versionDir, wsRoot)) continue
+          out.push({
+            name,
+            description: s.template.description ?? s.template.name,
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'runtime',
+            provider: 'onto-skill-templates',
+            rank: 350,
+            locator: { versionDir: s.versionDir, sklId: s.template.id },
+          })
+        }
+        return out
+      },
+      async get(candidate: SkillCandidate): Promise<SkillDefinition | undefined> {
+        const loc = parseSkillLocator(candidate.locator)
+        if (loc === undefined) return undefined
+        const { versionDir, sklId } = loc
+        // 候选名必须与 sklId 归一结果一致：stale/spoofed 候选拒载，不回放错名。
+        const name = candidateNameForSkl(candidate.name, sklId)
+        if (name === undefined) return undefined
+        if (!locatorInWorkspace(versionDir, wsRoot)) return undefined
+        // 胜出者复核（round-13）：locator 仍须是当前扫描快照下该名的去重胜出者。
+        if (!isCurrentWinner(dedupeSkillNames(scan().values()), name, versionDir, sklId)) return undefined
+        let pkg: OntologyPackage
+        try {
+          pkg = loadPackage(versionDir)
+        } catch {
+          return undefined
+        }
+        const template = pkg.skillTemplates.find((t) => t.id === sklId)
+        if (template === undefined) return undefined
+        return {
+          name,
+          description: template.description ?? template.name,
+          invocation: { modelInvocable: true, userInvocable: true },
+          source: 'runtime',
+          provider: 'onto-skill-templates',
+          content: renderSkillBody(template, {
+            name: pkg.meta.name,
+            version: pkg.meta.version,
+            domain: pkg.meta.domain,
+          }),
+          metadata: { id: template.id, package: pkg.meta.name, version: pkg.meta.version },
+        }
+      },
+    }
+    return provider
+  })
+}

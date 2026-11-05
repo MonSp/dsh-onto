@@ -28,6 +28,8 @@ import {
   SOURCE_TYPES,
   buildQualityReport,
   derivePackage,
+  isInsideDir,
+  isSafeRelPath,
   loadPackage,
   readPackageMeta,
   runScenario,
@@ -42,6 +44,7 @@ import {
   type ScenarioRunResult,
   type SourceType,
 } from '@dsh-onto/core'
+import { invalidateSkillCatalog } from './agent-hooks.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -144,7 +147,9 @@ export class OntoWorkspace extends TypertRemoteService {
       if (!request?.name || !request?.version || !request?.domain) {
         throw ontoError('onto/bad-request', 'name/version/domain required')
       }
-      return { dir: this.ws.createPackage(request) }
+      const dir = this.ws.createPackage(request)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 
@@ -154,7 +159,9 @@ export class OntoWorkspace extends TypertRemoteService {
       if (!request?.name || !request?.fromVersion || !request?.toVersion) {
         throw ontoError('onto/bad-request', 'name/fromVersion/toVersion required')
       }
-      return { dir: this.ws.forkVersion(request.name, request.fromVersion, request.toVersion) }
+      const dir = this.ws.forkVersion(request.name, request.fromVersion, request.toVersion)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 
@@ -171,6 +178,7 @@ export class OntoWorkspace extends TypertRemoteService {
         throw ontoError('onto/bad-request', 'name/version/to required')
       }
       this.ws.transition(request.name, request.version, request.to, request.issuedBy, request.note)
+      invalidateSkillCatalog()
       return { status: request.to }
     })
   }
@@ -186,7 +194,9 @@ export class OntoWorkspace extends TypertRemoteService {
   }): Promise<{ dir: string }> {
     return guard(() => {
       if (!request?.archive?.meta?.name) throw ontoError('onto/bad-request', 'archive required')
-      return { dir: this.ws.importVersion(request.archive) }
+      const dir = this.ws.importVersion(request.archive)
+      invalidateSkillCatalog()
+      return { dir }
     })
   }
 }
@@ -216,6 +226,7 @@ export class OntoModel extends TypertRemoteService {
   async remoteExportSave(request: { name: string; version: string; pkg: OntologyPackage }): Promise<{ ok: true }> {
     return guard(() => {
       savePackage(this.dirOf(request.name, request.version), request.pkg)
+      invalidateSkillCatalog()
       return { ok: true as const }
     })
   }
@@ -239,13 +250,15 @@ export class OntoModel extends TypertRemoteService {
       if (meta.status === 'ISSUED') {
         throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (read-only)`)
       }
-      // 防路径逃逸
-      if (request.relPath.includes('..') || request.relPath.startsWith('/') || request.relPath.includes('\\')) {
+      // 防路径逃逸：与 importVersion 同一口径（isSafeRelPath：绝对/ADS 冒号/多级下钻拒绝）
+      // ——round-13 复审：原实现只拦 `..`/前导 `/`/反斜杠，冒号可落 NTFS ADS 隐藏流。
+      const full = join(dir, request.relPath)
+      if (!isSafeRelPath(request.relPath) || !isInsideDir(dir, full)) {
         throw ontoError('onto/bad-request', 'illegal relPath')
       }
-      const full = join(dir, request.relPath)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, request.text, 'utf8')
+      invalidateSkillCatalog()
       return { ok: true as const }
     })
   }
@@ -458,9 +471,11 @@ export class OntoKnowledge extends TypertRemoteService {
     applied: string[]
     skipped: Array<{ id: string; reason: string }>
   }> {
-    return guard(() =>
-      this.store.materialize(this.ws.versionDir(request.name, request.version), request.ids ?? []),
-    )
+    return guard(() => {
+      const out = this.store.materialize(this.ws.versionDir(request.name, request.version), request.ids ?? [])
+      invalidateSkillCatalog()
+      return out
+    })
   }
 }
 

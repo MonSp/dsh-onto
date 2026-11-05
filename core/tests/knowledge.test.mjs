@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
+import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, draftCandidateId, knowledgeSourceId, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, mkWorkspace } from './helpers.mjs'
 
 const llm = new HeuristicLlm()
@@ -142,6 +142,32 @@ test('原料同 sha256 上传幂等', () => {
     const b = store.uploadSource({ packageId: 'pkg-x', sourceType: 'POLICY', name: 'p2', content: '禁止X' })
     assert.equal(a.id, b.id)
     assert.equal(store.listSources('pkg-x').length, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('uploadSource packageId 归一：name@version 入库剥成裸名，listSources 双形态可见', () => {
+  const { store, root } = mkStore()
+  try {
+    const rec = store.uploadSource({
+      packageId: 'pkg-x@1.0.0',
+      sourceType: 'POLICY',
+      name: 'p1',
+      content: '唯一内容ABC',
+    })
+    assert.equal(rec.packageId, 'pkg-x')
+    assert.equal(store.listSources('pkg-x').length, 1)
+    assert.equal(store.listSources('pkg-x@1.0.0').length, 1)
+    // 幂等：同内容换写法再传不重复（归一后比对）
+    const again = store.uploadSource({
+      packageId: 'pkg-x',
+      sourceType: 'POLICY',
+      name: 'p2',
+      content: '唯一内容ABC',
+    })
+    assert.equal(again.id, rec.id)
+    assert.equal(store.listSources().length, 1)
   } finally {
     rmWorkspace(root)
   }
@@ -693,6 +719,92 @@ test('updateCandidate：patch.payload 显式带 name 键时视为故意保留，
     const c = store.getCandidate('dc-rename')
     assert.equal(c.name, '新名')
     assert.equal(c.payload.name, '旧名')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('packageId 守卫：非 string/写入空串 → BAD_PACKAGE_ID；读路径 listSources("") 不抛（round-13）', () => {
+  const { store, root } = mkStore()
+  try {
+    assert.throws(
+      () => store.uploadSource({ packageId: 123, sourceType: 'POLICY', name: 'n', content: 'c' }),
+      (e) => e.name === 'KnowledgeError' && e.code === 'BAD_PACKAGE_ID',
+      '非字符串 packageId 必须受控失败（不得裸抛 TypeError）',
+    )
+    assert.throws(
+      () => store.uploadSource({ packageId: '', sourceType: 'POLICY', name: 'n', content: 'c' }),
+      (e) => e.name === 'KnowledgeError' && e.code === 'BAD_PACKAGE_ID',
+      '写入空 packageId 拒绝',
+    )
+    // 读路径空串保持原语义（过滤无匹配返回 []），不因守卫破坏 wire 读
+    assert.equal(store.listSources('').length, 0)
+    assert.equal(store.listSources(undefined).length, 0)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('记录 ID 派生：sha256 截断 128-bit，确定且不同 seed 不撞（round-13：原 32-bit FNV 可定向碰撞覆盖）', () => {
+  const a = knowledgeSourceId('pkg-x|POLICY|n1|abc')
+  assert.match(a, /^ks-[0-9a-f]{32}$/)
+  assert.equal(a, knowledgeSourceId('pkg-x|POLICY|n1|abc'), '同 seed 必须确定')
+  assert.notEqual(a, knowledgeSourceId('pkg-x|POLICY|n2|abc'), '不同 name 不得同 id')
+  assert.notEqual(a, knowledgeSourceId('pkg-y|POLICY|n1|abc'), '不同包不得同 id')
+  const d = draftCandidateId('seed-1')
+  assert.match(d, /^dc-[0-9a-f]{32}$/)
+  assert.notEqual(draftCandidateId('seed-2'), d, '不同候选 key 不得同 id')
+})
+
+test('materialize 归一比较：旧数据 packageId 为 name@version 不再误判 mismatch（round-13）', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(
+      queuePath,
+      JSON.stringify([
+        {
+          id: 'dc-oldfmt',
+          packageId: 'test-pkg@1.0.0',
+          sourceId: 'src-x',
+          layer: 'O2',
+          targetKind: 'ScoreRule',
+          name: '旧格式候选',
+          payload: { name: '旧格式候选', weight: 0.1, expression: '1' },
+          confidence: 0.9,
+          rationale: '',
+          status: 'pending',
+          forcedReview: false,
+          conclusionLike: false,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'dc-otherpkg',
+          packageId: 'other-pkg',
+          sourceId: 'src-x',
+          layer: 'O2',
+          targetKind: 'ScoreRule',
+          name: '他包候选',
+          payload: { name: '他包候选', weight: 0.1, expression: '1' },
+          confidence: 0.9,
+          rationale: '',
+          status: 'approved',
+          forcedReview: false,
+          conclusionLike: false,
+          createdAt: new Date().toISOString(),
+        },
+      ], null, 2),
+    )
+    const r = store.materialize(dir, ['dc-oldfmt', 'dc-otherpkg'])
+    const oldfmt = r.skipped.find((s) => s.id === 'dc-oldfmt')
+    const other = r.skipped.find((s) => s.id === 'dc-otherpkg')
+    // 旧格式 packageId 归一后应过包名比对，落到 status=pending 跳过（而非 mismatch）
+    assert.ok(oldfmt, JSON.stringify(r))
+    assert.ok(oldfmt.reason.includes('status='), oldfmt.reason)
+    assert.ok(!oldfmt.reason.includes('package mismatch'), oldfmt.reason)
+    // 真他包仍按 mismatch 拒（fail-safe 保留）
+    assert.ok(other && other.reason.includes('package mismatch'), JSON.stringify(other))
   } finally {
     rmWorkspace(root)
   }

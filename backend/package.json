@@ -1,11 +1,12 @@
 {
   "name": "@dsh-onto/backend",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "dsh-onto 业务本体建模平台统一后端：dsh-onto* wire 服务的唯一宿主落点",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs"
   },
   "exports": {
     ".": "./dist/index.js",
@@ -24,6 +25,8 @@
   },
   "dependencies": {
     "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-skill": "link:../../deepseek-harness/packages/skill/skill",
+    "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",
     "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol",
     "@dsh-onto/core": "link:../core"
   },
