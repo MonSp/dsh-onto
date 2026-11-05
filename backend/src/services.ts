@@ -27,19 +27,27 @@ import {
   PackageWorkspace,
   SOURCE_TYPES,
   buildQualityReport,
+  buildRunRecord,
+  compareRunRecords,
   derivePackage,
+  exportRunArchive,
   isInsideDir,
   isSafeRelPath,
   loadPackage,
+  loadRunRecord,
+  listRunRecords,
   readPackageMeta,
   runScenario,
   savePackage,
+  saveRunRecord,
   verifyDerived,
   writeQualityReport,
   type KnowledgeSourceRecord,
   type OntologyPackage,
   type PackageMeta,
   type QualityReport,
+  type RunDiff,
+  type RunRecord,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SourceType,
@@ -512,7 +520,87 @@ export class OntoRuntime extends TypertRemoteService {
   }): Promise<{ result: ScenarioRunResult }> {
     return guard(() => {
       const dir = this.ws.versionDir(request.name, request.version)
-      return { result: runScenario(dir, request.scenarioId, request.dataset) }
+      const result = runScenario(dir, request.scenarioId, request.dataset)
+      // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
+      const meta = readPackageMeta(dir)
+      const scenario = loadPackage(dir).scenarios.find((s) => s.id === request.scenarioId)
+      const redlines = [
+        ...new Set(
+          [
+            ...result.audit.forbiddenPhraseHits.map((h) => h.phrase),
+            ...(scenario?.outputContract.forbiddenPhrases ?? []),
+          ].filter((p) => typeof p === 'string' && p !== ''),
+        ),
+      ]
+      saveRunRecord(
+        this.ws.root,
+        buildRunRecord({
+          package: { name: meta.name, version: meta.version },
+          dataset: request.dataset,
+          result,
+          redlines,
+        }),
+      )
+      return { result }
+    })
+  }
+
+  /** 运行历史（run-insight S2.5）：时间倒序摘要。wire 人审面。 */
+  @Remote('listRuns')
+  async remoteExportListRuns(): Promise<{
+    runs: Array<{
+      runId: string
+      scenarioId: string
+      package: { name: string; version: string }
+      datasetDigest: string
+      datasetSummary: RunRecord['datasetSummary']
+      auditPassed: boolean
+      startedAt: string
+      savedAt: string
+    }>
+  }> {
+    return guard(() => ({
+      runs: listRunRecords(this.ws.root).map((r) => ({
+        runId: r.runId,
+        scenarioId: r.scenarioId,
+        package: r.package,
+        datasetDigest: r.datasetDigest.slice(0, 12),
+        datasetSummary: r.datasetSummary,
+        auditPassed: r.result.audit.passed === true,
+        startedAt: r.startedAt,
+        savedAt: r.savedAt,
+      })),
+    }))
+  }
+
+  /** 单轮运行全量（人审面：完整短语与证据链，供复核定位）。 */
+  @Remote('showRun')
+  async remoteExportShowRun(request: { runId: string }): Promise<{ record: RunRecord }> {
+    return guard(() => ({ record: loadRunRecord(this.ws.root, request.runId) }))
+  }
+
+  /** 两轮对比（人审面完整；工具面同语义经 compare_runs 投影）。 */
+  @Remote('compareRuns')
+  async remoteExportCompareRuns(request: {
+    runIdA: string
+    runIdB: string
+  }): Promise<{ diff: RunDiff }> {
+    return guard(() => {
+      const a = loadRunRecord(this.ws.root, request.runIdA)
+      const b = loadRunRecord(this.ws.root, request.runIdB)
+      return { diff: compareRunRecords(a, b) }
+    })
+  }
+
+  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。 */
+  @Remote('exportAudit')
+  async remoteExportExportAudit(request: { runId: string }): Promise<{
+    locator: string
+    archivedAt: string
+  }> {
+    return guard(() => {
+      const { locator, archive } = exportRunArchive(this.ws.root, request.runId)
+      return { locator, archivedAt: archive.archivedAt }
     })
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-onto/backend",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "dsh-onto 业务本体建模平台统一后端：dsh-onto* wire 服务的唯一宿主落点",

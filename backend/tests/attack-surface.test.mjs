@@ -12,12 +12,17 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   AgentToolError,
+  assertBatchContract,
+  assertDiffContract,
   assertNoForbiddenPhrases,
   assertRunContract,
   asToolError,
   collectPhrases,
   enforceOutputPolicy,
   rememberPhrases,
+  renderBatchText,
+  renderExportText,
+  renderRunDiffText,
   renderRunText,
   retreatPhraseEcho,
   toolExecute,
@@ -28,12 +33,26 @@ import {
   readToolContracts,
 } from '../dist/agent-grants.js'
 import {
+  exportSummaryOf,
   loadDatasetFromArgs,
   loadToolPackage,
+  redlinesForRuns,
+  runScenarioBatch,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
 import { dedupeSkillNames, isCurrentWinner, pickSkillSources } from '../dist/agent-skills.js'
-import { PackageStoreError, PackageWorkspace, runScenario, writeSourceFile } from '@dsh-onto/core'
+import {
+  PackageStoreError,
+  PackageWorkspace,
+  buildRunRecord,
+  compareRunRecords,
+  derivePackage,
+  loadPackage,
+  loadRunRecord,
+  runScenario,
+  saveRunRecord,
+  writeSourceFile,
+} from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_DIR = join(REPO, 'packages', 'aml', '1.0.0')
@@ -638,5 +657,276 @@ test('I5 契约验形：evidence/missing/hits 错型落 INVALID_TOOL_OUTPUT，re
   ]
   for (const bad of cases) {
     expectCode(() => assertRunContract(bad), 'INVALID_TOOL_OUTPUT')
+  }
+})
+
+/* ── run-insight 新出口同族穷举（I1–I5）：compare_runs / run_scenarios / export_audit ── */
+
+const PHRASE = '认定洗钱' // aml 场景红线实词
+
+const diffBase = () => ({
+  runIdA: 'run-aaaaaaaa',
+  runIdB: 'run-bbbbbbbb',
+  scenarioA: 'SCN-A',
+  scenarioB: 'SCN-B',
+  packageA: { name: 'p', version: '1.0.0' },
+  packageB: { name: 'p', version: '1.1.0' },
+  sameDataset: true,
+  candidates: [{
+    candidateId: 'C1', riskScoreA: 0.4, riskScoreB: 0.7, riskScoreDelta: 0.3,
+    hitRuleIdsAdded: ['R2'], hitRuleIdsRemoved: [],
+    pendingChecksAdded: [`疑似${PHRASE}待核实`], pendingChecksRemoved: [],
+  }],
+  excludedAdded: [], excludedRemoved: [],
+  auditPassedA: true, auditPassedB: true,
+  humanReviewRequired: true,
+})
+
+test('I1 compare 出口：value/render 双闸整值重遮；ID 面撞短语 fail-loud；模板拼接碰撞整段兜底', () => {
+  const diff = diffBase()
+  const masked = enforceOutputPolicy(diff, [PHRASE])
+  assert.equal(masked.candidates[0].pendingChecksAdded[0], '【禁语已脱敏】')
+  assert.equal(masked.candidates[0].candidateId, 'C1', 'ID 面不改写')
+  const text = renderRunDiffText(masked, [PHRASE])
+  assert.ok(!text.includes(PHRASE), `compare render 不得泄漏短语: ${text}`)
+  // ID 面（runIdA）撞短语：fail-loud，拒绝产出，错误不回显短语
+  const bad = { ...diff, runIdA: `run-${PHRASE}` }
+  try {
+    enforceOutputPolicy(bad, [PHRASE])
+    assert.fail('期望 INVALID_TOOL_OUTPUT')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
+    assert.ok(!e.message.includes(PHRASE), e.message)
+  }
+  // 模板拼接碰撞（同族：短语由 render 分隔符拼接成句，单字段均不含）→ 拼接后整段兜底
+  const collide = '0.4 → 0.7'
+  const recombined = renderRunDiffText(diff, [collide])
+  assert.ok(!recombined.includes(collide), `拼接成句不得泄漏: ${recombined}`)
+  assert.match(recombined, /^【.+】$/, '拼接后检出短语 → 整段渲染文本替换为标记')
+})
+
+test('I1 batch 出口：假场景 ID 回显撞红线 → 错误面整段退避；ID 面 fail-loud 拒产出', () => {
+  const root = mkdtempSync(join(tmpdir(), 'onto-as-batch-'))
+  try {
+    const ws = new PackageWorkspace(root)
+    const dir = ws.versionDir('aml-analysis', '1.0.0')
+    cpSync(AML_DIR, dir, { recursive: true })
+    derivePackage(dir)
+    const pkg = loadPackage(dir)
+    const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+    const out = runScenarioBatch({ ws, pkg, versionDir: dir, dataset, ids: ['SCN-AML-FIND-CLUES', `X-${PHRASE}`] })
+    const [good, bad] = out.results
+    assert.equal(good.status, 'ok')
+    assert.equal(bad.status, 'error')
+    assert.equal(bad.error.code, 'NOT_FOUND')
+    // 错误面：message 整段退避（机器码保留）
+    assert.ok(!bad.error.message.includes(PHRASE), `error.message 须整段退避: ${bad.error.message}`)
+    // 工具出口闸：scenarioId 撞红线（ID 面）→ fail-loud 拒绝产出，不回显短语（S2.3 口径）
+    try {
+      enforceOutputPolicy(out, [PHRASE])
+      assert.fail('期望 INVALID_TOOL_OUTPUT')
+    } catch (e) {
+      assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
+      assert.ok(!e.message.includes(PHRASE), e.message)
+    }
+    // 干净场景 ID（含真不存在项）：出口经 value 闸后零短语
+    const cleanOut = runScenarioBatch({ ws, pkg, versionDir: dir, dataset, ids: ['SCN-AML-FIND-CLUES', 'SCN-NOPE'] })
+    assert.equal(cleanOut.results[1].error.code, 'NOT_FOUND')
+    const masked = enforceOutputPolicy(cleanOut, [PHRASE])
+    assert.ok(!JSON.stringify(masked).includes(PHRASE), '出口零短语')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('I1 export 出口：摘要零短语；runId 撞红线（ID 面）fail-loud，locator 不回显绝对路径', () => {
+  const rec = buildRunRecord({
+    package: { name: 'p', version: '1.0.0' },
+    dataset: { objects: [], relations: [], candidates: [] },
+    result: {
+      ...cleanRun(`run-${PHRASE}`),
+      audit: {
+        checks: [],
+        forbiddenPhraseHits: [{ phrase: PHRASE, where: '$.x' }],
+        passed: true,
+      },
+    },
+    redlines: [PHRASE],
+  })
+  const summary = exportSummaryOf({ locator: `runs/exports/${rec.runId}.json`, archive: { ...rec, archivedAt: 't' } })
+  try {
+    enforceOutputPolicy(summary, [PHRASE])
+    assert.fail('期望 INVALID_TOOL_OUTPUT')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
+    assert.ok(!e.message.includes(PHRASE), e.message)
+  }
+  const clean = exportSummaryOf({
+    locator: 'runs/exports/run-abc12345.json',
+    archive: { ...rec, runId: 'run-abc12345', archivedAt: 't' },
+  })
+  const masked = enforceOutputPolicy(clean, [PHRASE])
+  assert.ok(!JSON.stringify(masked).includes(PHRASE))
+  assert.ok(!masked.locator.includes(':\\') && !masked.locator.startsWith('/'), 'locator 恒 workspace 相对')
+})
+
+test('I2/I3 runstore 围栏：新记录面非法 runId/穿越全拒，消息零绝对路径', () => {
+  const root = mkdtempSync(join(tmpdir(), 'onto-as-rec-'))
+  try {
+    for (const evil of ['../evil', 'a\\b', 'a:b', '..', 'C:\\x', '/abs']) {
+      assert.throws(
+        () => loadRunRecord(root, evil),
+        (e) => {
+          assert.ok(e instanceof PackageStoreError)
+          assert.equal(e.code, 'INVALID_ARGS')
+          assert.ok(!e.message.includes(root), `不得回显服务端根: ${e.message}`)
+          return true
+        },
+      )
+    }
+    // NOT_FOUND 只回显调用方 runId，不回显 resolve 后路径
+    try {
+      loadRunRecord(root, 'run-none000')
+      assert.fail('期望 NOT_FOUND')
+    } catch (e) {
+      assert.ok(e instanceof PackageStoreError && e.code === 'NOT_FOUND')
+      assert.ok(e.message.includes('run-none000'))
+      assert.ok(!e.message.includes(root) && !e.message.includes('\\runs\\'), e.message)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('I4 收权：新工具面 objectId/objectRef 入参同过 guard，未命中即拒（deny-by-default 不旁路）', () => {
+  // 新工具未带对象面：guard 空过
+  assert.equal(grantGuardDecision('compare_runs', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
+  assert.equal(grantGuardDecision('export_audit', { runId: 'run-a' }, () => []), undefined)
+  // 注入 objectId：同 guard 收口，未收权即拒
+  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit']) {
+    const denial = grantGuardDecision(tool, { runId: 'run-a', objectId: 'OBJ-NOPE' }, () => [])
+    assert.ok(typeof denial === 'string' && denial.includes('OBJECT_NOT_GRANTED'), `${tool} 应拒: ${String(denial)}`)
+  }
+})
+
+test('I5 新出口契约验形：diff/batch 畸形落 INVALID_TOOL_OUTPUT（不裸抛 TypeError）', () => {
+  const badDiff = [
+    { ...diffBase(), candidates: 'not-array' },
+    { ...diffBase(), candidates: [{ candidateId: 'C', riskScoreA: NaN, riskScoreB: 1, riskScoreDelta: null, hitRuleIdsAdded: [], hitRuleIdsRemoved: [], pendingChecksAdded: [], pendingChecksRemoved: [] }] },
+    { ...diffBase(), humanReviewRequired: false },
+    { ...diffBase(), excludedAdded: [{ candidateId: 1, ruleId: 'R' }] },
+    // packageA/packageB 漏验会让 renderRunDiffText 裸抛 TypeError——I5 须兜住
+    { ...diffBase(), packageA: null },
+    { ...diffBase(), packageB: { name: 1, version: '1.0.0' } },
+  ]
+  for (const d of badDiff) {
+    assert.throws(() => assertDiffContract(d), (e) => {
+      assert.ok(e instanceof AgentToolError, `不得裸抛: ${e}`)
+      assert.equal(e.code, 'INVALID_TOOL_OUTPUT')
+      return true
+    })
+  }
+  const badBatch = [
+    { results: 'not-array', humanReviewRequired: true },
+    { results: [{ scenarioId: 'S', status: 'ok', runId: 'run-a', summary: { candidateCount: 1, hitRuleCount: 1, excludedCount: 0, auditPassed: true, forbiddenPhraseHitCount: 0, humanReviewRequired: true } }], humanReviewRequired: true },
+    { results: [{ scenarioId: 'S', status: 'ok', runId: 'run-a', summary: { candidateCount: 1, hitRuleCount: 1, excludedCount: 0, auditPassed: true, forbiddenPhraseHitCount: 0, humanReviewRequired: false } }], humanReviewRequired: true },
+    { results: [], humanReviewRequired: 'yes' },
+  ]
+  // 第二个是合法形（control）；其余拒
+  assertBatchContract(badBatch[1])
+  for (const b of [badBatch[0], badBatch[2], badBatch[3]]) {
+    assert.throws(() => assertBatchContract(b), (e) => {
+      assert.ok(e instanceof AgentToolError, `不得裸抛: ${e}`)
+      assert.equal(e.code, 'INVALID_TOOL_OUTPUT')
+      return true
+    })
+  }
+  // render 不因错型裸抛（已验形后仍防）
+  assert.doesNotThrow(() => renderBatchText(badBatch[1]))
+  assert.doesNotThrow(() => renderRunDiffText(diffBase(), []))
+})
+
+/* ── 评审收敛同族补测：三新出口 render 闸 + 错误面退避完整性（I1） ── */
+
+const exportBase = () => ({
+  exported: true,
+  runId: 'run-abc12345',
+  locator: 'runs/exports/run-abc12345.json',
+  auditPassed: true,
+  candidateCount: 3,
+  hitRuleCount: 4,
+  excludedCount: 1,
+  forbiddenPhraseHitCount: 0,
+  humanReviewRequired: true,
+})
+
+test('I1 export render 闸：模板固定字面碰撞整段兜底；locator 重遮；runId 撞短语 fail-loud', () => {
+  // 模板碰撞：红线短语 ⊂ render 固定字面（「审计导出」「归档」）
+  const collide = '审计导出'
+  const text = renderExportText(exportBase(), [collide])
+  assert.ok(!text.includes(collide), `模板碰撞不得泄漏: ${text}`)
+  assert.match(text, /^【.+】$/, '拼接后检出短语 → 整段渲染文本替换为标记')
+  // locator 自由段重遮
+  const ph = '认定洗钱'
+  const poisonedLoc = renderExportText({ ...exportBase(), locator: `runs/exports/认定洗钱.json` }, [ph])
+  assert.ok(!poisonedLoc.includes(ph), 'locator 含短语须重遮')
+  assert.ok(poisonedLoc.includes('humanReviewRequired=true'))
+  // runId（ID 面）撞短语 → fail-loud 且不回显
+  try {
+    renderExportText({ ...exportBase(), runId: `run-${ph}` }, [ph])
+    assert.fail('期望 INVALID_TOOL_OUTPUT')
+  } catch (e) {
+    assert.ok(e instanceof AgentToolError && e.code === 'INVALID_TOOL_OUTPUT')
+    assert.ok(!e.message.includes(ph), e.message)
+  }
+})
+
+test('I1 batch render 清单 = 显式（包级全红线）∪ recall：失败/未跑场景红线也可兜底', () => {
+  const ph = '批量运行' // render 固定字面（标题）
+  const out = {
+    results: [{ scenarioId: 'SCN-A', status: 'error', error: { code: 'NOT_FOUND', message: '场景 SCN-A 不存在' } }],
+    humanReviewRequired: true,
+  }
+  // 仅 recall（无 ok 项 → 空）：失去兜底——反证清单必须显式带包级红线
+  const blind = renderBatchText(out, [])
+  assert.ok(blind.includes(ph), '空清单失去兜底——挂点病同族')
+  // 显式包级红线：模板碰撞整段兜底
+  const gated = renderBatchText(out, [ph])
+  assert.ok(!gated.includes(ph), `模板碰撞不得泄漏: ${gated}`)
+  assert.match(gated, /^【.+】$/)
+  // recall 与显式合并：ok 项 recall 补充命中短语（同样可撞模板「候选=」）
+  rememberPhrases('run-rc111111', ['候选='])
+  const merged = renderBatchText(
+    {
+      results: [
+        { scenarioId: 'SCN-A', status: 'ok', runId: 'run-rc111111', summary: { candidateCount: 1, hitRuleCount: 1, excludedCount: 0, auditPassed: true, forbiddenPhraseHitCount: 0, humanReviewRequired: true } },
+      ],
+      humanReviewRequired: true,
+    },
+    [],
+  )
+  assert.ok(!merged.includes('候选='), 'recall 源并入遮蔽')
+  assert.match(merged, /^【.+】$/, '拼接后检出 → 整段退避')
+})
+
+test('I1 compare/export 错误面：runId 撞红线且记录不存在 → 工作区全红线退避（不漏出）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'onto-as-fallback-'))
+  try {
+    const ws = new PackageWorkspace(root)
+    const dir = ws.versionDir('aml-analysis', '1.0.0')
+    cpSync(AML_DIR, dir, { recursive: true })
+    // 目标记录不存在：per-run 清单取不到，退避源必须是工作区全场景红线
+    const list = redlinesForRuns(ws, { runId: `run-${PHRASE}` })
+    assert.ok(list.includes(PHRASE), `退避清单须含工作区红线: ${JSON.stringify(list)}`)
+    // NOT_FOUND 回显撞红线的 runId → 整段退避且保留机器码
+    const err = asToolError(new AgentToolError('NOT_FOUND', `run run-${PHRASE} not found`), [], list)
+    assert.equal(err.code, 'NOT_FOUND')
+    assert.ok(!err.message.includes(PHRASE), `错误面不得泄漏短语: ${err.message}`)
+    assert.ok(err.message.includes('已整段脱敏'), err.message)
+    // 无短语时不误伤
+    const clean = asToolError(new AgentToolError('NOT_FOUND', 'run run-none000 not found'), [], list)
+    assert.ok(clean.message.includes('run-none000'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

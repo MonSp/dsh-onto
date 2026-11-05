@@ -23,10 +23,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 
 ## 验证阶梯（改动后必跑）
 
-1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（73 项验收测试全绿）。
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（83 项验收测试全绿）。
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`；backend 另跑 `pnpm run test`
-   （agent 工具/技能纯函数，87 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
+   （agent 工具/技能纯函数，110 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
 3. `scripts/dump-config.ps1` — 硬断言 `@dsh-onto/backend`、`@dsh-onto/workbench` 均在组合结果中。
 4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「dsh-onto」→ 五个 tab
    （包管理/建模/知识库/校验派生/场景运行）；选中 aml-analysis@1.0.0 → 场景运行
@@ -34,6 +34,11 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
    再开一个会话让 agent 调 `run_scenario` 工具（数据同上），工具结果含 ruleId/证据链/
    humanReviewRequired=true、禁语扫描零命中。
    重启前先杀 3080 旧监听；Tabbit 用 `localhost:3808`/`localhost:3080`（勿用 127.0.0.1）。
+5. 运行历史与审计留痕冒烟（run-insight）：`examples/aml-run.json` 两轮运行（第二轮 fork
+   改权重）→ `compare_runs`（或 CLI `runs compare`）出命中增删与分数 delta →
+   `export_audit` 落盘 `runs/exports/` 且人审面含 ruleId/证据链/审计项 → 工具 content +
+   render 禁语零命中 → `run_scenarios` 批量 aml+med 全场景过装配断言 → workbench
+   场景运行 tab 运行记录/两轮对比/导出 locator 可见。
 
 ## 核心模块地图（core/src/）
 
@@ -46,12 +51,15 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 | `derive.ts` / `loadgate.ts` | 派生链 + manifest 指纹 + DERIVED_DRIFT 门禁 |
 | `rules.ts` | 表达式求值（无 eval）+ 排除→打分 |
 | `scenario.ts` / `audit.ts` | 六槽位派发 + 三层闭合审计 + 禁语扫描 |
+| `runstore.ts` | RunRecord 运行留痕（runs/ 落盘 + phrase 持久后端）+ 两轮对比 + 审计归档 |
 | `knowledge.ts` / `llm.ts` | 五类原料解析、人审队列、物化；HeuristicLlm / DeepSeekLlm |
-| `cli.ts` | `dsh-onto package/validate/derive/gate/run/knowledge` |
+| `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge` |
 
 ## 常见故障
 
 - **wire 调用 404**：backend 同时有 default export + named `apply` → loader 丢弃 apply。
+- **wire 新方法 `api.X is not a function`**：`backend/src/client.ts` 的 `allDescriptors`
+  是手工描述符表，新增 `@Remote` 方法必须同步登记（并重启 dsh host），否则客户端命名空间不可见。
 - **`cannot get property without inject`**：client `inject` 缺 `remote.ontoXxx`。
 - **后端找不到数据目录**：`profileContext.dir` 不可用（不在 dsh profile 里跑）。
 - **pnpm overrides 位置**：`pnpm-workspace.yaml`（不读 package.json `pnpm.overrides`）。

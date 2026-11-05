@@ -16,28 +16,46 @@ import {
   KnowledgeStore,
   PackageWorkspace,
   SOURCE_TYPES,
+  buildRunRecord,
+  compareRunRecords,
+  exportRunArchive,
   isInsideDir,
   isSafeRelPath,
   loadPackage,
+  loadRunRecord,
+  loadRunRedlines,
   runScenario,
+  saveRunRecord,
   verifyDerived,
   type KnowledgeSourceRecord,
   type OntologyPackage,
+  type RunArchive,
+  type RunDiff,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SourceType,
 } from '@dsh-onto/core'
 import {
   AgentToolError,
+  assertBatchContract,
+  assertDiffContract,
   assertRunContract,
+  asToolError,
   collectPhrases,
+  configurePhraseStore,
   enforceOutputPolicy,
   isRecord,
   registerServerDir,
   rememberPhrases,
+  renderBatchText,
+  renderExportText,
+  renderRunDiffText,
   renderRunText,
   retreatPhraseEcho,
   toolExecute,
+  type BatchRunItem,
+  type BatchRunOutput,
+  type BatchRunSummary,
 } from './agent-policy.js'
 import {
   assertDatasetGranted,
@@ -361,6 +379,36 @@ function redlinesForArgs(
   }
 }
 
+/** diff/export 入参的错误面红线：涉及 RunRecord 的 redlines ∪ 工作区全场景红线
+ * （目标记录不存在/损坏时亦有完整退避源——runId 本身可撞红线，NOT_FOUND 回显不得漏出）。 */
+export function redlinesForRuns(ws: PackageWorkspace, args: unknown): string[] {
+  const a = isRecord(args) ? args : {}
+  const out = new Set<string>(workspaceRedlines(ws))
+  for (const key of ['runId', 'runIdA', 'runIdB'] as const) {
+    const id = a[key]
+    if (typeof id !== 'string') continue
+    for (const p of loadRunRedlines(ws.root, id) ?? []) out.add(p)
+  }
+  return [...out]
+}
+
+/** 工作区全部包的场景红线（错误面退避的完整源；getter 求值于 catch 内，自身不得抛）。 */
+function workspaceRedlines(ws: PackageWorkspace): string[] {
+  const out = new Set<string>()
+  try {
+    for (const v of ws.listVersions()) {
+      try {
+        for (const p of phrasesOfPkg(loadPackage(v.dir))) out.add(p)
+      } catch {
+        /* 畸形包跳过：退避清单允许不完整，禁止因它再抛 */
+      }
+    }
+  } catch {
+    /* listVersions 理论 FS 竞态：退避 getter 永不裸抛 */
+  }
+  return [...out]
+}
+
 /**
  * 工具出口收窄桥：core 的 interface 返回值与 defineTool 按 output.schema 推断的
  * `InferValue<O>` 结构性不兼容（interface 无隐式索引签名，嵌套数组元素不满足
@@ -369,6 +417,117 @@ function redlinesForArgs(
  */
 function toolOut<T, R>(value: T): R {
   return value as unknown as R
+}
+
+/** 批量条目摘要（S2.3）：只回执行摘要，完整结果以 RunRecord 落盘供 compare/export 跟进。 */
+export function summarizeRunResult(result: ScenarioRunResult): BatchRunSummary {
+  return {
+    candidateCount: result.candidates.length,
+    hitRuleCount: new Set(result.candidates.flatMap((c) => c.hitRuleIds)).size,
+    excludedCount: result.excluded.length,
+    auditPassed: result.audit.passed === true,
+    forbiddenPhraseHitCount: result.audit.forbiddenPhraseHits.length,
+    humanReviewRequired: true,
+  }
+}
+
+export const BATCH_RUN_LIMIT = 32
+
+/** export_audit 摘要（S2.4）：模型面只回结构化计数与 workspace 相对 locator，零短语零绝对路径。 */
+export interface ExportRunSummary {
+  exported: true
+  runId: string
+  locator: string
+  auditPassed: boolean
+  candidateCount: number
+  hitRuleCount: number
+  excludedCount: number
+  forbiddenPhraseHitCount: number
+  humanReviewRequired: true
+}
+
+export function exportSummaryOf(exported: { locator: string; archive: RunArchive }): ExportRunSummary {
+  const s = summarizeRunResult(exported.archive.result)
+  return {
+    exported: true,
+    runId: exported.archive.runId,
+    locator: exported.locator,
+    auditPassed: s.auditPassed,
+    candidateCount: s.candidateCount,
+    hitRuleCount: s.hitRuleCount,
+    excludedCount: s.excludedCount,
+    forbiddenPhraseHitCount: s.forbiddenPhraseHitCount,
+    humanReviewRequired: true,
+  }
+}
+
+/** 解析批量场景清单：缺省（undefined/null/空数组）全场景；显式列表去重保序，错型 fail-fast。 */
+export function resolveBatchIds(scenarioIds: unknown, pkg: OntologyPackage): string[] {
+  if (scenarioIds === undefined || scenarioIds === null) {
+    return pkg.scenarios.map((s) => s.id)
+  }
+  if (!Array.isArray(scenarioIds)) {
+    throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要数组')
+  }
+  if (scenarioIds.length === 0) {
+    return pkg.scenarios.map((s) => s.id)
+  }
+  if (scenarioIds.some((x) => typeof x !== 'string' || x === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要非空字符串条目')
+  }
+  return [...new Set(scenarioIds as string[])]
+}
+
+/**
+ * 批量执行（S2.3）：逐项复用 run_scenario 既有契约（装配断言/禁语/落盘），
+ * 单项失败落受控信封不中断批次；包级前置失败（上限/门禁/收权）由调用方 fail-loud。
+ */
+export function runScenarioBatch(input: {
+  ws: PackageWorkspace
+  pkg: OntologyPackage
+  versionDir: string
+  dataset: RuntimeDataset
+  ids: readonly string[]
+}): BatchRunOutput {
+  const { ws, pkg, versionDir, dataset, ids } = input
+  if (ids.length > BATCH_RUN_LIMIT) {
+    throw new AgentToolError('INVALID_ARGS', `批量上限 ${BATCH_RUN_LIMIT} 个场景（收到 ${ids.length}）`)
+  }
+  const pkgRedlines = phrasesOfPkg(pkg)
+  const results: BatchRunItem[] = []
+  for (const scenarioId of ids) {
+    const scenario = pkg.scenarios.find((s) => s.id === scenarioId)
+    const reds = scenario?.outputContract.forbiddenPhrases ?? []
+    try {
+      if (scenario === undefined) {
+        throw new AgentToolError('NOT_FOUND', `场景 ${scenarioId} 不存在`)
+      }
+      const result = runScenario(versionDir, scenarioId, dataset)
+      assertRunContract(result)
+      const phrases = collectPhrases(result, reds)
+      saveRunRecord(
+        ws.root,
+        buildRunRecord({
+          package: { name: pkg.meta.name, version: pkg.meta.version },
+          dataset,
+          result,
+          redlines: phrases,
+        }),
+      )
+      rememberPhrases(result.runId, phrases)
+      results.push({
+        scenarioId,
+        status: 'ok',
+        runId: result.runId,
+        summary: summarizeRunResult(result),
+      })
+    } catch (e) {
+      // 失败隔离：单项错误落受控信封（机器码 + 整段禁语退避），不中断批次。
+      const err = asToolError(e, [], pkgRedlines)
+      results.push({ scenarioId, status: 'error', error: { code: err.code, message: err.message } })
+    }
+  }
+  return { results, humanReviewRequired: true }
 }
 
 /** 场景清单渲染（render 与测试共用）。 */
@@ -392,6 +551,8 @@ export function apply(ctx: Context): void {
   registerServerDir(dataDir)
   const ws = new PackageWorkspace(join(dataDir, 'workspace'))
   const knowledge = new KnowledgeStore(dataDir)
+  // 短语清单持久后端（S2.1）：跨进程 recall 回读 RunRecord.redlines。
+  configurePhraseStore((runId) => loadRunRedlines(ws.root, runId))
 
   const load = (pkgName: string, version: string): OntologyPackage =>
     loadToolPackage(ws, pkgName, version)
@@ -599,11 +760,169 @@ export function apply(ctx: Context): void {
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
           const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
+          // 运行留痕（S2.1）：掩蔽前完整结果 + 双源红线落盘（人审面；模型面出口仍走掩蔽）。
+          saveRunRecord(
+            ws.root,
+            buildRunRecord({
+              package: { name: pkg.meta.name, version: pkg.meta.version },
+              dataset,
+              result,
+              redlines: phrases,
+            }),
+          )
           rememberPhrases(result.runId, phrases)
           return toolOut(enforceOutputPolicy(result, phrases))
         },
         [],
         (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'compare_runs',
+      description:
+        '对比两轮场景运行记录（命中规则增删、风险分 delta、待核实变化、排除变化）。' +
+        '跨版本/跨场景均可比；结果供人审参考，humanReviewRequired 恒为 true。只读。',
+      parameters: {
+        runIdA: { type: 'string', required: true, description: '基准运行 ID（如 run-abc12345）' },
+        runIdB: { type: 'string', required: true, description: '对比运行 ID（如 run-def67890）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runIdA: { type: 'string', required: true },
+            runIdB: { type: 'string', required: true },
+            scenarioA: { type: 'string', required: true },
+            scenarioB: { type: 'string', required: true },
+            packageA: { type: 'json', required: true },
+            packageB: { type: 'json', required: true },
+            sameDataset: { type: 'boolean', required: true },
+            candidates: { type: 'json', required: true },
+            excludedAdded: { type: 'json', required: true },
+            excludedRemoved: { type: 'json', required: true },
+            auditPassedA: { type: 'boolean', required: true },
+            auditPassedB: { type: 'boolean', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) =>
+          textBlock(renderRunDiffText(value as unknown as RunDiff, redlinesForRuns(ws, args))),
+      },
+      execute: toolExecute(
+        (args: { runIdA: string; runIdB: string }) => {
+          const a = loadRunRecord(ws.root, args.runIdA)
+          const b = loadRunRecord(ws.root, args.runIdB)
+          const diff = compareRunRecords(a, b)
+          assertDiffContract(diff)
+          const phrases = [...new Set([...a.redlines, ...b.redlines].filter((p) => p !== ''))]
+          return toolOut(enforceOutputPolicy(diff, phrases))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'run_scenarios',
+      description:
+        '批量运行包内场景（同一份数据多场景视角；scenarioIds 缺省为包内全部场景，上限 32）。' +
+        '单项失败不中断批次；完整结果落运行记录（run-xxxxxxxx），可跟 compare_runs / export_audit。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '包版本' },
+        scenarioIds: {
+          type: 'array',
+          description: '场景 ID 列表；缺省为包内全部场景',
+        },
+        datasetPath: {
+          type: 'string',
+          description: '数据集 JSON 文件路径（与 dataset 二选一）',
+        },
+        dataset: {
+          type: 'json',
+          description: '内联 RuntimeDataset（与 datasetPath 二选一）',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            results: { type: 'json', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) =>
+          textBlock(renderBatchText(value as unknown as BatchRunOutput, redlinesForArgs(ws, args))),
+      },
+      execute: toolExecute(
+        (args: {
+          name: string
+          version: string
+          scenarioIds?: unknown
+          datasetPath?: string
+          dataset?: unknown
+        }) => {
+          const dataset = loadDatasetFromArgs(args)
+          const pkg = load(args.name, args.version)
+          const versionDir = ws.versionDir(args.name, args.version)
+          const contracts = readToolContracts(versionDir)
+          assertDatasetGranted(dataset, contracts)
+          const ids = resolveBatchIds(args.scenarioIds, pkg)
+          const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids })
+          assertBatchContract(out)
+          // 出口遮蔽基准：包内全部场景红线（覆盖假场景 ID 回显撞红线形态）。
+          return toolOut(enforceOutputPolicy(out, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'export_audit',
+      description:
+        '导出一轮运行的审计归档（ruleHitLog、审计项、证据链、时间线）到工作区 runs/exports/ 供人审留痕。' +
+        '返回摘要与 workspace 相对 locator；重复导出覆盖幂等。只读数据 + 固定导出目录。',
+      parameters: {
+        runId: { type: 'string', required: true, description: '运行 ID（如 run-abc12345）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            exported: { type: 'boolean', required: true, const: true },
+            runId: { type: 'string', required: true },
+            locator: { type: 'string', required: true },
+            auditPassed: { type: 'boolean', required: true },
+            candidateCount: { type: 'number', required: true },
+            hitRuleCount: { type: 'number', required: true },
+            excludedCount: { type: 'number', required: true },
+            forbiddenPhraseHitCount: { type: 'number', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) =>
+          textBlock(renderExportText(value as unknown as ExportRunSummary, redlinesForRuns(ws, args))),
+      },
+      execute: toolExecute(
+        (args: { runId: string }) => {
+          // 固定导出目录（S2.4）：不接受调用方路径，无路径面可攻击。
+          const exported = exportRunArchive(ws.root, args.runId)
+          const summary = exportSummaryOf(exported)
+          return toolOut(enforceOutputPolicy(summary, exported.archive.redlines))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
       ),
     }),
   )

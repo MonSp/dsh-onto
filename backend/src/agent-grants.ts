@@ -17,7 +17,7 @@ import {
 } from '@dsh-onto/core'
 import { AgentToolError, isRecord } from './agent-policy.js'
 
-/** 全部 dsh-onto 工具名；guard 只作用于本工具面。 */
+/** 全部 dsh-onto 工具名；guard 只作用于本工具面（新工具必须补进此表，否则 guard 静默跳过）。 */
 export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'list_packages',
   'get_package',
@@ -25,6 +25,9 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'list_tool_contracts',
   'list_scenarios',
   'run_scenario',
+  'run_scenarios',
+  'compare_runs',
+  'export_audit',
   'upload_knowledge_source',
 ])
 
