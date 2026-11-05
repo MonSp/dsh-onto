@@ -17,7 +17,7 @@ render 遮蔽）；工具面新增 `compare_runs` / `run_scenarios`（失败隔�
 P2 策略层（value 闸+render 闸+错误信封）并补 I1–I5 同族攻击面用例；`OntoRuntime` 扩
 listRuns/showRun/compareRuns/exportAudit 四 wire 方法（含 backend/src/client.ts 手工
 描述符表登记）；workbench 场景运行 tab 增运行记录/两轮对比/导出薄视图；CLI 增
-`runs list|show|compare|export` 且 `run` 落盘 RunRecord；版本 0.2.0，AGENTS.md 验证阶梯
+`runs list|show|compare|export` 且 `run` 落盘 RunRecord；版本 0.1.3，AGENTS.md 验证阶梯
 增第 5 步。评审 1 critical + 2 major（export render 缺闸、batch render 清单窄于全红线、
 runId-only 错误面退避空清单）修复后聚焦复审「五项同族全封，可合并」。
 
@@ -190,7 +190,7 @@ humanReviewRequired=true；模型面产物禁语零命中；aml+med 全场景批
 
 ### [S2.8] 版本
 
-- core / backend / workbench 0.1.2 → 0.2.0（新特性）。`engines.dsh` 范围不变。
+- core / backend / workbench 0.1.2 → 0.1.3（新增能力、向后兼容，patch bump）。`engines.dsh` 范围不变。
   architecture.md 模块地图加 `runstore.ts` 行；AGENTS.md 验证阶梯扩写（S2.7 第 5 步）。
 
 ## [S3] Out of Scope 与不变量
@@ -228,7 +228,7 @@ humanReviewRequired=true；模型面产物禁语零命中；aml+med 全场景批
 - [x] T3: `run_scenarios` 批量 — acceptance: 失败隔离（坏场景单项 error 不污染其余）、批量上限、缺省全场景、包级前置失败整体拒；每项走 assertRunContract + RunRecord 落盘（covers: S2.3）（depends: T1）
 - [x] T4: `export_audit` 工具 + `exportRunArchive` — acceptance: 归档含完整审计/证据链/时间线；工具返回摘要零短语、locator 相对路径；重复导出覆盖幂等（covers: S2.4）（depends: T1）
 - [x] T5: OntoRuntime wire 四方法 + workbench 运行历史/diff 薄视图 — acceptance: dev-web 冒烟可见历史列表、两轮 diff 表、导出 locator；wire 人审面完整短语可见（covers: S2.5）（depends: T2）
-- [x] T6: CLI `runs` 组 + 版本 0.2.0 + AGENTS.md/architecture.md 更新 — acceptance: `runs list|show|compare|export` 全命令跑通；既有 `run` 不回归；验证阶梯第 5 步定稿（covers: S2.6, S2.8）（depends: T1, T2, T3, T4）
+- [x] T6: CLI `runs` 组 + 版本 0.1.3 + AGENTS.md/architecture.md 更新 — acceptance: `runs list|show|compare|export` 全命令跑通；既有 `run` 不回归；验证阶梯第 5 步定稿（covers: S2.6, S2.8）（depends: T1, T2, T3, T4）
 - [x] T7: attack-surface 扩表 + 验证阶梯 1–5 全绿收口 — acceptance: 三新出口 I1–I5 同族穷举全过；core/backend 测试只增不减（地板 73/87）；阶梯 1–5 全绿（covers: S2.7）（depends: T5, T6）
 
 ## Journey log
