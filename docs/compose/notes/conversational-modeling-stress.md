@@ -196,3 +196,29 @@ L1 场景 1 / L2 读工具 25（SRC/FM 0=已知 v1.1）/ L3 技能 1（进会话
 端到端轮次 14 → 9 → 7（-50%）、闸门拦截与 fork 返工归零、agent 自带干跑/契约自检纪律。
 
 缺陷台账（D1–D13）与分期迭代计划见 [conversational-modeling-iteration-plan.md](./conversational-modeling-iteration-plan.md)。
+### C4 续跑完成（P4 实测，6 轮）
+
+| 轮 | 内容 |
+|---|---|
+| 2 | 四拍板答复（方案 A + scoreRefs 圈定/includeExcluded 新要求）→ 片 1 34 条入队；**发现我方脚本 bug：包 domain 误为 CLF**（引号替换未生效） |
+| 3 | agent 申请直写 package.yaml 修域码 → **人工拒绝** → 我走工作台 YAML 正当路径改为 TAX（磁盘核实）；agent 如实上报三选项、承诺不绕过；片 1 物化 34/34 → 片 2 37 条入队 |
+| 4 | 片 2 物化 37/37（warn 19→24 预判精确）→ 片 3 六条入队（三场景 scoreRefs×7/exclusionRefs×3/includeExcluded 仅虚开 + 三组 RedLine） |
+| 5 | 片 3 物化 6/6 → **终态 74/74、error 0 / warn 0、域码 TAX** |
+| 6 | **D11「签发前预检」一键实测通过**（校验 100/0/0 → 派生 20/5 → 门禁绿 → 转人工）→ 送审 → 签发 ISSUED（锚点 manifestDigest 落盘）→ 签发后重派生 → 验收全绿 |
+| 验收 | 三场景冒烟：**scoreRefs 每场景仅命中 7 条、范围外 0 命中 0 待核实、上限 0.60**；**includeExcluded 排除件仅虚开进复核队列**；禁语 0、三层闭合 ×3、audit.passed ×3；run-b233f756 / run-50534288 / run-6fbe6ee4 归档；L1–L5 + 3 专家（打分步 llm:forbidden）；tax-risk-backlog.md 按 P-2 新口径落盘（P0/P1/P2 + 约束 + 待拍板） |
+
+### P4 实测结论（特性矩阵）
+
+| 特性 | 实测结果 |
+|---|---|
+| scoreRefs（D13） | ✓ 三场景各 7 条圈定，范围外规则零求值、零 pendingChecks 污染，权重和 0.60 精确 |
+| includeExcluded（P-1） | ✓ 仅虚开场景排除件进 requireReviewFor，另两场景不进 |
+| 签发前预检（D11） | ✓ 一键三步清单全绿并给出转人工提示 |
+| 清单视图待审草案（D4） | ✓ 「待审草案：34」+ 逐条明细（name/kind/layer/conf）实时可见 |
+| backlog.md（P-2） | ✓ agent 按新约定写会话工作区 tax-risk-backlog.md（P0/P1/P2 分级） |
+| RedLine 通道（D5 预防） | ✓ 三组禁语全程走 RedLine，未触发 CONCLUSION_BLOCKED（引导技能生效） |
+| 对话建包（D3） | 本轮包建于 D3 落地前（人工 UI），单测已覆盖；实测待下一个小案 |
+| 恢复路径 | 域码事故：拒绝直写 → 工作台 YAML 修复 → 复核继续，零重建零丢稿 |
+
+度量：6 轮到验收 PASS（骨架轮 1 + 内容 5）；人审驳回 0；骨架外越界 0；每批 warn 预判全部命中。
+环境摩擦（非平台）：宿主重启后浏览器 localhost 连接池僵死，改走 127.0.0.1 恢复。
