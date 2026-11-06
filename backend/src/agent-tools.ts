@@ -1113,6 +1113,7 @@ export function apply(ctx: Context): void {
         + '标量字段覆盖、weights 按键并入、数组整替，append.<字段>=[…] 追加去重（如给行为接关系）。'
         + '改 ScoreRule.weight 会联动归一（显式权重为准，未动规则吸收残差，并同步技能模板权重）。'
         + '置信度 <0.75 自动 forcedReview；结论性表述只能 targetKind=RedLine。'
+        + '平台建模全流程（骨架人工确认 → 分片起草 → 人审 → 签发派生）见 onto-modeling 技能正文。'
         + '可选 turnText 同时落 CONVERSATION 原料留痕（P3，含 turnId/rationale）。ISSUED 包拒绝（先 fork）。',
       parameters: {
         packageId: { type: 'string', required: true, description: '目标包 ID（name@version，如 aml-analysis@1.0.0）' },
