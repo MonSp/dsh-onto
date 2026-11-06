@@ -32,6 +32,9 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | D12 | 工具 | datasetPath 围栏（进程 cwd，I3 设计）不可发现 → 参数描述/越界报错明示围栏语义与 dataset 内联恢复路径 | 3e9c9d7 |
 | D4 | 产品 | 清单视图不显示待审草案 → 计数+明细+恢复提示（随 reload 刷新） | 3e9c9d7 |
 | DOC-1 | 文档 | 骨架提案模板补 SRC/FM 绑定段（预算单列、防误判骨架外新增） | 3e9c9d7 |
+| P-1 | 引擎 | 否决件不进人工队列 → `reviewGate.includeExcluded`（缺省 false 兼容；create/update 持久化、坏类型起草即拒） | 8116210 |
+| D11 | 产品 | 签发前人工链 ≈8 步 UI → 校验派生 tab「签发前预检」一键串 校验写盘→派生→门禁，全绿提示转人工签发 | 8116210 |
+| P-2 | 产品+文档 | v1.1 待办沉淀口径 → 包根 `backlog.md` 附属文件（exportVersion 读面携带、不入 listSourceFiles/派生摘要——改待办零漂移、fork 自动携带）+ 清单视图展示卡 + 引导技能约定 | 8116210 |
 | — | 文档 | spec 口径同步（update fail-loud、refs 运行收窄、scoreRefs、多场景拍板）、测试计数 110/121 | 5513832, 66b021d |
 
 ### 已拍板待修（0 项：D3 已于 087d630 完成并入 PR #5）
@@ -75,7 +78,7 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | **P0 已完成** | D1/D6/D7/D9/D10/D13 + spec/计数（8 提交在分支） | 验证阶梯全绿（110/121/2-2） |
 | **P1 已完成** | D3 对话建包/存骨架（087d630）：backend 测试 +2（123/123）、attack-surface 全表重放、引导技能与 spec 更新 | 阶梯全绿（110/123/2-2）已验 |
 | **P2 已完成** | D4 + D12 + D5 + DOC-1（3e9c9d7；D12 取保守解——不改围栏只补可发现性） | core 111 / backend 124（D5、D12 各 +1 测试）/ workbench build+check / dump-config 2-2 全绿 |
-| **P3 结构包（待拍板）** | D11 签发前一键预检 + P-1 否决件队列开关 + P-2 backlog 沉淀口径 | 按项单独设计评审 |
+| **P3 已完成** | P-1 + D11 + P-2（8116210；P-2 实现按「包根规范位 + 读面不入摘要」落地，规避改待办触发 DERIVED_DRIFT 的坑） | core 114 / backend 124 / workbench build+check / dump-config 2-2 全绿 |
 | **P4 验证（测试已叫停，待指令）** | 若需回归实测：优先**续跑 C4-TAX 内容起草**（骨架已就位、三场景+scoreRefs 是新特性唯一实测面）；C5-MIC 视需要补「深层生命周期」特征 | 一轮骨架外流程：分片→签发→派生→三场景验收 |
 
 > 执行依赖：P1 完成后宿主需重启加载新 dist；P0/P1 均不动 harness（只读约束满足）。
@@ -93,6 +96,6 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 
 ## 五、分支与提交现状
 
-`feat/multi-domain-stress`：13 提交（5 fix / 3 feat / 5 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0+P1+P2 完成；P3（D11/P-1/P-2）起待拍板；
+`feat/multi-domain-stress`：15 提交（5 fix / 4 feat / 6 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P3 全部完成（P4 验证待指令）；
 C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
 C1–C3 三个 ISSUED 包留在 dsh profile 数据目录，作为后续 P4 回归夹具。

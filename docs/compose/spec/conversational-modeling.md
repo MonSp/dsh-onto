@@ -127,6 +127,10 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - **红线纪律不变**：conclusionLike 只落 `forbiddenPhrases`，禁入输出契约；
   confidence < 0.75 强制人审；weight 合计 = 1.0 与 SKL 同权校验照旧（改权重经
   update 语义联动归一，见上；SKL 同权由归一同步，消除手抄）。
+- **v1.1 待办沉淀（P2 拍板）**：规范位 = 包根 `backlog.md`——附属文件，`exportVersion`
+  读面携带（工作台清单/YAML 导入可读写），但**不入 `listSourceFiles`/派生摘要/loadgate**
+  （改待办不触发 `DERIVED_DRIFT`）；fork 整目录复制自动携带。对话中 agent 先写会话工作区
+  `<包名>-backlog.md` 草稿，定稿条目由用户粘贴进包根；逐条格式：条目 / 理由 / 预估 ID 数。
 
 ## [P4] O→L 派生与 dsh 落地
 
