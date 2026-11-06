@@ -747,7 +747,7 @@ const UPDATABLE: Record<string, string[]> = {
   ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate'],
   ExclusionRule: ['name', 'action', 'factor', 'condition'],
   SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
-  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'outputContract', 'reviewGate', 'auditChecks'],
+  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
   ApiSource: ['name', 'sourceType', 'endpoint'],
 }
@@ -1020,6 +1020,13 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
               { stepId: 's5', stepType: 'AUDIT_CHECK' },
               { stepId: 's6', stepType: 'HUMAN_REVIEW' },
             ],
+        // v1.1 引用位：缺省 = 全部（不落键）；显式数组 = 限定范围
+        ...(Array.isArray(p['behaviorRefs'])
+          ? { behaviorRefs: (p['behaviorRefs'] as string[]).map(String) }
+          : {}),
+        ...(Array.isArray(p['exclusionRefs'])
+          ? { exclusionRefs: (p['exclusionRefs'] as string[]).map(String) }
+          : {}),
         // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里
         outputContract: {
           mustInclude: Array.isArray(p['mustInclude'])

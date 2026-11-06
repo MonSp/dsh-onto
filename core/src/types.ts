@@ -158,6 +158,13 @@ export interface O3ScenarioCard {
   inputs: O3Input[]
   outputs: { fields: string[] }
   pipeline: O3PipelineStep[]
+  /**
+   * 本场景 BEHAVIOR_CALL 步执行的行为范围（conversational-modeling v1.1）。
+   * 缺省 = 全部行为（向后兼容）；显式数组 = 限定范围，元素须闭合。
+   */
+  behaviorRefs?: string[]
+  /** 本场景 before-scoring 步执行的排除规则范围；缺省 = 全部，显式数组须闭合。 */
+  exclusionRefs?: string[]
   outputContract: O3OutputContract
   reviewGate: O3ReviewGate
   /** 三层闭合闸门清单，如 [O1_CLOSED, O2_CLOSED, O3_CLOSED]。 */

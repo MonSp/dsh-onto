@@ -202,6 +202,9 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       inputs: sc.inputs,
       outputs: sc.outputs,
       pipeline: sc.pipeline,
+      // v1.1 引用位：显式范围随编排下发；缺省 = 全部（不落键）
+      ...(sc.behaviorRefs ? { behaviorRefs: sc.behaviorRefs } : {}),
+      ...(sc.exclusionRefs ? { exclusionRefs: sc.exclusionRefs } : {}),
       outputContract: sc.outputContract,
       reviewGate: sc.reviewGate,
     })),

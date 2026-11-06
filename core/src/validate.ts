@@ -155,6 +155,17 @@ export function validatePackage(
         if (!resolved(skillId)) err('REF_UNCLOSED', `SCN ${sc.id}`, `skillRefs 引用未闭合: ${skillId}`)
       }
     }
+    // behaviorRefs/exclusionRefs（v1.1 引用位）：缺省 = 全部；显式数组须指向同类型元素
+    for (const bhvId of sc.behaviorRefs ?? []) {
+      if (!pkg.behaviors.some((b) => b.id === bhvId)) {
+        err('REF_UNCLOSED', `SCN ${sc.id}`, `behaviorRefs 引用未闭合: ${bhvId}`)
+      }
+    }
+    for (const ruleId of sc.exclusionRefs ?? []) {
+      if (!pkg.exclusionRules.some((r) => r.id === ruleId)) {
+        err('REF_UNCLOSED', `SCN ${sc.id}`, `exclusionRefs 引用未闭合: ${ruleId}`)
+      }
+    }
   }
 
   /* ── error: 属性可解析 + 字典可解析（属性表内） ───────────────────────── */

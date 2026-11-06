@@ -101,6 +101,11 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
   显式权重为准、未动规则按比例吸收残差至合计 1.0，并同步技能模板权重（同权口径；
   同批多条权重更新须经 `apply_draft` 的 `candidateIds` **同批物化**，一次归一——
   逐条物化会互相打架）。
+- **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?`
+  ——场景与行为、排除规则的关联显式化（此前是「全部都用」的隐式约定）。**缺省 =
+  全部**（向后兼容，不落键）；显式数组 = 限定范围，元素须指向同类型且闭合
+  （悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发；
+  `SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
 - **ID 骨架门**：skeleton 确认前不得物化任何元素；分片阶段新增骨架外 ID → 校验
   error（`SKELETON_OUT_OF_SCOPE`），防 ID 漂移。口径：skeleton.ids 是**全量 Schema
   元素 ID 清单**（含 `dict-*`，不含 `OBJ.attr` 属性引用）——门禁只约束**新增 ID**；

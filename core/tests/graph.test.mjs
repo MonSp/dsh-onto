@@ -638,3 +638,49 @@ test('op=update：校验与幂等、图谱 targetId 引用边、骨架门口径�
     rmWorkspace(root)
   }
 })
+
+test('v1.1 引用位：场景卡 create/update 携带 behaviorRefs/exclusionRefs', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // update：给既有场景补引用位
+    const u = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '场景接线', payload: { behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-refs' },
+    })
+    store.reviewCandidate(u.id, 'approve')
+    const r = store.materialize(dir, [u.id])
+    assert.deepEqual(r.applied, [u.id], JSON.stringify(r.skipped))
+
+    // create：新场景带引用位
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', name: '新场景',
+        payload: {
+          id: 'SCN-TST-2', name: '新场景', goal: 'g', boundary: 'b',
+          behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'],
+        },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-refs' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r2 = store.materialize(dir, [c.id])
+    assert.deepEqual(r2.applied, [c.id], JSON.stringify(r2.skipped))
+
+    const after = loadPackage(dir)
+    const s1 = after.scenarios.find((x) => x.id === 'SCN-TST-1')
+    assert.deepEqual(s1.behaviorRefs, ['BHV-TST-X'], 'update 携带引用位')
+    const s2 = after.scenarios.find((x) => x.id === 'SCN-TST-2')
+    assert.deepEqual(s2.behaviorRefs, ['BHV-TST-X'])
+    assert.deepEqual(s2.exclusionRefs, ['RULE-TST-E1'], 'create 携带引用位')
+  } finally {
+    rmWorkspace(root)
+  }
+})
