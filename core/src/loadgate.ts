@@ -64,11 +64,13 @@ export function verifyDerived(versionDir: string): LoadGateResult {
     }
   }
 
-  // 库外锚点：签发记录里的 manifest sha256（若登记过）必须吻合
+  // 库外锚点：仅当最后一条签发记录属于**当前版本**时才校验——
+  // fork 会原样携带上一版本的 issueRecord（含其 manifestDigest），
+  // 旧版本锚点对新 manifest 必然失配，不得阻断新版本门禁（D15）。
   try {
     const meta = readPackageMeta(versionDir)
     const last = meta.issueRecord[meta.issueRecord.length - 1]
-    if (last?.manifestDigest) {
+    if (last && last.version === meta.version && last.manifestDigest) {
       const manifestSha = sha256Text(readFileSync(join(versionDir, 'derived/manifest.yaml'), 'utf8'))
       if (manifestSha !== last.manifestDigest) {
         return {

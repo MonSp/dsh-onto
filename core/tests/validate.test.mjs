@@ -234,3 +234,88 @@ test('scoreRefs 引用位：闭合校验 + 悬空/错类型 → REF_UNCLOSED', (
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-GONE')))
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-E1')), '排除规则不能进 scoreRefs')
 })
+
+test('D14：场景阈值超过 scoreRefs 圈内权重和 → REVIEW_GATE_UNREACHABLE（闸值不可达）', () => {
+  const base = minimalPkg()
+  const rules = [
+    { id: 'RULE-TST-S1', name: '规则一', weight: 0.6, expression: 'min(1, f1)', threshold: 0.5, evidenceTemplate: 'f1 = {f1}' },
+    { id: 'RULE-TST-S2', name: '规则二', weight: 0.4, expression: 'min(1, f2)', threshold: 0.5, evidenceTemplate: 'f2 = {f2}' },
+  ]
+  const skills = [
+    { id: 'SKL-TST-N', name: '叙述', weights: { 'RULE-TST-S1': 0.6, 'RULE-TST-S2': 0.4 }, steps: [], outputTemplate: '' },
+  ]
+  // 圈内和 0.6、阈值 0.75 → 不可达
+  const bad = minimalPkg({
+    scoreRules: rules,
+    skillTemplates: skills,
+    scenarios: [{
+      ...base.scenarios[0],
+      scoreRefs: ['RULE-TST-S1'],
+      reviewGate: { required: true, threshold: 0.75 },
+    }],
+  })
+  const v1 = validatePackage(bad)
+  assert.ok(
+    v1.errors.some((e) => e.code === 'REVIEW_GATE_UNREACHABLE' && e.message.includes('0.75')),
+    '阈值>圈内和必须报错: ' + JSON.stringify(v1.errors),
+  )
+  // 阈值 == 圈内和 → 允许（理论可达）
+  const edge = minimalPkg({
+    scoreRules: rules,
+    skillTemplates: skills,
+    scenarios: [{
+      ...base.scenarios[0],
+      scoreRefs: ['RULE-TST-S1'],
+      reviewGate: { required: true, threshold: 0.6 },
+    }],
+  })
+  const v2 = validatePackage(edge)
+  assert.ok(!v2.errors.some((e) => e.code === 'REVIEW_GATE_UNREACHABLE'), '阈值=圈内和应通过')
+  // 无 scoreRefs（包级和=1.0）阈值 0.75 → 不受影响
+  const noRefs = minimalPkg({
+    scoreRules: rules,
+    skillTemplates: skills,
+    scenarios: [{ ...base.scenarios[0], reviewGate: { required: true, threshold: 0.75 } }],
+  })
+  const v3 = validatePackage(noRefs)
+  assert.ok(!v3.errors.some((e) => e.code === 'REVIEW_GATE_UNREACHABLE'), '缺省场景不受此检查影响')
+})
+
+test('D14-warn：阈值超过圈内权重和 90% → REVIEW_GATE_TIGHT（仅近满分可触发）', () => {
+  const base = minimalPkg()
+  const rules = [
+    { id: 'RULE-TST-S1', name: '规则一', weight: 0.6, expression: 'min(1, f1)', threshold: 0.5, evidenceTemplate: 'f1 = {f1}' },
+    { id: 'RULE-TST-S2', name: '规则二', weight: 0.4, expression: 'min(1, f2)', threshold: 0.5, evidenceTemplate: 'f2 = {f2}' },
+  ]
+  const skills = [
+    { id: 'SKL-TST-N', name: '叙述', weights: { 'RULE-TST-S1': 0.6, 'RULE-TST-S2': 0.4 }, steps: [], outputTemplate: '' },
+  ]
+  // 圈内和 0.6：阈值 0.56（>0.54 且 ≤0.6）→ tight warn，不 error
+  const pkg = minimalPkg({
+    scoreRules: rules,
+    skillTemplates: skills,
+    scenarios: [{
+      ...base.scenarios[0],
+      scoreRefs: ['RULE-TST-S1'],
+      reviewGate: { required: true, threshold: 0.56 },
+    }],
+  })
+  const v = validatePackage(pkg)
+  assert.ok(!v.errors.some((e) => e.code === 'REVIEW_GATE_UNREACHABLE'))
+  assert.ok(
+    v.warnings.some((w) => w.code === 'REVIEW_GATE_TIGHT' && w.message.includes('0.56')),
+    '阈值>圈内和90% 须 warn: ' + JSON.stringify(v.warnings),
+  )
+  // 阈值 0.50（≤0.54）→ 无 tight warn
+  const okPkg = minimalPkg({
+    scoreRules: rules,
+    skillTemplates: skills,
+    scenarios: [{
+      ...base.scenarios[0],
+      scoreRefs: ['RULE-TST-S1'],
+      reviewGate: { required: true, threshold: 0.5 },
+    }],
+  })
+  const v2 = validatePackage(okPkg)
+  assert.ok(!v2.warnings.some((w) => w.code === 'REVIEW_GATE_TIGHT'), '阈值≤90% 不应 warn')
+})

@@ -155,3 +155,42 @@ test('scenario-orchestration 下发 behaviorRefs/exclusionRefs/scoreRefs（缺�
     rmWorkspace(b.root)
   }
 })
+
+test('D15：fork 携带的旧版本锚点——门禁按版本忽略、锚点只回写同版本条目', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    // 1.0.0 签发 + 派生 → 锚点落在 1.0.0 条目
+    ws.transition('test-pkg', '1.0.0', 'IN_REVIEW')
+    ws.transition('test-pkg', '1.0.0', 'ISSUED', '张三')
+    derivePackage(dir)
+    assert.equal(verifyDerived(dir).ok, true)
+    const original = readFileSync(join(dir, 'package.yaml'), 'utf8')
+    const digestBefore = (original.match(/manifestDigest: ([0-9a-f]+)/) || [])[1]
+    assert.ok(digestBefore, '前置：1.0.0 锚点已写入')
+
+    // 阶段 A（模拟 fork 后、重新签发前）：版本改 1.0.1、状态回 DRAFT，issueRecord 原样保留
+    const forkedA = original
+      .replace('\nversion: 1.0.0', '\nversion: 1.0.1')
+      .replace('status: ISSUED', 'status: DRAFT')
+    writeFileSync(join(dir, 'package.yaml'), forkedA, 'utf8')
+    derivePackage(dir) // DRAFT：不写锚点
+    const gateA = verifyDerived(dir)
+    assert.ok(gateA.ok, '旧版本锚点不得阻断新版本门禁: ' + gateA.reason)
+    const afterA = readFileSync(join(dir, 'package.yaml'), 'utf8')
+    assert.ok(afterA.includes('manifestDigest: ' + digestBefore), '阶段 A 不得改写历史锚点')
+
+    // 阶段 B：状态回 ISSUED（仍未追加 1.0.1 签发条目）→ 派生不得把 1.0.0 条目锚点覆写成新 manifest
+    const forkedB = afterA.replace('status: DRAFT', 'status: ISSUED')
+    writeFileSync(join(dir, 'package.yaml'), forkedB, 'utf8')
+    derivePackage(dir)
+    const afterB = readFileSync(join(dir, 'package.yaml'), 'utf8')
+    assert.ok(
+      afterB.includes('manifestDigest: ' + digestBefore),
+      '锚点只回写同版本条目：1.0.0 历史锚点不得被 1.0.1 内容覆写',
+    )
+    const gateB = verifyDerived(dir)
+    assert.ok(gateB.ok, '阶段 B 门禁应通过: ' + gateB.reason)
+  } finally {
+    rmWorkspace(root)
+  }
+})
