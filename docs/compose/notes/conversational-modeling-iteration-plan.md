@@ -1,8 +1,8 @@
 # 对话式建模整体迭代方案（压测驱动）
 
-> 依据：C1–C3 完整压测 + C4 骨架阶段（详见 [conversational-modeling-stress.md](./conversational-modeling-stress.md)）；
-> 分支 `feat/multi-domain-stress`（8 个提交）。案例测试已叫停，本文是后续迭代的事实源与执行序。
-> 验证口径恒为 AGENTS 验证阶梯：core 110 / backend 121 / workbench build+check / dump-config 2/2 / dev-web 冒烟。
+> 依据：C1–C5 完整压测（详见 [conversational-modeling-stress.md](./conversational-modeling-stress.md)）；
+> 分支 `feat/multi-domain-stress`（21 提交）。案例测试已叫停，本文是后续迭代的事实源与执行序。
+> 验证口径恒为 AGENTS 验证阶梯：core 117 / backend 124 / workbench build+check / dump-config 2/2 / dev-web 冒烟。
 
 ---
 
@@ -12,12 +12,12 @@
 禁语与 update 白名单两道闸拦出 2 次 fork 返工——14 轮才 PASS。修复 D1/D6/D7/D9 后（C2/C3）：
 引导技能首步命中、骨架 1 轮定稿、批次首过率 3/5 → 6/6、5/5、端到端 14 → 9 → 7 轮、零驳回零拦截零 fork；
 C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场景收窄）并当场拍板修复。
-**结论：链路已从「能走通」进入「可高效走通」；剩余摩擦集中在开局建包（D3）、
-人工链 UI 成本（D11）、与工具面围栏（D12）三处。**
+**结论：链路已从「能走通」进入「可高效走通」；D3/D11/D12 等摩擦点已在本分支收口，
+平台侧仅剩 D8 数值格式化 wontfix 与各包业务侧 v1.1（非平台工作）。**
 
 ## 二、缺陷台账
 
-### 已修（7 项，已入分支）
+### 已修（全部入分支；P0–P4 + 遗留待办收口）
 
 | # | 面 | 内容 | 提交 |
 |---|---|---|---|
@@ -40,39 +40,21 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | D2残 | 文档 | 引导技能补 targetKind payload 形状速查（起草前对照、省读源码） | 见本轮 |
 | — | 文档 | spec 口径同步（update fail-loud、refs 运行收窄、scoreRefs、多场景拍板）、测试计数 110/121 | 5513832, 66b021d |
 
-### 已拍板待修（0 项：D3 已于 087d630 完成并入 PR #5）
+### 已拍板待修（0 项）
 
-### 待拍板（按面分类）
+上表 D3/D4/D5/D11/D12/D2残/P-1/P-2/DOC-1 均已完成入分支；D8 见下「wontfix」。
 
-**产品面**
+### wontfix-at-present（已拍板接受）
 
-| # | 问题 | 建议 |
+| # | 问题 | 口径 |
 |---|---|---|
-| D4 | 清单视图不显示待审草案（只有画布有虚线态与计数），走清单人审会误以为无草案 | 清单视图顶部同步「待审草案 N」+分组列出；低风险小改 |
-| D11 | fork 修复一轮人工链 ≈8 个 UI 动作（校验/送审/签发人/签发/派生/门禁 ×2 版本往返） | 中期：「签发前一键预检」清单（校验写盘+门禁预跑+派生预演）；签发动作本身保持人工 |
-| P-1 | 否决件不进 requireReviewFor（C2 提出） | 属场景输出契约语义：建议 v1.1 增 `reviewGate.includeExcluded` 开关，默认 false 兼容 |
-| P-2 | v1.1 待办沉淀方式（各案 agent 自发写 backlog md，位置/格式不一） | 产品化：workbench 包内固定 `v1.1-backlog` 展示区，或知识库预留待办区；先统一约定「包根 backlog 文件」口径 |
+| D8 | fillTemplate 无数值格式化（0.8114000000000001） | C2 对话中拍板「接受长尾」；若做：模板语法加 `{{riskScore:.2f}}` 类限定 |
 
-**引擎面**
+### 滚动纪律
 
-| # | 问题 | 建议 |
+| # | 问题 | 口径 |
 |---|---|---|
-| D5 | isConclusionLike 对否定式/引用式过命中（C1「不认定骗贷」被拦）；RedLine 正确通道靠 agent 自悟 | 低优先：物化报错文案内联指路「结论性表述请走 RedLine 追加」；词表边界本身**不放宽**（纪律优先，C3 术语换词证明可绕行且体验良好） |
-| D8 | fillTemplate 无数值格式化（0.8114000000000001） | 已拍板「接受长尾」（C2 对话中确认），记 wontfix-at-present；若做：模板语法加 `{{riskScore:.2f}}` 类限定 |
-
-**工具面**
-
-| # | 问题 | 建议 |
-|---|---|---|
-| D12 | run_scenario 文件式 dataset 受进程 cwd 围栏限制，会话内只能内联 | 查 tool-face-policy 的 datasetPath 口径后定：要么白名单放行会话工作区 fixtures 目录，要么工具描述明示「文件式仅限平台工作目录」 |
-| D2残 | agent 仍会读 core 源码补 schema/表达式细节（C3/C4 各 ~20-40 步） | 增量：引导技能附「各 targetKind payload 形状速查」+ 工具描述挂关键校验规则；预期骨架轮再省 30% 步数 |
-
-**文档面**
-
-| # | 问题 | 建议 |
-|---|---|---|
-| DOC-1 | 各案 v1.1 发现 L2 数据源（SRC/FM）不在骨架默认段，接真实数据前必然补 | 骨架提案模板（引导技能正文）加「数据源绑定段（可选 v1.1）」提示，预算表单列 |
-| DOC-2 | 本方案与压测记录需随修复滚动更新 | 每合入一项修复：对应台账行打勾 + 计数同步 README/AGENTS（现行纪律） |
+| DOC-2 | 本方案与压测记录需随修复滚动更新 | 每合入一项修复：对应台账行更新 + 计数同步 README/AGENTS（现行纪律） |
 
 ## 三、分期执行序
 
@@ -100,6 +82,6 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 
 ## 五、分支与提交现状
 
-`feat/multi-domain-stress`：19 提交（5 fix / 5 feat / 9 docs），HEAD=`cfa7277` 与远端同步，已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 + 遗留待办（D3 实测/C5/D14/D15/D2残）全部完成；仅 D8 数值格式化维持 wontfix-at-present（长尾已拍板接受）；
+`feat/multi-domain-stress`：21 提交（6 fix / 5 feat / 10 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 + 遗留待办（D3 实测/C5/D14/D15/D2残）与评审 N1–N3 全部完成；仅 D8 数值格式化维持 wontfix-at-present（长尾已拍板接受）；
 C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
 C1–C3 三个 ISSUED 包留在 dsh profile 数据目录，作为后续 P4 回归夹具。

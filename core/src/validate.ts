@@ -166,7 +166,11 @@ export function validatePackage(
         err('REF_UNCLOSED', `SCN ${sc.id}`, `exclusionRefs 引用未闭合: ${ruleId}`)
       }
     }
-    // scoreRefs（D13 多场景协作）：缺省 = 全部；显式数组须指向打分规则
+    // scoreRefs（D13 多场景协作）：缺省 = 全部；显式数组须非空且指向打分规则。
+    // 空数组在运行侧 truthy 会收窄到 0 条规则（riskScore 恒 0、闸永不触发）——起草/校验即拒。
+    if (sc.scoreRefs && sc.scoreRefs.length === 0) {
+      err('REF_UNCLOSED', `SCN ${sc.id}`, 'scoreRefs 显式空数组非法（缺省=全部请省略键；限定范围请至少列 1 条打分规则）')
+    }
     for (const ruleId of sc.scoreRefs ?? []) {
       if (!pkg.scoreRules.some((r) => r.id === ruleId)) {
         err('REF_UNCLOSED', `SCN ${sc.id}`, `scoreRefs 引用未闭合: ${ruleId}`)

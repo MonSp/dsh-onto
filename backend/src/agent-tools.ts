@@ -320,8 +320,12 @@ export function createPackageForPkg(
   if (name === '' || version === '' || domain === '') {
     throw new AgentToolError('INVALID_ARGS', 'name/version/domain 均为必填非空字符串')
   }
-  // 域码进输出渲染：限定 ASCII 字母数字，兼作红线面（自由文本域码可夹带禁语）。
-  if (!/^[A-Za-z0-9]{1,12}$/.test(domain)) {
+  // 包名单段 kebab-case（与工具描述一致；路径安全另由 versionDir isPlainSegment 兜底）。
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new AgentToolError('INVALID_ARGS', `name 须为 kebab-case（小写字母数字与连字符）: ${name}`)
+  }
+  // 域码进输出渲染：限定大写字母数字，兼作红线面（自由文本域码可夹带禁语）。
+  if (!/^[A-Z0-9]{1,12}$/.test(domain)) {
     throw new AgentToolError('INVALID_ARGS', `domain 非法（大写字母数字 1–12 位）: ${domain}`)
   }
   try {
@@ -361,7 +365,7 @@ export function saveSkeletonForPkg(
   }
   const domainCode = typeof args.domainCode === 'string' ? args.domainCode.trim() : ''
   if (domainCode === '') throw new AgentToolError('INVALID_ARGS', 'domainCode 必填')
-  if (!/^[A-Za-z0-9]{1,12}$/.test(domainCode)) {
+  if (!/^[A-Z0-9]{1,12}$/.test(domainCode)) {
     throw new AgentToolError('INVALID_ARGS', `domainCode 非法（大写字母数字 1–12 位）: ${domainCode}`)
   }
   const ids = args.ids

@@ -1100,6 +1100,10 @@ test('D3 create_package：DRAFT 空包、缺参拒绝、同名同版本 PACKAGE_
     // 缺参 / 空白
     expectCode(() => createPackageForPkg(ws, { name: ' ', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
     expectCode(() => createPackageForPkg(ws, { name: 'x', version: '', domain: 'D3T' }), 'INVALID_ARGS')
+    // 包名 kebab-case、域码大写字母数字（与工具描述一致）
+    expectCode(() => createPackageForPkg(ws, { name: 'Bad_Name', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
+    expectCode(() => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'd3t' }), 'INVALID_ARGS')
+    expectCode(() => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'D3T-X' }), 'INVALID_ARGS')
     // 真实落盘且为空包
     const pkg = loadPackage(ws.versionDir('d3-demo', '1.0.0'))
     assert.equal(pkg.meta.status, 'DRAFT')

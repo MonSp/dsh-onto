@@ -299,6 +299,12 @@ test('validateDraftItem：逐条结构校验 layer/targetKind/name/payload/confi
   assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: 'x' } }), 'bad payload.reviewGate')
   assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: { threshold: 0.5 } } }), null)
   assert.equal(validateDraftItem({ ...sc, payload: { reviewGate: {} } }), null)
+  // scoreRefs 显式空数组起草即拒（与 validate 同口径）
+  assert.match(
+    String(validateDraftItem({ ...sc, payload: { scoreRefs: [] } })),
+    /scoreRefs/,
+  )
+  assert.equal(validateDraftItem({ ...sc, payload: { scoreRefs: ['RULE-TST-S1'] } }), null)
 })
 
 test('parseSource 报告：received/accepted/idempotentSkipped/invalidDropped + engine', async () => {

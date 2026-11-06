@@ -233,6 +233,15 @@ test('scoreRefs 引用位：闭合校验 + 悬空/错类型 → REF_UNCLOSED', (
   const v2 = validatePackage(bad)
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-GONE')))
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-E1')), '排除规则不能进 scoreRefs')
+  // 显式空数组：运行侧会收窄到 0 条规则 → 校验即拒
+  const empty = minimalPkg({
+    scenarios: [{ ...base.scenarios[0], scoreRefs: [] }],
+  })
+  const v3 = validatePackage(empty)
+  assert.ok(
+    v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('空数组')),
+    'scoreRefs 空数组必须报错: ' + JSON.stringify(v3.errors),
+  )
 })
 
 test('D14：场景阈值超过 scoreRefs 圈内权重和 → REVIEW_GATE_UNREACHABLE（闸值不可达）', () => {

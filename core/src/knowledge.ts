@@ -104,6 +104,11 @@ export function validateDraftItem(item: unknown): string | null {
         return 'bad payload.reviewGate.includeExcluded（须为布尔）'
       }
     }
+    // scoreRefs 显式空数组非法（运行侧 truthy 会收窄到 0 条规则；起草即拒，与 validate 同口径）
+    const scRefs = (payload as Record<string, unknown>)['scoreRefs']
+    if (Array.isArray(scRefs) && scRefs.length === 0) {
+      return 'bad payload.scoreRefs（显式空数组非法：缺省=全部请省略键；限定范围请至少列 1 条）'
+    }
   }
   const conf = it['confidence']
   if (typeof conf !== 'number' || !Number.isFinite(conf) || conf < 0 || conf > 1) return 'bad confidence'
@@ -1097,7 +1102,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
         ...(Array.isArray(p['exclusionRefs'])
           ? { exclusionRefs: (p['exclusionRefs'] as string[]).map(String) }
           : {}),
-        ...(Array.isArray(p['scoreRefs'])
+        ...(Array.isArray(p['scoreRefs']) && (p['scoreRefs'] as unknown[]).length > 0
           ? { scoreRefs: (p['scoreRefs'] as string[]).map(String) }
           : {}),
         // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里
