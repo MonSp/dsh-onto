@@ -74,7 +74,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | # | 期 | 切片 | 出口判据 | 状态 |
 |---|---|---|---|---|
 | P1-1 | P1 | `experience.ts`：TaskSignature 生成（纯函数 + 单测） | aml 场景卡可机械导出，digest 稳定 | **完成**（轮 1） |
-| P1-2 | P1 | ExperienceNote 落盘（围栏 + 校验 + 单测） | `experiences/` 读写过 runId 围栏 | 待办 |
+| P1-2 | P1 | ExperienceNote 落盘（围栏 + 校验 + 单测） | `experiences/` 读写过 runId 围栏 | **完成**（轮 2） |
 | P1-3 | P1 | 结构检索：打分 + 阈值 + top-k + 冷启动 | 检索剧本：A→B 复用、C 冷启动 | 待办 |
 | P1-4 | P1 | DiffTable 机械生成 + 差异修正双路（LLM / 启发式） | unknown → 转人工路径有测试 | 待办 |
 | P1-5 | P1 | 闸门复用接线 + CLI `exp` 子命令 | `exp recall` / `annotate` / `diff` 可用 | 待办 |
@@ -113,8 +113,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 1 | 2026-11-06 | P1-1 TaskSignature | ✓ 122/122 | ✓ B1–B3 | ✓ N1–N3 | D1 相对 datasetPath baseDir；D2 dev-web 需原生 Node（已入 T4 前置） | 本轮提交 |
-| — | — | 循环启动（协议就位） | — | — | — | — | — |
+| 2 | 2026-11-06 | P1-2 ExperienceNote 落盘 | ✓ 127/127 | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 1 | 2026-11-06 | P1-1 TaskSignature | ✓ 122/122 | ✓ B1–B3 | ✓ N1–N3 | D1 相对 datasetPath baseDir；D2 dev-web 需原生 Node（已入 T4 前置） | b667fe0 |
 
 **轮 1 缺陷台账**
 
