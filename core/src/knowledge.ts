@@ -114,6 +114,13 @@ export class KnowledgeError extends Error {
   }
 }
 
+/**
+ * CONCLUSION_BLOCKED 统一路径指引（D5）：拒绝即给可执行落法——
+ * 此前只说「只能落 RedLine」，恢复路径靠调用方自悟。
+ */
+const REDLINE_HOWTO =
+  '（正确路径：新草案 targetKind=RedLine、targetId=场景ID、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）'
+
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
@@ -457,7 +464,7 @@ export class KnowledgeStore {
       if (c.conclusionLike && c.targetKind !== 'RedLine') {
         throw new KnowledgeError(
           'CONCLUSION_BLOCKED',
-          `结论性表述禁止进入 ${c.targetKind}（只能落 RedLine 红线）`,
+          `结论性表述禁止进入 ${c.targetKind}（只能落 RedLine 红线）${REDLINE_HOWTO}`,
         )
       }
       c.status = 'approved'
@@ -854,7 +861,7 @@ function applyUpdateToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
     throw new KnowledgeError('BAD_TARGET_KIND', 'RedLine 只支持追加（create），不支持 update')
   }
   if (c.conclusionLike) {
-    throw new KnowledgeError('CONCLUSION_BLOCKED', '结论性表述禁止进入业务元素（只能落 RedLine）')
+    throw new KnowledgeError('CONCLUSION_BLOCKED', `结论性表述禁止进入业务元素（只能落 RedLine）${REDLINE_HOWTO}`)
   }
   const p = (c.payload ?? {}) as Record<string, unknown>
 
@@ -956,7 +963,10 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
   }
 
   if (c.conclusionLike) {
-    throw new KnowledgeError('CONCLUSION_BLOCKED', '结论性表述禁止物化为业务元素（只能落 RedLine）')
+    throw new KnowledgeError(
+      'CONCLUSION_BLOCKED',
+      `结论性表述禁止物化为业务元素（只能落 RedLine）${REDLINE_HOWTO}`,
+    )
   }
 
   switch (c.targetKind) {

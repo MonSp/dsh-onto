@@ -1777,6 +1777,10 @@ window.__ModuleLoader__.load({
           const api = apis.remote['ontoModel']
           // 画布状态与动作在 GraphWorkbench（主区视图与右栏 tab 共用；P1 修正）
           const [view, setView] = useState<'canvas' | 'list'>('canvas')
+          // D4：清单视图的待审草案可见性——此前只有画布有虚线态与计数，
+          // 走清单人审会误以为没有草案（压测 C1 观察）。
+          const [pendingDrafts, setPendingDrafts] = useState<Array<Record<string, unknown>>>([])
+          const [draftTick, setDraftTick] = useState(0)
 
           const reload = useCallback(async () => {
             if (!api || !selected) return
@@ -1787,6 +1791,7 @@ window.__ModuleLoader__.load({
               setPkg(p.pkg)
               const f = unwrap<{ files: Record<string, string> }>(await api.readSources({ name: selected.name, version: selected.version }))
               setFiles(f.files)
+              setDraftTick((n) => n + 1)
             } catch (e) {
               setError(errText(e))
             } finally {
@@ -1797,6 +1802,29 @@ window.__ModuleLoader__.load({
           useEffect(() => {
             void reload()
           }, [reload])
+
+          // 清单视图挂载/切换/包变更时拉取待审草案（画布态由 GraphWorkbench 自取，互不耦合）。
+          useEffect(() => {
+            const kApi = apis.remote['ontoKnowledge']
+            if (view !== 'list' || !selected || !kApi) {
+              setPendingDrafts([])
+              return
+            }
+            let alive = true
+            void kApi
+              .listCandidates({ packageId: selected.name })
+              .then((q) => {
+                if (!alive) return
+                const items = unwrap<{ items: Array<Record<string, unknown>> }>(q).items ?? []
+                setPendingDrafts(items.filter((d) => d.status === 'pending'))
+              })
+              .catch(() => {
+                if (alive) setPendingDrafts([])
+              })
+            return () => {
+              alive = false
+            }
+          }, [apis, view, selected, draftTick])
 
           const savePkg = async (mutate: (p: Record<string, unknown>) => void, label: string): Promise<boolean> => {
             if (!api || !selected || !pkg) return false
@@ -2094,6 +2122,22 @@ window.__ModuleLoader__.load({
             ...(view === 'canvas'
               ? [h(GraphWorkbench, { key: 'gw', t, apis, selected, onChanged: reload })]
               : [
+                  // D4：待审草案先于物化清单可见（计数 + 明细 + 恢复提示）
+                  h(
+                    'div',
+                    { key: 'pending-drafts', className: 'ow-row', style: { flexDirection: 'column', alignItems: 'stretch', gap: 4, marginBottom: 8 } },
+                    h('b', { className: 'ow-note' }, `${t('draftCount')}：${pendingDrafts.length}`),
+                    h('span', { className: 'ow-note' }, t('draftHint')),
+                    ...pendingDrafts.slice(0, 40).map((d, i) =>
+                      h(
+                        'div',
+                        { key: `pd-${i}`, className: 'ow-note' },
+                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}`,
+                      )),
+                    pendingDrafts.length > 40
+                      ? h('span', { className: 'ow-note' }, `… +${pendingDrafts.length - 40}`)
+                      : null,
+                  ),
                   ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
             h(
               Card,

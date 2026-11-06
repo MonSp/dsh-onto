@@ -809,3 +809,69 @@ test('materialize 归一比较：旧数据 packageId 为 name@version 不再误�
     rmWorkspace(root)
   }
 })
+
+test('D5：CONCLUSION_BLOCKED 出口内联 RedLine 正确路径（targetKind + payload.phrases）', () => {
+  // 1) 批准路径（reviewCandidate approve）
+  const { store, root } = mkStore()
+  try {
+    const queuePath = join(store.root, 'queue.json')
+    const queue = JSON.parse(readFileSync(queuePath, 'utf8'))
+    queue.push({
+      id: 'dc-d5-approve',
+      packageId: 'pkg-x',
+      sourceId: '',
+      layer: 'O2',
+      targetKind: 'ScoreRule',
+      name: '结论规则',
+      payload: { name: '结论规则', weight: 0.1, expression: '1' },
+      confidence: 0.9,
+      rationale: '该客户系诈骗分子',
+      status: 'pending',
+      forcedReview: false,
+      conclusionLike: true,
+      createdAt: new Date().toISOString(),
+    })
+    writeFileSync(queuePath, JSON.stringify(queue, null, 2))
+    assert.throws(
+      () => store.reviewCandidate('dc-d5-approve', 'approve'),
+      (e) => e.code === 'CONCLUSION_BLOCKED'
+        && e.message.includes('targetKind=RedLine')
+        && e.message.includes('payload.phrases'),
+      '批准拒绝须内联 RedLine 正确路径',
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+
+  // 2) 物化 create / update 路径（applyDraftToPackage）
+  const pkg = minimalPkg()
+  const base = {
+    id: 'dc-d5-apply',
+    packageId: 'test-pkg',
+    sourceId: '',
+    sourceName: '结论规则',
+    layer: 'O2',
+    targetKind: 'ScoreRule',
+    name: '结论规则',
+    confidence: 0.9,
+    rationale: '该客户系诈骗分子',
+    status: 'pending',
+    forcedReview: false,
+    conclusionLike: true,
+    provenance: {},
+    createdAt: new Date().toISOString(),
+  }
+  const check = (e) => e.code === 'CONCLUSION_BLOCKED'
+    && e.message.includes('targetKind=RedLine')
+    && e.message.includes('payload.phrases')
+  assert.throws(
+    () => applyDraftToPackage(pkg, { ...base, op: 'create', payload: { name: '结论规则', weight: 0.1, expression: '1' } }),
+    check,
+    'create 物化拒绝须内联 RedLine 正确路径',
+  )
+  assert.throws(
+    () => applyDraftToPackage(pkg, { ...base, op: 'update', targetId: 'RULE-TST-S1', payload: { description: '认定骗贷' } }),
+    check,
+    'update 物化拒绝须内联 RedLine 正确路径',
+  )
+})

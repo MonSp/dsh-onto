@@ -175,7 +175,10 @@ export function loadDatasetFromArgs(
     const baseDir = opts.baseDir ?? process.cwd()
     const rel = relative(baseDir, path)
     if (!isInsideDir(baseDir, path) || !isSafeRelPath(rel)) {
-      throw new AgentToolError('INVALID_ARGS', `dataset 文件越出工作目录: ${raw}`)
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `dataset 文件越出工作目录（围栏防穿越）: ${raw} ——会话工作区或外部夹具请改用 dataset 内联传入`,
+      )
     }
     let text: string
     try {
@@ -896,14 +899,18 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'run_scenario',
       description:
-        '执行一个业务本体场景（规则引擎判定，认定出口只在人工）。数据输入二选一：datasetPath（JSON 文件）'
+        '执行一个业务本体场景（规则引擎判定，认定出口只在人工）。数据输入二选一：datasetPath（JSON 文件，'
+        + '仅限平台进程工作目录内，外部/会话工作区夹具用 dataset 内联）'
         + '或 dataset（内联 RuntimeDataset）。返回候选风险分、命中规则 ID、证据链、待核实点、'
         + 'humanReviewRequired=true 与禁语扫描结果。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
         scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
-        datasetPath: { type: 'string', description: 'RuntimeDataset JSON 文件路径（绝对或相对工作目录）' },
+        datasetPath: {
+          type: 'string',
+          description: 'RuntimeDataset JSON 文件路径——仅限平台进程工作目录内的路径（围栏防穿越，越界拒绝）；会话工作区或外部夹具请改用 dataset 内联',
+        },
         dataset: { type: 'json', description: '内联 RuntimeDataset（objects/relations/candidates）' },
       },
       output: {
@@ -1024,7 +1031,7 @@ export function apply(ctx: Context): void {
         },
         datasetPath: {
           type: 'string',
-          description: '数据集 JSON 文件路径（与 dataset 二选一）',
+          description: '数据集 JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内的路径，外部夹具请用 dataset 内联）',
         },
         dataset: {
           type: 'json',

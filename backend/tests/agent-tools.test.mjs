@@ -1164,3 +1164,29 @@ test('D3 save_skeleton：humanApproved 契约 + ID 语法/去重 + 包存在性 
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('D12：datasetPath 围栏可发现性——越界报错指引内联，参数描述明示工作目录围栏', () => {
+  // 1) 越界报错带恢复指引（不再只说「越出工作目录」）
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-d12-'))
+  try {
+    expectCode(() => loadDatasetFromArgs({ datasetPath: join(tmp, 'x.json') }, { baseDir: REPO }), 'INVALID_ARGS')
+    try {
+      loadDatasetFromArgs({ datasetPath: join(tmp, 'x.json') }, { baseDir: REPO })
+      assert.fail('期望越界拒绝')
+    } catch (e) {
+      assert.ok(e instanceof AgentToolError)
+      assert.ok(e.message.includes('内联'), '越界报错须指引 dataset 内联: ' + e.message)
+      assert.ok(e.message.includes('围栏'), '越界报错须点明围栏语义: ' + e.message)
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+
+  // 2) 工具面参数/描述明示围栏（源断言，防文案回退）
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const hits = src.split('仅限平台进程工作目录').length - 1
+  assert.ok(hits >= 2, 'run_scenario 与 run_scenarios 的 datasetPath 描述均须明示围栏')
+  assert.ok(src.includes('会话工作区或外部夹具请改用 dataset 内联') || src.includes('会话工作区或外部夹具请改用 dataset 内联')
+    || src.includes('外部夹具请用 dataset 内联') || src.includes('会话工作区、外部夹具请改用 dataset 内联'),
+    '描述须给出内联恢复路径')
+})
