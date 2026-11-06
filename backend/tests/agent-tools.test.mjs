@@ -31,7 +31,9 @@ import {
   projectPackageList,
   renderScenarioList,
   assertHumanApproved,
+  createPackageForPkg,
   requireExistingPackage,
+  saveSkeletonForPkg,
   ruleDossier,
   scenarioCatalog,
   sourceSummary,
@@ -1082,4 +1084,83 @@ test('端到端：内联 dataset 走 runScenario 与 datasetPath 同契约', () 
   assert.equal(result.humanReviewRequired, true)
   assert.ok(result.candidates.length > 0)
   assert.ok(result.candidates.some((c) => c.hitRuleIds.length > 0))
+})
+
+test('D3 create_package：DRAFT 空包、缺参拒绝、同名同版本 PACKAGE_EXISTS 拒绝、不回显路径', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-d3-'))
+  try {
+    const ws = new PackageWorkspace(join(tmp, 'workspace'))
+    const r = createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T' })
+    assert.equal(r.status, 'DRAFT')
+    assert.equal(r.name, 'd3-demo')
+    assert.equal(r.domain, 'D3T')
+    assert.ok(!('dir' in r), '不回显服务端路径')
+    // 同名同版本拒绝（幂等不覆盖）
+    expectCode(() => createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T' }), 'PACKAGE_EXISTS')
+    // 缺参 / 空白
+    expectCode(() => createPackageForPkg(ws, { name: ' ', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
+    expectCode(() => createPackageForPkg(ws, { name: 'x', version: '', domain: 'D3T' }), 'INVALID_ARGS')
+    // 真实落盘且为空包
+    const pkg = loadPackage(ws.versionDir('d3-demo', '1.0.0'))
+    assert.equal(pkg.meta.status, 'DRAFT')
+    assert.equal(pkg.objects.length, 0)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('D3 save_skeleton：humanApproved 契约 + ID 语法/去重 + 包存在性 + ISSUED 拒绝', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-d3s-'))
+  try {
+    const ws = new PackageWorkspace(join(tmp, 'workspace'))
+    ws.createPackage({ name: 'd3-sk', version: '1.0.0', domain: 'D3S' })
+    const knowledge = new KnowledgeStore(tmp)
+    const versions = ws.listVersions()
+    const base = { packageId: 'd3-sk@1.0.0', domainCode: 'D3S', ids: ['OBJ-D3S-A', 'dict-d3s-k'] }
+
+    // 未点头 → 人审契约拒绝
+    expectCode(() => saveSkeletonForPkg(knowledge, ws, versions, { ...base, humanApproved: false }), 'INVALID_ARGS')
+    // 点头 → 落盘 confirmed=true
+    const rec = saveSkeletonForPkg(knowledge, ws, versions, { ...base, humanApproved: true })
+    assert.equal(rec.confirmed, true)
+    assert.equal(rec.domainCode, 'D3S')
+    const stored = knowledge.skeletons.get('d3-sk')
+    assert.deepEqual(stored.ids, ['OBJ-D3S-A', 'dict-d3s-k'])
+    assert.equal(stored.confirmed, true)
+
+    // ID 语法 / 空 / 重复 → 拒绝
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, versions, { ...base, ids: ['not an id'], humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    expectCode(() => saveSkeletonForPkg(knowledge, ws, versions, { ...base, ids: [], humanApproved: true }), 'INVALID_ARGS')
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, versions, { ...base, ids: ['OBJ-D3S-A', 'OBJ-D3S-A'], humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // 缺 domainCode
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, versions, { ...base, domainCode: '', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // 包不存在 / 非 name@version
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, versions, { ...base, packageId: 'ghost@1.0.0', humanApproved: true }),
+      'NOT_FOUND',
+    )
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, versions, { ...base, packageId: 'd3-sk', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+
+    // ISSUED 包只读（状态机两步走到 ISSUED）
+    ws.transition('d3-sk', '1.0.0', 'IN_REVIEW')
+    ws.transition('d3-sk', '1.0.0', 'ISSUED', 'tester（人工）')
+    expectCode(
+      () => saveSkeletonForPkg(knowledge, ws, ws.listVersions(), { ...base, humanApproved: true }),
+      'PACKAGE_READONLY',
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
 })

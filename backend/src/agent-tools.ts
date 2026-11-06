@@ -14,12 +14,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   KnowledgeStore,
+  PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
   buildRunRecord,
   compareRunRecords,
   exportRunArchive,
   isInsideDir,
+  isValidId,
   isSafeRelPath,
   loadPackage,
   loadRunRecord,
@@ -35,6 +37,7 @@ import {
   type RunDiff,
   type RuntimeDataset,
   type ScenarioRunResult,
+  type SkeletonRecord,
   type SourceType,
 } from '@dsh-onto/core'
 import {
@@ -296,6 +299,90 @@ export function requireExistingPackage(
     throw new AgentToolError('NOT_FOUND', `包不存在: ${packageId}`)
   }
   return name
+}
+
+/* ── D3：对话建包 / 骨架落盘（人审契约同族） ───────────────────────────── */
+
+/**
+ * 对话建包（D3）：只产 DRAFT 空包；同名同版本由 PackageWorkspace 拒绝（PACKAGE_EXISTS，
+ * 不幂等覆盖）。不回显服务端目录（P2.4）。
+ */
+export function createPackageForPkg(
+  ws: { createPackage(meta: { name: string; version: string; domain: string }): string },
+  args: { name?: unknown; version?: unknown; domain?: unknown },
+): { name: string; version: string; domain: string; status: 'DRAFT' } {
+  const name = typeof args.name === 'string' ? args.name.trim() : ''
+  const version = typeof args.version === 'string' ? args.version.trim() : ''
+  const domain = typeof args.domain === 'string' ? args.domain.trim() : ''
+  if (name === '' || version === '' || domain === '') {
+    throw new AgentToolError('INVALID_ARGS', 'name/version/domain 均为必填非空字符串')
+  }
+  // 域码进输出渲染：限定 ASCII 字母数字，兼作红线面（自由文本域码可夹带禁语）。
+  if (!/^[A-Za-z0-9]{1,12}$/.test(domain)) {
+    throw new AgentToolError('INVALID_ARGS', `domain 非法（大写字母数字 1–12 位）: ${domain}`)
+  }
+  try {
+    ws.createPackage({ name, version, domain })
+  } catch (e) {
+    // 受控业务错误保留机器码与入参级 message（不含路径）；其余交给 toolExecute 信封。
+    if (e instanceof PackageStoreError) throw new AgentToolError(e.code, e.message)
+    throw e
+  }
+  return { name, version, domain, status: 'DRAFT' }
+}
+
+/**
+ * 骨架落盘（D3）：`confirmed` 恒随 `humanApproved`——骨架确认（I6 前置）只由用户在会话中
+ * 明确点头驱动，agent 不得自确认（与 apply_draft 同族人审契约）。
+ * 包须 `name@version` 存在；ISSUED 只读；ids 非空、去重、全过 ID 语法（TYPE-TAG-NAME / dict-slug）。
+ */
+export function saveSkeletonForPkg(
+  knowledge: KnowledgeStore,
+  ws: { versionDir(name: string, version: string): string },
+  versions: ReadonlyArray<{ name: string; version: string }>,
+  args: { packageId?: unknown; domainCode?: unknown; ids?: unknown; humanApproved?: unknown },
+): SkeletonRecord {
+  assertHumanApproved(args.humanApproved, '确认骨架')
+  const packageId = typeof args.packageId === 'string' ? args.packageId : ''
+  const name = requireExistingPackage(versions, packageId)
+  const version = packageId.slice(packageId.lastIndexOf('@') + 1)
+  const dir = ws.versionDir(name, version)
+  let status: string
+  try {
+    status = loadPackage(dir).meta.status
+  } catch {
+    throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${packageId}`)
+  }
+  if (status === 'ISSUED') {
+    throw new AgentToolError('PACKAGE_READONLY', `${packageId} 已签发只读：骨架修改须 fork 新版本`)
+  }
+  const domainCode = typeof args.domainCode === 'string' ? args.domainCode.trim() : ''
+  if (domainCode === '') throw new AgentToolError('INVALID_ARGS', 'domainCode 必填')
+  if (!/^[A-Za-z0-9]{1,12}$/.test(domainCode)) {
+    throw new AgentToolError('INVALID_ARGS', `domainCode 非法（大写字母数字 1–12 位）: ${domainCode}`)
+  }
+  const ids = args.ids
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new AgentToolError('INVALID_ARGS', 'ids 必须是非空字符串数组')
+  }
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const raw of ids) {
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      throw new AgentToolError('INVALID_ARGS', 'ids 含空项')
+    }
+    const id = raw.trim()
+    if (!isValidId(id)) throw new AgentToolError('INVALID_ARGS', `非法 ID: ${id}`)
+    if (seen.has(id)) throw new AgentToolError('INVALID_ARGS', `ID 重复: ${id}`)
+    seen.add(id)
+    normalized.push(id)
+  }
+  return knowledge.skeletons.save({
+    packageId: name,
+    domainCode,
+    confirmed: true,
+    ids: normalized,
+  })
 }
 
 /** packageId 归一为裸包名（旧数据可能存 name@version；与 knowledge 管线同口径）。 */
@@ -1336,6 +1423,88 @@ export function apply(ctx: Context): void {
           const c = knowledge.reviewCandidate(args.candidateId, 'reject', { reviewedBy: 'agent-tool' })
           return toolOut({ candidateId: c.id, status: c.status })
         },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D3：对话建包 —— DRAFT 空包，同名拒绝；骨架确认另走 save_skeleton 人审契约。
+  ctx.tools.register(
+    defineTool({
+      name: 'create_package',
+      description:
+        '对话建包（D3）：创建 DRAFT 空包（name/version/domain），随后 save_skeleton 落骨架、'
+        + '对话分片起草。同名同版本拒绝（PACKAGE_EXISTS，不覆盖）；签发 ISSUED 仍仅人工。'
+        + '建包只是开局动作，内容仍走 draft_elements 起草 → 人审 apply_draft 物化。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（kebab-case，如 claims-fraud）' },
+        version: { type: 'string', required: true, description: '初始版本（如 1.0.0）' },
+        domain: { type: 'string', required: true, description: '域码（大写字母数字，1–12 位，如 CLF）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            domain: { type: 'string', required: true },
+            status: { type: 'string', required: true, const: 'DRAFT' },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { name: string; version: string; domain: string }
+          return textBlock(
+            `已创建空包 ${v.name}@${v.version}（域 ${v.domain}，DRAFT）——下一步：骨架提案经用户确认后 save_skeleton`,
+          )
+        },
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string; domain: string }) => toolOut(createPackageForPkg(ws, args)),
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'save_skeleton',
+      description:
+        '骨架落盘（D3，物化门 I6 前置）：保存全量 ID 清单与域码并置「已确认」。'
+        + 'humanApproved 人审契约同 apply_draft：仅当用户在会话中明确确认骨架后才传 true，'
+        + 'agent 不得自行确认；ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
+        + '骨架是唯一能改名/新增 ID 的入口，确认前不得物化任何元素。',
+      parameters: {
+        packageId: { type: 'string', required: true, description: '目标包 name@version' },
+        domainCode: { type: 'string', required: true, description: '域码（大写字母数字，1–12 位）' },
+        ids: { type: 'array', required: true, description: '全量骨架 ID 清单（每项须为合法本体 ID，去重）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确点头确认骨架时传 true；agent 不得自行确认',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            packageId: { type: 'string', required: true },
+            domainCode: { type: 'string', required: true },
+            confirmed: { type: 'boolean', required: true, const: true },
+            ids: { type: 'array', required: true, items: { type: 'string' } },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { packageId: string; domainCode: string; ids: string[] }
+          return textBlock(`骨架已确认保存：${v.packageId}（域 ${v.domainCode}，${v.ids.length} 个 ID）——可以开始分片起草`)
+        },
+      },
+      execute: toolExecute(
+        (args: { packageId: string; domainCode: string; ids: string[]; humanApproved: boolean }) =>
+          toolOut(saveSkeletonForPkg(knowledge, ws, ws.listVersions(), args)),
         [],
         (args) => redlines(args),
       ),
