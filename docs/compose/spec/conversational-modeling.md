@@ -106,13 +106,15 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
   同批多条权重更新须经 `apply_draft` 的 `candidateIds` **同批物化**，一次归一——
   逐条物化会互相打架）。**驳回后的同名草案不挡重提**（幂等只对 pending/approved/
   merged 生效；rejected 允许同名重新起草，重试记录以 retry 序号区分 ID）。
-- **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?`
-  ——场景与行为、排除规则的关联显式化（此前是「全部都用」的隐式约定）。**缺省 =
-  全部**（向后兼容，不落键）；显式数组 = 限定范围，元素须指向同类型且闭合
-  （悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发，
-  **执行器按引用位收窄运行范围**（排除段只跑圈内规则、行为段只物化圈内类型；
-  曾仅做校验与下发、运行仍全量执行，与「限定范围」口径冲突）。
-  `SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
+- **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?` /
+  `scoreRefs?`——场景与行为、排除规则、打分规则的关联显式化（此前是「全部都用」的隐式
+  约定）。**缺省 = 全部**（向后兼容，不落键）；显式数组 = 限定范围，元素须指向同类型
+  且闭合（悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发，
+  **执行器按引用位收窄运行范围**（排除段只跑圈内规则、行为段只物化圈内类型、打分段
+  只求值圈内规则——范围外打分规则不再因缺特征刷待核实；D7/D13 曾仅校验不收窄或只收窄
+  部分，与「限定范围」口径冲突）。`SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
+  多场景协作口径（C4 压测拍板）：包级权重合计仍 = 1.0（WEIGHT_SUM 不变）；场景间口径
+  差异靠 scoreRefs 圈定 + 带式权重分配（公共带 + 场景带）表达，不在场景内二次归一。
 - **ID 骨架门**：skeleton 确认前不得物化任何元素；分片阶段新增骨架外 ID → 校验
   error（`SKELETON_OUT_OF_SCOPE`），防 ID 漂移。口径：skeleton.ids 是**全量 Schema
   元素 ID 清单**（含 `dict-*`，不含 `OBJ.attr` 属性引用）——门禁只约束**新增 ID**；

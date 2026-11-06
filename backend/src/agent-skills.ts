@@ -296,7 +296,7 @@ export function renderModelingGuideBody(): string {
     '  作契约声明，不得进 mustInclude（否则 checkMustInclude 恒不满足、候选全降级待核实）。',
     '- 技能模板可回填变量只有：candidateId / riskScore / hitCount / ruleIds + 数据特征名；',
     '  其余占位符会渲染成「未知」。证据链由引擎单独追加，不必写进模板。',
-    '- 场景引用位 behaviorRefs / exclusionRefs：显式数组 = 运行时限定范围（缺省 = 全部），',
+    '- 场景引用位 behaviorRefs / exclusionRefs / scoreRefs：显式数组 = 运行时限定范围（缺省 = 全部），',
     '  元素必须指向同类型且闭合。',
     '- 结论性表述（认定 / 确定为 / 已构成 / 该客户系…，**含否定式引用**）禁入任何业务元素',
     '  与场景正文；只走 targetKind=RedLine 草案追加进场景 forbiddenPhrases。',

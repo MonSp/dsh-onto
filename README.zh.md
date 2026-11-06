@@ -31,7 +31,7 @@
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，node --test 107 项验收测试）
+  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，node --test 110 项验收测试）
   backend/    @dsh-onto/backend — dsh bundle：onto* wire 服务（唯一后端落点）
   workbench/  @dsh-onto/workbench — dsh bundle：Web UI 五 tab
   packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0
@@ -85,7 +85,7 @@ node dist\cli.js knowledge queue --root ..\workspace
 
 ## 验收
 
-`core/tests/`（107 项，`node --test tests/*.test.mjs`）覆盖验收清单：
+`core/tests/`（110 项，`node --test tests/*.test.mjs`）覆盖验收清单：
 校验拦截、六类原料解析、结论不进 O3、强制人审、ISSUED 只读、fork、
 派生漂移拒绝与恢复、端到端场景字段齐全、ruleId/证据链/禁语零命中、第二域零改引擎。
 

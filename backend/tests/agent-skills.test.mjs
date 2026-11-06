@@ -230,7 +230,7 @@ test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文�
   assert.ok(def, '内置引导技能可加载')
   for (const marker of [
     '建包', '骨架', 'draft_elements', 'apply_draft', 'RedLine', 'humanApproved',
-    'ISSUED', 'ontology-business-map', 'mustInclude', 'candidateId', 'behaviorRefs',
+    'ISSUED', 'ontology-business-map', 'mustInclude', 'candidateId', 'behaviorRefs', 'scoreRefs',
     'SKELETON_OUT_OF_SCOPE',
   ]) {
     assert.ok(def.content.includes(marker), '引导正文缺少要点: ' + marker)
