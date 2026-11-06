@@ -166,6 +166,38 @@ export function validatePackage(
         err('REF_UNCLOSED', `SCN ${sc.id}`, `exclusionRefs 引用未闭合: ${ruleId}`)
       }
     }
+    // scoreRefs（D13 多场景协作）：缺省 = 全部；显式数组须非空且指向打分规则。
+    // 空数组在运行侧 truthy 会收窄到 0 条规则（riskScore 恒 0、闸永不触发）——起草/校验即拒。
+    if (sc.scoreRefs && sc.scoreRefs.length === 0) {
+      err('REF_UNCLOSED', `SCN ${sc.id}`, 'scoreRefs 显式空数组非法（缺省=全部请省略键；限定范围请至少列 1 条打分规则）')
+    }
+    for (const ruleId of sc.scoreRefs ?? []) {
+      if (!pkg.scoreRules.some((r) => r.id === ruleId)) {
+        err('REF_UNCLOSED', `SCN ${sc.id}`, `scoreRefs 引用未闭合: ${ruleId}`)
+      }
+    }
+    // D14：圈定打分后 riskScore 上限 = 圈内权重和（不二次归一，见 P3 拍板）——
+    // 阈值超过上限则人审闸数学上不可达，签发前必须校准。
+    if (sc.scoreRefs && sc.scoreRefs.length > 0) {
+      const inScope = pkg.scoreRules.filter((r) => sc.scoreRefs!.includes(r.id))
+      const sum = inScope.reduce((a, r) => a + r.weight, 0)
+      if (sc.reviewGate.threshold > sum + 1e-9) {
+        err(
+          'REVIEW_GATE_UNREACHABLE',
+          `SCN ${sc.id}`,
+          `reviewGate.threshold ${sc.reviewGate.threshold} 超过 scoreRefs 圈内权重和 ${sum}`
+          + '（riskScore 上限=圈内权重和；请下调阈值或扩大 scoreRefs）',
+        )
+      } else if (sc.reviewGate.threshold > sum * 0.9) {
+        // C5 冒烟补充口径：刚够阈值也几乎不可达（仅近满分候选触发），提示标定过紧。
+        warn(
+          'REVIEW_GATE_TIGHT',
+          `SCN ${sc.id}`,
+          `reviewGate.threshold ${sc.reviewGate.threshold} 超过圈内权重和的 90%（和 ${sum}）`
+          + '——仅近满分候选可触发，建议下调阈值',
+        )
+      }
+    }
   }
 
   /* ── error: 属性可解析 + 字典可解析（属性表内） ───────────────────────── */

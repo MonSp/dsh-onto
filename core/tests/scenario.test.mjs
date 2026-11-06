@@ -1,7 +1,7 @@
 /** 场景执行验收（规范 §9 / §11.3）：端到端全流程字段、ruleId 回指、禁语零命中。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runScenario, ScenarioRunError, derivePackage, savePackage, loadPackage } from '../dist/index.js'
+import { runScenario, ScenarioRunError, derivePackage, savePackage, loadPackage, KnowledgeStore } from '../dist/index.js'
 import { copyExamplePackage, exampleData, mkWorkspaceWithPkg, minimalPkg, rmWorkspace } from './helpers.mjs'
 
 test('端到端 AML：候选 + 风险分 + 命中规则 + 证据链 + 待核实点齐全', () => {
@@ -130,6 +130,267 @@ test('最小包场景：人工复核字段与 reviewGate 阈值生效', () => {
     assert.ok(result.candidates[0].hitRuleIds.includes('RULE-TST-S1'))
     assert.ok(result.reviewGate.requireReviewFor.includes('C1'))
     assert.equal(result.humanReviewRequired, true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('D7：场景引用位参与运行收窄——exclusionRefs/behaviorRefs 生效，缺省=全部', () => {
+  const base = minimalPkg()
+  const { dir, root } = mkWorkspaceWithPkg({
+    behaviors: [
+      { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+      { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+    ],
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+      { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+    ],
+    // 场景只圈定 E1 与行为 X——E2 与行为 Y 不在运行范围
+    scenarios: [{ ...base.scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] }],
+  })
+  try {
+    savePackage(dir, minimalPkg({
+      behaviors: [
+        { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+        { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+      ],
+      exclusionRules: [
+        { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+        { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+      ],
+      scenarios: [{ ...base.scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] }],
+    }))
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [
+        { id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' },
+        { id: 'BV2', type: 'BHV-TST-Y', anchorRef: 'B1', objectRef: 'B1', occurredAt: '2026-01-02T00:00:00Z' },
+      ],
+      candidates: [
+        { candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+        { candidateId: 'C2', objectRef: 'B1', features: { f1: 0.6 }, tags: ['t'] },
+      ],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    // E2（tag=='x' drop）不在 exclusionRefs → 不得剔除 C1
+    const ids = result.candidates.map((c) => c.candidateId)
+    assert.ok(ids.includes('C1'), 'exclusionRefs 之外的排除规则不参与运行: ' + JSON.stringify(result.excluded))
+    assert.ok(!result.excluded.some((x) => x.ruleId === 'RULE-TST-E2'))
+    // E1（在圈内）照常生效：C2 tag=t → downweight
+    const c2 = result.candidates.find((c) => c.candidateId === 'C2')
+    assert.ok(c2.riskScore < 0.6 * 0.5 + 0.0001, '圈内排除仍生效, got ' + c2.riskScore)
+    // behaviorRefs 只跑 X：BV2（类型 Y）不进行为实例——经 O2_CLOSED 审计明细观察
+    const o2 = result.audit.checks.find((c) => c.check === 'O2_CLOSED')
+    assert.match(o2.detail, /行为实例 1 条/, 'behaviorRefs 收窄行为实例: ' + o2.detail)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('D7：缺省引用位 = 全部（不落键时行为与排除不受限）', () => {
+  const { dir, root } = mkWorkspaceWithPkg({
+    behaviors: [
+      { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+      { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+    ],
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+      { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+    ],
+  })
+  try {
+    savePackage(dir, minimalPkg({
+      behaviors: [
+        { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+        { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+      ],
+      exclusionRules: [
+        { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+        { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+      ],
+    }))
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [
+        { id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' },
+        { id: 'BV2', type: 'BHV-TST-Y', anchorRef: 'B1', objectRef: 'B1', occurredAt: '2026-01-02T00:00:00Z' },
+      ],
+      candidates: [
+        { candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+      ],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.ok(!result.candidates.some((c) => c.candidateId === 'C1'), '缺省=全部：E2 照常剔除')
+    const o2 = result.audit.checks.find((c) => c.check === 'O2_CLOSED')
+    assert.match(o2.detail, /行为实例 2 条/, '缺省=全部：行为不限: ' + o2.detail)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('scoreRefs：执行器按场景收窄打分——范围外规则不求值、不刷待核实（D13）', () => {
+  const base = minimalPkg()
+  const pkg2 = minimalPkg({
+    scoreRules: [
+      { id: 'RULE-TST-S1', name: '规则一', weight: 0.6, expression: 'min(1, f1)', threshold: 0.5, evidenceTemplate: 'f1 = {f1}' },
+      { id: 'RULE-TST-S2', name: '规则二', weight: 0.4, expression: 'min(1, f2)', threshold: 0.5, evidenceTemplate: 'f2 = {f2}' },
+    ],
+    skillTemplates: [
+      { id: 'SKL-TST-N', name: '叙述', weights: { 'RULE-TST-S1': 0.6, 'RULE-TST-S2': 0.4 }, steps: ['候选 {candidateId}'], outputTemplate: '摘要：{riskScore}' },
+    ],
+    scenarios: [{ ...base.scenarios[0], scoreRefs: ['RULE-TST-S1'] }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [{ id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' }],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: [] }],
+    }
+    const scoped = runScenario(dir, 'SCN-TST-1', dataset)
+    const c1 = scoped.candidates.find((c) => c.candidateId === 'C1')
+    // S2 不在圈内：不求值 → 不因缺 f2 落待核实；S1 正常命中
+    assert.ok(c1.hitRuleIds.includes('RULE-TST-S1'))
+    assert.ok(!c1.hitRuleIds.includes('RULE-TST-S2'))
+    assert.equal(c1.pendingVerification !== true && c1.pendingChecks.length === 0, true,
+      '范围外规则不得刷待核实: ' + JSON.stringify(c1.pendingChecks))
+    assert.ok(Math.abs(c1.riskScore - 0.6 * 0.9) < 1e-9, '只有圈内规则参与加权, got ' + c1.riskScore)
+
+    // 缺省（不落 scoreRefs）= 全部：S2 参与并因缺 f2 落待核实
+    const all = minimalPkg({
+      scoreRules: pkg2.scoreRules,
+      skillTemplates: pkg2.skillTemplates,
+    })
+    savePackage(dir, all)
+    derivePackage(dir)
+    const full = runScenario(dir, 'SCN-TST-1', dataset)
+    const c2 = full.candidates.find((c) => c.candidateId === 'C1')
+    assert.ok(c2.pendingChecks.length > 0, '缺省=全部：缺 f2 应落待核实')
+    assert.ok(c2.pendingVerification === true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('P-1 reviewGate.includeExcluded：排除件进人工队列；缺省保持现状', () => {
+  const base = minimalPkg()
+  const pkgWithDrop = minimalPkg({
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'drop', condition: "tag == 'x'" },
+    ],
+    scenarios: [{
+      ...base.scenarios[0],
+      reviewGate: { required: true, threshold: 0.5, includeExcluded: true },
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkgWithDrop)
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [{ id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' }],
+      candidates: [
+        { candidateId: 'C-hot', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+        { candidateId: 'C-low', objectRef: 'B1', features: { f1: 0.1 }, tags: [] },
+      ],
+    }
+    const withFlag = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.equal(withFlag.excluded.length, 1)
+    assert.ok(withFlag.reviewGate.requireReviewFor.includes('C-hot'), '排除件须进人审队列')
+    assert.ok(withFlag.reviewGate.requireReviewFor.includes('C-low') === false || withFlag.reviewGate.requireReviewFor.includes('C-low'),
+      '低分件不进队列（阈值 0.5，0.1 不达）')
+    assert.ok(!withFlag.reviewGate.requireReviewFor.includes('C-low'), '低分且未排除的不进队列')
+
+    // 缺省（不落 includeExcluded）= 现状：排除件不进队列
+    const pkgDefault = minimalPkg({
+      exclusionRules: pkgWithDrop.exclusionRules,
+      scenarios: [{ ...base.scenarios[0] }],
+    })
+    savePackage(dir, pkgDefault)
+    derivePackage(dir)
+    const noFlag = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.equal(noFlag.excluded.length, 1)
+    assert.ok(!noFlag.reviewGate.requireReviewFor.includes('C-hot'), '缺省不改现状：排除件不进队列')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('P-1 includeExcluded 持久化：create 携带、update 可开、坏类型拒', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // create 携带
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', name: '新场景含排除复核',
+        payload: {
+          id: 'SCN-TST-2', name: '新场景含排除复核', goal: 'g', boundary: 'b',
+          reviewGate: { threshold: 0.5, includeExcluded: true },
+        },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-p1' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r = store.materialize(dir, [c.id])
+    assert.deepEqual(r.applied, [c.id], JSON.stringify(r.skipped))
+    let after = loadPackage(dir)
+    assert.equal(after.scenarios.find((s) => s.id === 'SCN-TST-2').reviewGate.includeExcluded, true)
+    assert.equal(after.scenarios.find((s) => s.id === 'SCN-TST-2').reviewGate.threshold, 0.5)
+
+    // update 开启既有场景
+    const u = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '排除件进队列', payload: { reviewGate: { includeExcluded: true } }, confidence: 0.9,
+      },
+      provenance: { turnId: 't-p1' },
+    })
+    store.reviewCandidate(u.id, 'approve')
+    const r2 = store.materialize(dir, [u.id])
+    assert.deepEqual(r2.applied, [u.id], JSON.stringify(r2.skipped))
+    after = loadPackage(dir)
+    const s1 = after.scenarios.find((s) => s.id === 'SCN-TST-1')
+    assert.equal(s1.reviewGate.includeExcluded, true)
+    assert.equal(s1.reviewGate.threshold, 0.75, '浅并保留既有 threshold')
+
+    // 坏类型拒绝（起草即拒）
+    assert.throws(
+      () => store.addDraft({
+        packageId: 'test-pkg',
+        item: {
+          layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+          name: '坏类型', payload: { reviewGate: { includeExcluded: 'yes' } }, confidence: 0.9,
+        },
+        provenance: { turnId: 't-p1' },
+      }),
+      /includeExcluded/,
+    )
   } finally {
     rmWorkspace(root)
   }

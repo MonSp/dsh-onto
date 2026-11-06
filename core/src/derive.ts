@@ -205,6 +205,7 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       // v1.1 引用位：显式范围随编排下发；缺省 = 全部（不落键）
       ...(sc.behaviorRefs ? { behaviorRefs: sc.behaviorRefs } : {}),
       ...(sc.exclusionRefs ? { exclusionRefs: sc.exclusionRefs } : {}),
+      ...(sc.scoreRefs ? { scoreRefs: sc.scoreRefs } : {}),
       outputContract: sc.outputContract,
       reviewGate: sc.reviewGate,
     })),
@@ -326,7 +327,8 @@ export function recordManifestAnchor(versionDir: string, manifestSha256: string)
   const meta = readPackageMeta(versionDir)
   if (meta.status !== 'ISSUED') return
   const last = meta.issueRecord[meta.issueRecord.length - 1]
-  if (last) {
+  // 锚点只回写**当前版本**的签发条目：fork 携带的上一版本历史锚点不得被覆写（D15）。
+  if (last && last.version === meta.version) {
     last.manifestDigest = manifestSha256
     const text = readFileSync(join(versionDir, 'package.yaml'), 'utf8')
     const doc = loadYaml(text) as { issueRecord?: Array<Record<string, unknown>> }

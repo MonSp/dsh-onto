@@ -684,3 +684,133 @@ test('v1.1 引用位：场景卡 create/update 携带 behaviorRefs/exclusionRefs
     rmWorkspace(root)
   }
 })
+
+test('D9：update 白名单外字段 fail-loud；顶层 mustInclude 归一进 outputContract（create/update 同源）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // 1) 白名单外字段：起草即拒（不再静默入队、物化假 merged）
+    assert.throws(
+      () => store.addDraft({
+        packageId: 'test-pkg',
+        item: { layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+          name: '坏字段', payload: { mustInclude: ['x'], bogusField: 1 }, confidence: 0.9 },
+        provenance: { turnId: 't-d9' },
+      }),
+      (e) => /not updatable/.test(e.message) && e.code === 'BAD_DRAFT',
+      '顶层 mustInclude 合法归一、bogusField 必须报 not updatable',
+    )
+    // 纯白名单外字段同样拒
+    assert.throws(
+      () => store.addDraft({
+        packageId: 'test-pkg',
+        item: { layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+          name: '坏字段2', payload: { totallyWrong: true }, confidence: 0.9 },
+        provenance: { turnId: 't-d9' },
+      }),
+      /not updatable/,
+    )
+    // append 白名单外字段同样拒
+    assert.throws(
+      () => store.addDraft({
+        packageId: 'test-pkg',
+        item: { layer: 'O2', targetKind: 'BehaviorType', op: 'update', targetId: 'BHV-TST-X',
+          name: '坏接线', payload: { append: { notAField: ['x'] } }, confidence: 0.9 },
+        provenance: { turnId: 't-d9' },
+      }),
+      /not updatable/,
+    )
+
+    // 2) 顶层 mustInclude 与 create 同源：归一进 outputContract.mustInclude
+    const ok = store.addDraft({
+      packageId: 'test-pkg',
+      item: { layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '契约收敛', payload: { mustInclude: ['candidateList', 'riskScore'] }, confidence: 0.9 },
+      provenance: { turnId: 't-d9' },
+    })
+    store.reviewCandidate(ok.id, 'approve')
+    const r = store.materialize(dir, [ok.id])
+    assert.deepEqual(r.applied, [ok.id], JSON.stringify(r.skipped))
+    const after = loadPackage(dir)
+    const s = after.scenarios.find((x) => x.id === 'SCN-TST-1')
+    assert.deepEqual(s.outputContract.mustInclude, ['candidateList', 'riskScore'], '顶层 mustInclude 生效')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('D6：驳回后同名可重新起草（恢复路径）；pending/merged 仍幂等', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    const item = {
+      layer: 'O1', targetKind: 'ObjectType', name: '重试对象',
+      payload: { id: 'OBJ-TST-RETRY', attributes: [] }, confidence: 0.9,
+    }
+    const c1 = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-1' } })
+    // pending 幂等：同名返回同一条
+    const again = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-2' } })
+    assert.equal(again.id, c1.id, 'pending 仍幂等')
+
+    // 驳回
+    store.reviewCandidate(c1.id, 'reject')
+    assert.equal(store.getCandidate(c1.id).status, 'rejected')
+
+    // 驳回后同名重起草 → 新草案（不再被 rejected 记录吞掉）
+    const c2 = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-3' } })
+    assert.notEqual(c2.id, c1.id, '驳回后同名必须产生新候选 ID')
+    assert.equal(c2.status, 'pending')
+
+    // 重试草案自身幂等
+    const again2 = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-4' } })
+    assert.equal(again2.id, c2.id)
+
+    // 重试草案可正常物化
+    store.reviewCandidate(c2.id, 'approve')
+    const r = store.materialize(dir, [c2.id])
+    assert.deepEqual(r.applied, [c2.id], JSON.stringify(r.skipped))
+    const after = loadPackage(dir)
+    assert.ok(after.objects.some((o) => o.id === 'OBJ-TST-RETRY'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('scoreRefs：场景卡 create/update 携带并持久化（UPDATABLE 白名单含 scoreRefs）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // update：给既有场景补 scoreRefs（走白名单，不得被 D9 拦）
+    const u = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '场景打分圈定', payload: { scoreRefs: ['RULE-TST-S1'] }, confidence: 0.9,
+      },
+      provenance: { turnId: 't-sr' },
+    })
+    store.reviewCandidate(u.id, 'approve')
+    const r = store.materialize(dir, [u.id])
+    assert.deepEqual(r.applied, [u.id], JSON.stringify(r.skipped))
+    let after = loadPackage(dir)
+    assert.deepEqual(after.scenarios[0].scoreRefs, ['RULE-TST-S1'])
+
+    // create：新场景携带 scoreRefs
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', name: '新场景带圈',
+        payload: { id: 'SCN-TST-2', name: '新场景带圈', goal: 'g', boundary: 'b', scoreRefs: ['RULE-TST-S1'] },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-sr' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r2 = store.materialize(dir, [c.id])
+    assert.deepEqual(r2.applied, [c.id], JSON.stringify(r2.skipped))
+    after = loadPackage(dir)
+    assert.deepEqual(after.scenarios.find((s) => s.id === 'SCN-TST-2').scoreRefs, ['RULE-TST-S1'])
+  } finally {
+    rmWorkspace(root)
+  }
+})

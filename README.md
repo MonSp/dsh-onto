@@ -44,7 +44,7 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 103 node --test acceptance tests)
+  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 117 node --test acceptance tests)
   backend/    @dsh-onto/backend — dsh bundle: onto* wire services (single backend landing point)
   workbench/  @dsh-onto/workbench — dsh bundle: Web UI (five tabs)
   packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0
@@ -107,7 +107,7 @@ node dist\cli.js knowledge queue --root ..\workspace
 
 ## Testing
 
-`core/tests/` ships 103 acceptance tests (`node --test tests/*.test.mjs`) covering:
+`core/tests/` ships 117 acceptance tests (`node --test tests/*.test.mjs`) covering:
 validator interceptions, six-source knowledge parsing, conclusion phrases kept out of O3,
 forced review for low confidence, ISSUED read-only + fork, derived-drift refusal and
 recovery, end-to-end scenario output contract, rule-ID/evidence-chain/forbidden-phrase

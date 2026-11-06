@@ -97,15 +97,30 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - **修改/接线语义（op='update'）**：`DraftItem` 增 `op: 'create'|'update'` 与
   `targetId`（Attribute 为 `OBJ.attr` 形态）。update 物化对既有元素做增量合并——
   标量字段覆盖、`weights` 按键并入、数组整替，`append.<字段>=[…]` 追加去重（接线）；
-  不新增 ID（I6 门禁只约束新增）。改 `ScoreRule.weight` 走**权重联动归一**：
+  不新增 ID（I6 门禁只约束新增）。**载荷字段必须在 UPDATABLE 白名单内：起草即拒
+  （`not updatable`），物化侧同口径兜底——白名单外字段曾被静默跳过且 apply 回报
+  merged（靠冒烟才暴露），现为 fail-loud**。`ScenarioCard` 契约字段顶层
+  `mustInclude` 与 `outputContract.mustInclude` 均接受（归一到 outputContract，
+  与 create 同源，消除字段路径不对称）。改 `ScoreRule.weight` 走**权重联动归一**：
   显式权重为准、未动规则按比例吸收残差至合计 1.0，并同步技能模板权重（同权口径；
   同批多条权重更新须经 `apply_draft` 的 `candidateIds` **同批物化**，一次归一——
-  逐条物化会互相打架）。
-- **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?`
-  ——场景与行为、排除规则的关联显式化（此前是「全部都用」的隐式约定）。**缺省 =
-  全部**（向后兼容，不落键）；显式数组 = 限定范围，元素须指向同类型且闭合
-  （悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发；
-  `SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
+  逐条物化会互相打架）。**驳回后的同名草案不挡重提**（幂等只对 pending/approved/
+  merged 生效；rejected 允许同名重新起草，重试记录以 retry 序号区分 ID）。
+- **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?` /
+  `scoreRefs?`——场景与行为、排除规则、打分规则的关联显式化（此前是「全部都用」的隐式
+  约定）。**缺省 = 全部**（向后兼容，不落键）；显式数组 = 限定范围且**不得为空**
+  （空数组在运行侧 truthy 会收窄到 0 条规则——`scoreRefs: []` 起草/校验即拒，
+  缺省请省略键）；元素须指向同类型且闭合（悬空/错类型 → `REF_UNCLOSED`）。
+  引用位随 `scenario-orchestration` 下发，
+  **执行器按引用位收窄运行范围**（排除段只跑圈内规则、行为段只物化圈内类型、打分段
+  只求值圈内规则——范围外打分规则不再因缺特征刷待核实；D7/D13 曾仅校验不收窄或只收窄
+  部分，与「限定范围」口径冲突）。`SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
+  多场景协作口径（C4 压测拍板）：包级权重合计仍 = 1.0（WEIGHT_SUM 不变）；场景间口径
+  差异靠 scoreRefs 圈定 + 带式权重分配（公共带 + 场景带）表达，不在场景内二次归一。
+  **D14（C5 冒烟发现）**：圈定后 riskScore 上限 = 圈内权重和——`reviewGate.threshold`
+  超过该和即 `REVIEW_GATE_UNREACHABLE`（error，校验期拦截）；超过 90% 报
+  `REVIEW_GATE_TIGHT`（warn，仅近满分候选可触发）。阈值必须按圈内上限标定，
+  不得沿用全包 0.75 默认。
 - **ID 骨架门**：skeleton 确认前不得物化任何元素；分片阶段新增骨架外 ID → 校验
   error（`SKELETON_OUT_OF_SCOPE`），防 ID 漂移。口径：skeleton.ids 是**全量 Schema
   元素 ID 清单**（含 `dict-*`，不含 `OBJ.attr` 属性引用）——门禁只约束**新增 ID**；
@@ -118,6 +133,10 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - **红线纪律不变**：conclusionLike 只落 `forbiddenPhrases`，禁入输出契约；
   confidence < 0.75 强制人审；weight 合计 = 1.0 与 SKL 同权校验照旧（改权重经
   update 语义联动归一，见上；SKL 同权由归一同步，消除手抄）。
+- **v1.1 待办沉淀（P2 拍板）**：规范位 = 包根 `backlog.md`——附属文件，`exportVersion`
+  读面携带（工作台清单/YAML 导入可读写），但**不入 `listSourceFiles`/派生摘要/loadgate**
+  （改待办不触发 `DERIVED_DRIFT`）；fork 整目录复制自动携带。对话中 agent 先写会话工作区
+  `<包名>-backlog.md` 草稿，定稿条目由用户粘贴进包根；逐条格式：条目 / 理由 / 预估 ID 数。
 
 ## [P4] O→L 派生与 dsh 落地
 
@@ -131,6 +150,8 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 | 工具 | 用途 | 面 |
 |---|---|---|
 | `get_model_graph` | 画布数据源：nodes + edges + issues（按收权投影） | 建模 |
+| `create_package` | 对话建包（D3）：DRAFT 空包、同名同版本拒绝；签发仍仅人工 | 建模 |
+| `save_skeleton` | 骨架落盘（I6 前置）：ids 语法/去重校验 + `humanApproved` 契约——确认仅由用户点头驱动 | 建模 |
 | `draft_elements` | 对话轮 → ModelDelta（只入草案队列） | 建模 |
 | `apply_draft` / `reject_draft` | 人审动作工具化（画布与对话共用；`apply_draft` 收 `candidateIds` 批量同批物化——权重归一批语义；`humanApproved` 显式人审契约 + reviewedBy 留痕） | 建模 |
 | `list_capabilities` | L1–L5 能力清单，会话里可发现「这个包能干什么」 | 发现 |
@@ -152,6 +173,9 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 
 - 落地不变量沿用：L 层只读（手改 → `DERIVED_DRIFT`，改 O 层重派生）；打分只在
   规则引擎；`humanReviewRequired` 恒真；签发仅人工；工具面不携带禁语本体。
+  **D15（C5 实测发现）**：manifest 锚点按**版本**匹配——fork 原样携带的上一版本
+  `issueRecord[].manifestDigest` 既不阻断新版本门禁（签发前预检不再假漂移），
+  也不被新版本派生覆写（历史锚点保真）。
 
 ## [P5] 分期落地
 
@@ -191,6 +215,9 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - `backend/src/agent-experts.ts`（新）：专家 Profile 组装（duties + skl + TOOL）与
   `list_experts` / `invoke_expert`；专家团阶段接 `ctx.agentTeams`（可选注入，
   单专家路径不依赖）。
+- `backend/src/agent-skills.ts`：SKL 模板 skill 目录之外，注册内置 `onto-modeling`
+  建模引导技能（正文=工作边界+标准流程+引擎契约；D1：全新会话的建模需求曾被外部
+  导图技能误导轨，目录内需要一个更强匹配的平台正解；`draft_elements` 描述同步指路）。
 - `workbench/src/client.ts`：classic script 单入口约束下**不拆文件**，按分区落位
   （`GraphCanvas` / `InspectorView` / `GraphWorkbench` 为文件内分区组件，主区建模视图
   与右栏 `ontology-graph` tab 共用）；建模 tab 以画布为主视图，表格降级为清单视图保留。

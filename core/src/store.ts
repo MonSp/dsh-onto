@@ -279,6 +279,7 @@ function normalizeScenario(raw: Record<string, unknown>): OntologyPackage['scena
     // v1.1 引用位：缺省 = 全部（不落键）；显式数组 = 限定范围
     ...(Array.isArray(raw['behaviorRefs']) ? { behaviorRefs: raw['behaviorRefs'] as string[] } : {}),
     ...(Array.isArray(raw['exclusionRefs']) ? { exclusionRefs: raw['exclusionRefs'] as string[] } : {}),
+    ...(Array.isArray(raw['scoreRefs']) ? { scoreRefs: raw['scoreRefs'] as string[] } : {}),
     outputContract,
     reviewGate,
     auditChecks: (raw['auditChecks'] as string[]) ?? [],
@@ -297,6 +298,7 @@ function scenarioToYaml(s: OntologyPackage['scenarios'][number]): Record<string,
     pipeline: s.pipeline,
     ...(s.behaviorRefs ? { behaviorRefs: s.behaviorRefs } : {}),
     ...(s.exclusionRefs ? { exclusionRefs: s.exclusionRefs } : {}),
+    ...(s.scoreRefs ? { scoreRefs: s.scoreRefs } : {}),
     output_contract: s.outputContract,
     review_gate: s.reviewGate,
     auditChecks: s.auditChecks,
@@ -600,6 +602,12 @@ export class PackageWorkspace {
     const files: Record<string, string> = {}
     for (const rel of listSourceFiles(dir)) {
       files[rel] = readSourceFile(dir, rel)
+    }
+    // P-2 附属文件：backlog.md（v1.1 待办）可读可导，但不入 listSourceFiles——
+    // 不进派生摘要与 loadgate（改待办不触发 DERIVED_DRIFT）；fork 整目录复制天然携带。
+    const backlog = join(dir, 'backlog.md')
+    if (existsSync(backlog) && statSync(backlog).isFile()) {
+      files['backlog.md'] = readSourceFile(dir, 'backlog.md')
     }
     return { format: 'dsh-onto-package/1', meta: readPackageMeta(dir), files }
   }

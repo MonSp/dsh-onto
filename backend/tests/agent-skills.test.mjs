@@ -9,9 +9,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPackage } from '@dsh-onto/core'
 import {
+  MODELING_GUIDE_NAME,
   candidateNameForSkl,
   collectSkillSources,
   compareVersions,
+  createModelingGuideProvider,
   dedupeSkillNames,
   locatorInWorkspace,
   parseSkillLocator,
@@ -213,4 +215,28 @@ test('版本比较：非数字段不猜 0（1.x.0 ≠ 1.0.0，确定性回退串
   assert.notEqual(compareVersions('1.x.0', '1.0.0'), 0)
   assert.notEqual(compareVersions('1.x.0', '1.y.0'), 0)
   assert.equal(compareVersions('1.x.0', '1.x.0'), 0)
+})
+
+test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文要点）', async () => {
+  const provider = createModelingGuideProvider()
+  const cands = await provider.list({})
+  assert.equal(cands.length, 1)
+  const c = cands[0]
+  assert.equal(c.name, MODELING_GUIDE_NAME)
+  assert.equal(c.provider, 'onto-modeling-guide')
+  assert.match(c.description, /本体建模/)
+  assert.match(c.description, /骨架/)
+  const def = await provider.get(c)
+  assert.ok(def, '内置引导技能可加载')
+  for (const marker of [
+    '建包', '骨架', 'draft_elements', 'apply_draft', 'RedLine', 'humanApproved',
+    'ISSUED', 'ontology-business-map', 'mustInclude', 'candidateId', 'behaviorRefs', 'scoreRefs',
+    'SKELETON_OUT_OF_SCOPE',
+  ]) {
+    assert.ok(def.content.includes(marker), '引导正文缺少要点: ' + marker)
+  }
+  // spoofed name 拒载
+  assert.equal(await provider.get({ ...c, name: 'spoofed-name' }), undefined)
+  // 非本提供方候选拒载
+  assert.equal(await provider.get({ ...c, provider: 'onto-skill-templates' }), undefined)
 })

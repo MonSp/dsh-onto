@@ -42,17 +42,26 @@ export class ScenarioRunError extends Error {
   }
 }
 
-/** 从派生配置提取规则引擎配置。 */
-export function ruleEngineConfigOf(pkg: OntologyPackage): RuleEngineConfig {
+/**
+ * 从派生配置提取规则引擎配置。
+ * v1.1 引用位参与运行收窄：场景带 `exclusionRefs` / `scoreRefs` 时只执行圈内规则
+ * （缺省 = 全部）——此前排除与打分均全量执行，与「显式数组 = 限定范围」口径冲突
+ * （D7 排除段 / D13 打分段；打分收窄另使范围外规则不再因缺特征刷待核实）。
+ */
+export function ruleEngineConfigOf(pkg: OntologyPackage, scenario?: O3ScenarioCard): RuleEngineConfig {
+  const exRefs = scenario?.exclusionRefs
+  const exclusions = exRefs ? pkg.exclusionRules.filter((r) => exRefs.includes(r.id)) : pkg.exclusionRules
+  const scRefs = scenario?.scoreRefs
+  const scorings = scRefs ? pkg.scoreRules.filter((r) => scRefs.includes(r.id)) : pkg.scoreRules
   return {
-    exclusion: pkg.exclusionRules.map((r) => ({
+    exclusion: exclusions.map((r) => ({
       id: r.id,
       name: r.name,
       action: r.action,
       factor: r.factor ?? null,
       condition: r.condition,
     })),
-    scoring: pkg.scoreRules.map((r) => ({
+    scoring: scorings.map((r) => ({
       id: r.id,
       name: r.name,
       weight: r.weight,
@@ -91,7 +100,7 @@ export function runScenario(
 
   const startedAt = now().toISOString()
   const runId = `run-${randomUUID().slice(0, 8)}`
-  const config = ruleEngineConfigOf(pkg)
+  const config = ruleEngineConfigOf(pkg, scenario)
 
   /* pipeline 状态 */
   let ingestProblems: string[] = []
@@ -109,7 +118,7 @@ export function runScenario(
         break
       }
       case 'BEHAVIOR_CALL': {
-        behaviorInstances.push(...materializeBehaviors(pkg, dataset))
+        behaviorInstances.push(...materializeBehaviors(pkg, dataset, scenario))
         break
       }
       case 'RULE_EVALUATE': {
@@ -175,6 +184,16 @@ export function runScenario(
   const requireReviewFor = candidates
     .filter((c) => c.riskScore >= scenario.reviewGate.threshold)
     .map((c) => c.candidateId)
+  // P-1：includeExcluded=true 时排除件也进人工复核队列（缺省 = 现状，只收有分候选）
+  if (scenario.reviewGate.includeExcluded === true) {
+    const seen = new Set(requireReviewFor)
+    for (const ex of excluded) {
+      if (!seen.has(ex.candidateId)) {
+        seen.add(ex.candidateId)
+        requireReviewFor.push(ex.candidateId)
+      }
+    }
+  }
 
   const result: ScenarioRunResult = {
     scenarioId,
@@ -253,12 +272,15 @@ function ingestDataset(pkg: OntologyPackage, dataset: RuntimeDataset): string[] 
   return problems
 }
 
-/** BEHAVIOR_CALL：行为实例生成与关系聚合（运行时行为记录）。 */
+/** BEHAVIOR_CALL：行为实例生成与关系聚合（运行时行为记录）；behaviorRefs 显式圈定时只跑圈内（缺省 = 全部）。 */
 function materializeBehaviors(
   pkg: OntologyPackage,
   dataset: RuntimeDataset,
+  scenario: O3ScenarioCard,
 ): RuntimeBehaviorInstance[] {
-  const behaviorTypeIds = new Set(pkg.behaviors.map((b) => b.id))
+  const refs = scenario.behaviorRefs
+  const inScope = refs ? pkg.behaviors.filter((b) => refs.includes(b.id)) : pkg.behaviors
+  const behaviorTypeIds = new Set(inScope.map((b) => b.id))
   const out: RuntimeBehaviorInstance[] = []
   for (const b of dataset.behaviors ?? []) {
     if (!behaviorTypeIds.has(b.type)) continue
