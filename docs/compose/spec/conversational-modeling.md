@@ -97,14 +97,21 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - **修改/接线语义（op='update'）**：`DraftItem` 增 `op: 'create'|'update'` 与
   `targetId`（Attribute 为 `OBJ.attr` 形态）。update 物化对既有元素做增量合并——
   标量字段覆盖、`weights` 按键并入、数组整替，`append.<字段>=[…]` 追加去重（接线）；
-  不新增 ID（I6 门禁只约束新增）。改 `ScoreRule.weight` 走**权重联动归一**：
+  不新增 ID（I6 门禁只约束新增）。**载荷字段必须在 UPDATABLE 白名单内：起草即拒
+  （`not updatable`），物化侧同口径兜底——白名单外字段曾被静默跳过且 apply 回报
+  merged（靠冒烟才暴露），现为 fail-loud**。`ScenarioCard` 契约字段顶层
+  `mustInclude` 与 `outputContract.mustInclude` 均接受（归一到 outputContract，
+  与 create 同源，消除字段路径不对称）。改 `ScoreRule.weight` 走**权重联动归一**：
   显式权重为准、未动规则按比例吸收残差至合计 1.0，并同步技能模板权重（同权口径；
   同批多条权重更新须经 `apply_draft` 的 `candidateIds` **同批物化**，一次归一——
-  逐条物化会互相打架）。
+  逐条物化会互相打架）。**驳回后的同名草案不挡重提**（幂等只对 pending/approved/
+  merged 生效；rejected 允许同名重新起草，重试记录以 retry 序号区分 ID）。
 - **场景引用位（v1.1）**：`ScenarioCard` 增 `behaviorRefs?` / `exclusionRefs?`
   ——场景与行为、排除规则的关联显式化（此前是「全部都用」的隐式约定）。**缺省 =
   全部**（向后兼容，不落键）；显式数组 = 限定范围，元素须指向同类型且闭合
-  （悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发；
+  （悬空/错类型 → `REF_UNCLOSED`）。引用位随 `scenario-orchestration` 下发，
+  **执行器按引用位收窄运行范围**（排除段只跑圈内规则、行为段只物化圈内类型；
+  曾仅做校验与下发、运行仍全量执行，与「限定范围」口径冲突）。
   `SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
 - **ID 骨架门**：skeleton 确认前不得物化任何元素；分片阶段新增骨架外 ID → 校验
   error（`SKELETON_OUT_OF_SCOPE`），防 ID 漂移。口径：skeleton.ids 是**全量 Schema
@@ -191,6 +198,9 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 - `backend/src/agent-experts.ts`（新）：专家 Profile 组装（duties + skl + TOOL）与
   `list_experts` / `invoke_expert`；专家团阶段接 `ctx.agentTeams`（可选注入，
   单专家路径不依赖）。
+- `backend/src/agent-skills.ts`：SKL 模板 skill 目录之外，注册内置 `onto-modeling`
+  建模引导技能（正文=工作边界+标准流程+引擎契约；D1：全新会话的建模需求曾被外部
+  导图技能误导轨，目录内需要一个更强匹配的平台正解；`draft_elements` 描述同步指路）。
 - `workbench/src/client.ts`：classic script 单入口约束下**不拆文件**，按分区落位
   （`GraphCanvas` / `InspectorView` / `GraphWorkbench` 为文件内分区组件，主区建模视图
   与右栏 `ontology-graph` tab 共用）；建模 tab 以画布为主视图，表格降级为清单视图保留。
