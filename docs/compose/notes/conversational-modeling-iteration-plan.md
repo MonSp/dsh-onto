@@ -100,6 +100,6 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 
 ## 五、分支与提交现状
 
-`feat/multi-domain-stress`：15 提交（5 fix / 4 feat / 6 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 + 遗留待办（D3 实测/C5/D14/D15/D2残）全部完成；仅 D8 数值格式化维持 wontfix-at-present（长尾已拍板接受）；
+`feat/multi-domain-stress`：19 提交（5 fix / 5 feat / 9 docs），HEAD=`cfa7277` 与远端同步，已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 + 遗留待办（D3 实测/C5/D14/D15/D2残）全部完成；仅 D8 数值格式化维持 wontfix-at-present（长尾已拍板接受）；
 C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
 C1–C3 三个 ISSUED 包留在 dsh profile 数据目录，作为后续 P4 回归夹具。
