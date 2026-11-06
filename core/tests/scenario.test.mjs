@@ -134,3 +134,107 @@ test('最小包场景：人工复核字段与 reviewGate 阈值生效', () => {
     rmWorkspace(root)
   }
 })
+
+test('D7：场景引用位参与运行收窄——exclusionRefs/behaviorRefs 生效，缺省=全部', () => {
+  const base = minimalPkg()
+  const { dir, root } = mkWorkspaceWithPkg({
+    behaviors: [
+      { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+      { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+    ],
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+      { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+    ],
+    // 场景只圈定 E1 与行为 X——E2 与行为 Y 不在运行范围
+    scenarios: [{ ...base.scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] }],
+  })
+  try {
+    savePackage(dir, minimalPkg({
+      behaviors: [
+        { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+        { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+      ],
+      exclusionRules: [
+        { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+        { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+      ],
+      scenarios: [{ ...base.scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] }],
+    }))
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [
+        { id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' },
+        { id: 'BV2', type: 'BHV-TST-Y', anchorRef: 'B1', objectRef: 'B1', occurredAt: '2026-01-02T00:00:00Z' },
+      ],
+      candidates: [
+        { candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+        { candidateId: 'C2', objectRef: 'B1', features: { f1: 0.6 }, tags: ['t'] },
+      ],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    // E2（tag=='x' drop）不在 exclusionRefs → 不得剔除 C1
+    const ids = result.candidates.map((c) => c.candidateId)
+    assert.ok(ids.includes('C1'), 'exclusionRefs 之外的排除规则不参与运行: ' + JSON.stringify(result.excluded))
+    assert.ok(!result.excluded.some((x) => x.ruleId === 'RULE-TST-E2'))
+    // E1（在圈内）照常生效：C2 tag=t → downweight
+    const c2 = result.candidates.find((c) => c.candidateId === 'C2')
+    assert.ok(c2.riskScore < 0.6 * 0.5 + 0.0001, '圈内排除仍生效, got ' + c2.riskScore)
+    // behaviorRefs 只跑 X：BV2（类型 Y）不进行为实例——经 O2_CLOSED 审计明细观察
+    const o2 = result.audit.checks.find((c) => c.check === 'O2_CLOSED')
+    assert.match(o2.detail, /行为实例 1 条/, 'behaviorRefs 收窄行为实例: ' + o2.detail)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('D7：缺省引用位 = 全部（不落键时行为与排除不受限）', () => {
+  const { dir, root } = mkWorkspaceWithPkg({
+    behaviors: [
+      { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+      { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+    ],
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+      { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+    ],
+  })
+  try {
+    savePackage(dir, minimalPkg({
+      behaviors: [
+        { id: 'BHV-TST-X', name: '行为X', anchor: 'OBJ-TST-A', relations: ['REL-TST-AB'] },
+        { id: 'BHV-TST-Y', name: '行为Y', anchor: 'OBJ-TST-B', relations: [] },
+      ],
+      exclusionRules: [
+        { id: 'RULE-TST-E1', name: '排除一', action: 'downweight', factor: 0.5, condition: "tag == 't'" },
+        { id: 'RULE-TST-E2', name: '排除二', action: 'drop', condition: "tag == 'x'" },
+      ],
+    }))
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [
+        { id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' },
+        { id: 'BV2', type: 'BHV-TST-Y', anchorRef: 'B1', objectRef: 'B1', occurredAt: '2026-01-02T00:00:00Z' },
+      ],
+      candidates: [
+        { candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+      ],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.ok(!result.candidates.some((c) => c.candidateId === 'C1'), '缺省=全部：E2 照常剔除')
+    const o2 = result.audit.checks.find((c) => c.check === 'O2_CLOSED')
+    assert.match(o2.detail, /行为实例 2 条/, '缺省=全部：行为不限: ' + o2.detail)
+  } finally {
+    rmWorkspace(root)
+  }
+})

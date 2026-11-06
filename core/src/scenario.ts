@@ -42,10 +42,16 @@ export class ScenarioRunError extends Error {
   }
 }
 
-/** 从派生配置提取规则引擎配置。 */
-export function ruleEngineConfigOf(pkg: OntologyPackage): RuleEngineConfig {
+/**
+ * 从派生配置提取规则引擎配置。
+ * v1.1 引用位参与运行收窄：场景带 `exclusionRefs` 时只执行圈内排除规则（缺省 = 全部）——
+ * 此前引用位只做校验与下发，运行仍全量执行，与「显式数组 = 限定范围」口径冲突（D7）。
+ */
+export function ruleEngineConfigOf(pkg: OntologyPackage, scenario?: O3ScenarioCard): RuleEngineConfig {
+  const refs = scenario?.exclusionRefs
+  const exclusions = refs ? pkg.exclusionRules.filter((r) => refs.includes(r.id)) : pkg.exclusionRules
   return {
-    exclusion: pkg.exclusionRules.map((r) => ({
+    exclusion: exclusions.map((r) => ({
       id: r.id,
       name: r.name,
       action: r.action,
@@ -91,7 +97,7 @@ export function runScenario(
 
   const startedAt = now().toISOString()
   const runId = `run-${randomUUID().slice(0, 8)}`
-  const config = ruleEngineConfigOf(pkg)
+  const config = ruleEngineConfigOf(pkg, scenario)
 
   /* pipeline 状态 */
   let ingestProblems: string[] = []
@@ -109,7 +115,7 @@ export function runScenario(
         break
       }
       case 'BEHAVIOR_CALL': {
-        behaviorInstances.push(...materializeBehaviors(pkg, dataset))
+        behaviorInstances.push(...materializeBehaviors(pkg, dataset, scenario))
         break
       }
       case 'RULE_EVALUATE': {
@@ -253,12 +259,15 @@ function ingestDataset(pkg: OntologyPackage, dataset: RuntimeDataset): string[] 
   return problems
 }
 
-/** BEHAVIOR_CALL：行为实例生成与关系聚合（运行时行为记录）。 */
+/** BEHAVIOR_CALL：行为实例生成与关系聚合（运行时行为记录）；behaviorRefs 显式圈定时只跑圈内（缺省 = 全部）。 */
 function materializeBehaviors(
   pkg: OntologyPackage,
   dataset: RuntimeDataset,
+  scenario: O3ScenarioCard,
 ): RuntimeBehaviorInstance[] {
-  const behaviorTypeIds = new Set(pkg.behaviors.map((b) => b.id))
+  const refs = scenario.behaviorRefs
+  const inScope = refs ? pkg.behaviors.filter((b) => refs.includes(b.id)) : pkg.behaviors
+  const behaviorTypeIds = new Set(inScope.map((b) => b.id))
   const out: RuntimeBehaviorInstance[] = []
   for (const b of dataset.behaviors ?? []) {
     if (!behaviorTypeIds.has(b.type)) continue
