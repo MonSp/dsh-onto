@@ -17,7 +17,9 @@ import {
   PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
+  buildDiffTable,
   buildRunRecord,
+  buildTaskSignature,
   compareRunRecords,
   exportRunArchive,
   isInsideDir,
@@ -26,6 +28,7 @@ import {
   loadPackage,
   loadRunRecord,
   loadRunRedlines,
+  retrieveSimilar,
   runScenario,
   saveRunRecord,
   verifyDerived,
@@ -676,6 +679,25 @@ export function renderScenarioList(scenarios: unknown[]): string {
   )
 }
 
+/**
+ * recall_experience 渲染（N4）：只回结构位（runId/score/outcome/理由），无自由流程；
+ * 冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
+ */
+export function renderRecallText(v: {
+  coldStart: boolean
+  hits: Array<{ runId: string; score: number; outcome: string; counterexample: boolean; reasons: string[] }>
+  advice: string
+}): string {
+  if (v.coldStart || v.hits.length === 0) {
+    return '冷启动：无相似经验（不硬迁移，走全量执行）。'
+  }
+  const lines = v.hits.map(
+    (h) =>
+      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'} 理由：${h.reasons.join('; ')}`,
+  )
+  return [`命中 ${v.hits.length} 条：`, ...lines, v.advice].join('\n')
+}
+
 /** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
 export function renderGraphSummary(g: ModelGraph): string {
   const draftCount = g.nodes.filter((n) => n.draft).length
@@ -1116,6 +1138,80 @@ export function apply(ctx: Context): void {
         },
         [],
         (args) => redlinesForRuns(ws, args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'recall_experience',
+      description:
+        '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
+        + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
+        + '结果仅含结构位（runId/score/outcome/签名字段）与转人工提示，不含自由流程描述。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
+        dataset: { type: 'json', description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            coldStart: { type: 'boolean', required: true },
+            hits: { type: 'array', required: true, items: { type: 'json' } },
+            advice: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => textBlock(renderRecallText(value as never)),
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
+          const pkg = load(args.name, args.version)
+          const raw = (args.dataset ?? {}) as Partial<RuntimeDataset>
+          const dataset: RuntimeDataset = {
+            objects: Array.isArray(raw.objects) ? raw.objects : [],
+            relations: Array.isArray(raw.relations) ? raw.relations : [],
+            behaviors: Array.isArray(raw.behaviors) ? raw.behaviors : undefined,
+            candidates: Array.isArray(raw.candidates) ? raw.candidates : [],
+          }
+          const signature = buildTaskSignature({
+            pkg,
+            scenarioId: args.scenarioId,
+            datasetSummary: {
+              objects: dataset.objects.length,
+              relations: dataset.relations.length,
+              behaviors: dataset.behaviors?.length ?? 0,
+              candidates: dataset.candidates.length,
+            },
+          })
+          const result = retrieveSimilar(ws.root, {
+            signature,
+            externalRefs: pkg.meta.externalRefs,
+          })
+          const hits = result.hits.map((h) => ({
+            runId: h.note.runId,
+            score: Number(h.score.toFixed(2)),
+            outcome: h.note.outcome,
+            counterexample: h.note.counterexample,
+            reasons: h.reasons,
+          }))
+          let advice: string
+          if (result.coldStart || hits.length === 0) {
+            advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
+          } else {
+            const draft = buildDiffTable(signature, result.hits[0].note.signature)
+            advice =
+              draft.mustChange.length > 0
+                ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
+                : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+          }
+          return toolOut({ coldStart: result.coldStart, hits, advice })
+        },
+        [],
+        (args) => redlines(args),
       ),
     }),
   )

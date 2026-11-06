@@ -29,6 +29,7 @@ import {
   loadDatasetFromArgs,
   loadToolPackage,
   projectPackageList,
+  renderRecallText,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -229,6 +230,32 @@ test('只读查询投影：摘要/口径/场景清单字段齐全', () => {
   assert.ok(catalog.scenarios.length > 0)
   assert.ok(Array.isArray(catalog.scenarios[0].outputFields))
   assert.match(renderScenarioList(catalog.scenarios), /SCN-AML-FIND-CLUES/)
+})
+
+test('recall_experience 渲染（N4）：只回结构位；冷启动不硬迁；差异转人工', () => {
+  // 冷启动：不硬迁移话术
+  const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
+  assert.match(cold, /冷启动/)
+  assert.match(cold, /不硬迁移/)
+
+  // 命中：结构位行 + 低置信度转人工
+  const hit = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: ['同 scenarioId', 'stepShape 一致'],
+    }],
+    advice: '低置信度：结构位差异（ruleRefs）→ 转人工确认后方可复用',
+  })
+  assert.match(hit, /run-abc12345/)
+  assert.match(hit, /score=0\.90/)
+  assert.match(hit, /同 scenarioId/)
+  assert.match(hit, /转人工/)
+  // 无自由流程描述（不出现步骤编造词）
+  assert.doesNotMatch(hit, /执行流程|步骤图|自由/)
 })
 
 test('知识上传回执不回显 content', () => {

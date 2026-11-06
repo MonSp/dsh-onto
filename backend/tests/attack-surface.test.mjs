@@ -803,7 +803,7 @@ test('I4 收权：新工具面 objectId/objectRef 入参同过 guard，未命中
   assert.equal(grantGuardDecision('compare_runs', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
   assert.equal(grantGuardDecision('export_audit', { runId: 'run-a' }, () => []), undefined)
   // 注入 objectId：同 guard 收口，未收权即拒
-  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit']) {
+  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'recall_experience']) {
     const denial = grantGuardDecision(tool, { runId: 'run-a', objectId: 'OBJ-NOPE' }, () => [])
     assert.ok(typeof denial === 'string' && denial.includes('OBJECT_NOT_GRANTED'), `${tool} 应拒: ${String(denial)}`)
   }

@@ -48,6 +48,7 @@ const NEW_TOOLS = [
   'invoke_expert',
   'create_package',
   'save_skeleton',
+  'recall_experience',
 ]
 
 function mkAmlWorkspace({ derived = false } = {}) {
