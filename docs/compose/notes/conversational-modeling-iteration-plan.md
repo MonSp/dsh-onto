@@ -27,13 +27,10 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | D9 | 引擎 | update 白名单外字段静默忽略却报 merged → 起草即拒 fail-loud + mustInclude create/update 归一 | 5640467 |
 | D10 | 工具 | 起草缺引擎契约说明（mustInclude 五键/模板变量/引用位） → 写入引导技能正文 | a1e0337 |
 | D13 | 引擎 | 打分规则无场景收窄、范围外规则刷待核实 → 新增 `scoreRefs`（校验/执行/派生/持久化/图谱边全链） | 8b417a6 |
+| D3 | 产品+工具 | 对话建包/存骨架（create_package + save_skeleton：DRAFT 空包同名拒绝、humanApproved 确认契约、ID 语法去重、ISSUED 只读、ONTOOL_NAMES 登记） | 087d630 |
 | — | 文档 | spec 口径同步（update fail-loud、refs 运行收窄、scoreRefs、多场景拍板）、测试计数 110/121 | 5513832, 66b021d |
 
-### 已拍板待修（1 项）
-
-| # | 面 | 内容 | 拍板结论与设计要点 |
-|---|---|---|---|
-| D3 | 产品+工具 | agent 无建包/存骨架工具，开局必须人工切 UI（每案 ~2 步，五案十次） | **「现在补上」**：① 新增 `create_package`（name/version/domain，仅 DRAFT 空包、同名幂等拒绝）；② 新增 `save_skeleton`（domainCode/ids/confirmed——`confirmed=true` 仅当用户在会话中明确点头，humanApproved 同款契约，agent 不得自确认）；③ 登记 `client.ts allDescriptors`；④ attack-surface 不变量表扩两工具用例；⑤ 引导技能正文改写「建包已可对话完成、骨架确认仍须用户点头」；⑥ 验证阶梯全绿。骨架 I6 门语义不变，变的只是代录入。 |
+### 已拍板待修（0 项：D3 已于 087d630 完成并入 PR #5）
 
 ### 待拍板（按面分类）
 
@@ -72,7 +69,7 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | Phase | 内容 | 验收 |
 |---|---|---|
 | **P0 已完成** | D1/D6/D7/D9/D10/D13 + spec/计数（8 提交在分支） | 验证阶梯全绿（110/121/2-2） |
-| **P1 下一步（已拍板）** | D3 对话建包/存骨架：六要点（见台账） | 新增 backend 测试 ≥2（建包幂等/骨架契约拒自确认）；attack-surface 全表重放；引导技能文案更新；阶梯全绿 |
+| **P1 已完成** | D3 对话建包/存骨架（087d630）：backend 测试 +2（123/123）、attack-surface 全表重放、引导技能与 spec 更新 | 阶梯全绿（110/123/2-2）已验 |
 | **P2 小赢包（待拍板，一次批）** | D4 清单草案可见 + D12 围栏口径 + D5 报错内联指路 + DOC-1 骨架模板补绑定段 | 各带 1 测试；阶梯全绿 |
 | **P3 结构包（待拍板）** | D11 签发前一键预检 + P-1 否决件队列开关 + P-2 backlog 沉淀口径 | 按项单独设计评审 |
 | **P4 验证（测试已叫停，待指令）** | 若需回归实测：优先**续跑 C4-TAX 内容起草**（骨架已就位、三场景+scoreRefs 是新特性唯一实测面）；C5-MIC 视需要补「深层生命周期」特征 | 一轮骨架外流程：分片→签发→派生→三场景验收 |
@@ -92,6 +89,6 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 
 ## 五、分支与提交现状
 
-`feat/multi-domain-stress`：8 提交（3 fix / 2 feat / 3 docs），工作树仅剩本次文档；
-远端推送与 PR 待确认执行时机。C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
+`feat/multi-domain-stress`：11 提交（4 fix / 3 feat / 4 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0+P1 完成，P2 起待拍板；
+C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
 C1–C3 三个 ISSUED 包留在 dsh profile 数据目录，作为后续 P4 回归夹具。
