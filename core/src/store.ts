@@ -603,6 +603,12 @@ export class PackageWorkspace {
     for (const rel of listSourceFiles(dir)) {
       files[rel] = readSourceFile(dir, rel)
     }
+    // P-2 附属文件：backlog.md（v1.1 待办）可读可导，但不入 listSourceFiles——
+    // 不进派生摘要与 loadgate（改待办不触发 DERIVED_DRIFT）；fork 整目录复制天然携带。
+    const backlog = join(dir, 'backlog.md')
+    if (existsSync(backlog) && statSync(backlog).isFile()) {
+      files['backlog.md'] = readSourceFile(dir, 'backlog.md')
+    }
     return { format: 'dsh-onto-package/1', meta: readPackageMeta(dir), files }
   }
 

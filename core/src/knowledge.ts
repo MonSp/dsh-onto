@@ -98,6 +98,11 @@ export function validateDraftItem(item: unknown): string | null {
       if (th !== undefined && th !== null && (typeof th !== 'number' || !Number.isFinite(th))) {
         return 'bad payload.reviewGate.threshold'
       }
+      // P-1：includeExcluded 只接受布尔（起草即拒，防脏类型入队）
+      const ie = (rg as Record<string, unknown>)['includeExcluded']
+      if (ie !== undefined && ie !== null && typeof ie !== 'boolean') {
+        return 'bad payload.reviewGate.includeExcluded（须为布尔）'
+      }
     }
   }
   const conf = it['confidence']
@@ -1109,6 +1114,10 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
           threshold: Number.isFinite((p['reviewGate'] as { threshold?: number })?.threshold)
             ? (p['reviewGate'] as { threshold: number }).threshold
             : 0.75,
+          // P-1：显式 true 才落键（缺省 = 现状，向后兼容）
+          ...((p['reviewGate'] as { includeExcluded?: unknown })?.includeExcluded === true
+            ? { includeExcluded: true as const }
+            : {}),
         },
         auditChecks: Array.isArray(p['auditChecks']) ? (p['auditChecks'] as string[]) : ['O1_CLOSED', 'O2_CLOSED', 'O3_CLOSED'],
       })

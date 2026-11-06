@@ -1,7 +1,7 @@
 /** 签发状态机与包存储验收（规范 §3.4 / §11.3）：ISSUED 只读、fork、人审签发。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -12,6 +12,9 @@ import {
   savePackage,
   readPackageMeta,
   writeSourceFile,
+  listSourceFiles,
+  derivePackage,
+  verifyDerived,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, mkWorkspace, rmWorkspace } from './helpers.mjs'
 
@@ -290,5 +293,28 @@ test('读源围栏：readSourceFile 本体拒绝穿越/ADS/绝对路径/junction
   } finally {
     rmSync(tmp, { recursive: true, force: true })
     rmSync(outside, { recursive: true, force: true })
+  }
+})
+test('P-2 backlog.md：包根附属文件可导可读，但不入派生摘要（改待办不触发 DERIVED_DRIFT）', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    writeFileSync(join(dir, 'backlog.md'), '- [ ] v1.1 数据源绑定\n', 'utf8')
+    // schema 源清单（派生/门禁口径）不含附属文件
+    const schema = listSourceFiles(dir)
+    assert.ok(!schema.includes('backlog.md'), '附属文件不得进 schema 源清单')
+    // 读面（exportVersion）附带读出 → 工作台 YAML/展示可见
+    const archive = ws.exportVersion('test-pkg', '1.0.0')
+    assert.equal(archive.files['backlog.md'], '- [ ] v1.1 数据源绑定\n')
+    // 派生 + 门禁：backlog 不入 manifest；改写不触发漂移
+    derivePackage(dir)
+    const gate1 = verifyDerived(dir)
+    assert.ok(gate1.ok, gate1.reason)
+    const manifestText = readFileSync(join(dir, 'derived/manifest.yaml'), 'utf8')
+    assert.ok(!manifestText.includes('backlog.md'), 'manifest 不含附属文件')
+    writeFileSync(join(dir, 'backlog.md'), '- [ ] v1.1 数据源绑定\n- [ ] v1.2 团伙场景\n', 'utf8')
+    const gate2 = verifyDerived(dir)
+    assert.ok(gate2.ok, '改写 backlog 不得 DERIVED_DRIFT: ' + gate2.reason)
+  } finally {
+    rmWorkspace(root)
   }
 })

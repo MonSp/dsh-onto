@@ -134,6 +134,9 @@ window.__ModuleLoader__.load({
       validateBtn: '执行校验',
       deriveBtn: '执行派生',
       gateBtn: '加载门禁',
+      preflightBtn: '签发前预检',
+      backlogTitle: 'backlog.md · v1.1 待办（包根附属文件）',
+      backlogHint: '可在下方 YAML 导入区编辑（relPath: backlog.md）；改写不触发派生漂移，fork 自动携带',
       score: '质量分',
       errors: '错误',
       warnings: '警告',
@@ -312,6 +315,9 @@ window.__ModuleLoader__.load({
       validateBtn: 'Validate',
       deriveBtn: 'Derive',
       gateBtn: 'Load gate',
+      preflightBtn: 'Pre-issue preflight',
+      backlogTitle: 'backlog.md · v1.1 backlog (package-root sidecar)',
+      backlogHint: 'Editable in the YAML import area (relPath: backlog.md); edits never trigger derive drift, forks carry it over',
       score: 'Score',
       errors: 'Errors',
       warnings: 'Warnings',
@@ -2195,6 +2201,20 @@ window.__ModuleLoader__.load({
                 busy === 'yaml' ? t('busy') : t('yamlWrite'),
               ),
             ),
+            // P-2：包根 backlog.md（附属文件）只读展示——读面由 exportVersion 携带
+            ...(files['backlog.md']
+              ? [
+                  h(
+                    Card,
+                    { key: 'backlog', title: t('backlogTitle') },
+                    h('pre', {
+                      className: 'ow-note',
+                      style: { whiteSpace: 'pre-wrap', margin: 0, maxHeight: 200, overflow: 'auto' },
+                    }, files['backlog.md']),
+                    h('p', { className: 'ow-note' }, t('backlogHint')),
+                  ),
+                ]
+              : []),
             ]
             )
           )
@@ -2716,6 +2736,8 @@ window.__ModuleLoader__.load({
           const [deriveInfo, setDeriveInfo] = useState('')
           const [busy, setBusy] = useState('')
           const [error, setError] = useState('')
+          // D11：签发前一键预检清单（校验写盘 → 派生 → 加载门禁；签发动作仍人工）
+          const [preflight, setPreflight] = useState<string[] | null>(null)
 
           const act = async (label: string, fn: () => Promise<void>) => {
             setBusy(label)
@@ -2784,7 +2806,57 @@ window.__ModuleLoader__.load({
                 },
                 busy === 'gate' ? t('busy') : t('gateBtn'),
               ),
+              h(
+                'button',
+                {
+                  className: 'ow-btn',
+                  disabled: !!busy,
+                  onClick: () =>
+                    void act('preflight', async () => {
+                      const lines: string[] = []
+                      // 1) 校验写盘（质量报告落盘，同「执行校验」）
+                      const vOut = unwrap<{ report: Record<string, unknown> }>(
+                        await vApi!.validate({ name: selected.name, version: selected.version }),
+                      )
+                      setReport(vOut.report)
+                      const vr = vOut.report as { score?: number; errors?: unknown[]; warnings?: unknown[] }
+                      const errN = (vr.errors ?? []).length
+                      const warnN = (vr.warnings ?? []).length
+                      lines.push(
+                        errN === 0
+                          ? `✓ 校验：质量分 ${String(vr.score ?? '')}，错误 0，警告 ${warnN}`
+                          : `✗ 校验：错误 ${errN} —— 先修复再签发`,
+                      )
+                      if (errN > 0) {
+                        setPreflight(lines)
+                        return
+                      }
+                      // 2) 派生（写 derived/** + manifest）
+                      const dOut = unwrap<{ sources: number; derived: number; sourceDigest: string }>(
+                        await dApi!.derive({ name: selected.name, version: selected.version }),
+                      )
+                      setDeriveInfo(`sources=${dOut.sources} derived=${dOut.derived} digest=${dOut.sourceDigest.slice(0, 12)}…`)
+                      lines.push(`✓ 派生：sources=${dOut.sources}，derived=${dOut.derived}`)
+                      // 3) 加载门禁
+                      const g = unwrap<Record<string, unknown>>(
+                        await dApi!.gate({ name: selected.name, version: selected.version }),
+                      )
+                      setGate(g)
+                      lines.push(g['ok'] ? '✓ 加载门禁通过' : `✗ 加载门禁：${String(g['reason'] ?? '')}`)
+                      if (g['ok']) lines.push('→ 可「提交评审」→ 人工签发（签发只能人工）')
+                      setPreflight(lines)
+                    }),
+                },
+                busy === 'preflight' ? t('busy') : t('preflightBtn'),
+              ),
             ),
+            preflight
+              ? h(
+                  'div',
+                  { key: 'preflight', style: { marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 } },
+                  ...preflight.map((l, i) => h('div', { key: i, className: 'ow-note' }, l)),
+                )
+              : null,
             deriveInfo ? h('p', { className: 'ow-note' }, deriveInfo) : null,
             gate
               ? h(

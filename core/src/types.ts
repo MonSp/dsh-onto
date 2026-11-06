@@ -148,6 +148,11 @@ export interface O3OutputContract {
 export interface O3ReviewGate {
   required: boolean
   threshold: number
+  /**
+   * 排除件也进人工复核队列（P-1 多场景协作拍板项）：true 时 requireReviewFor
+   * 追加被排除候选 ID。缺省/ false = 现状（只收达阈值的有分候选）。
+   */
+  includeExcluded?: boolean
 }
 
 export interface O3ScenarioCard {

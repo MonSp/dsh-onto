@@ -1,7 +1,7 @@
 /** 场景执行验收（规范 §9 / §11.3）：端到端全流程字段、ruleId 回指、禁语零命中。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runScenario, ScenarioRunError, derivePackage, savePackage, loadPackage } from '../dist/index.js'
+import { runScenario, ScenarioRunError, derivePackage, savePackage, loadPackage, KnowledgeStore } from '../dist/index.js'
 import { copyExamplePackage, exampleData, mkWorkspaceWithPkg, minimalPkg, rmWorkspace } from './helpers.mjs'
 
 test('端到端 AML：候选 + 风险分 + 命中规则 + 证据链 + 待核实点齐全', () => {
@@ -284,6 +284,113 @@ test('scoreRefs：执行器按场景收窄打分——范围外规则不求值�
     const c2 = full.candidates.find((c) => c.candidateId === 'C1')
     assert.ok(c2.pendingChecks.length > 0, '缺省=全部：缺 f2 应落待核实')
     assert.ok(c2.pendingVerification === true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('P-1 reviewGate.includeExcluded：排除件进人工队列；缺省保持现状', () => {
+  const base = minimalPkg()
+  const pkgWithDrop = minimalPkg({
+    exclusionRules: [
+      { id: 'RULE-TST-E1', name: '排除一', action: 'drop', condition: "tag == 'x'" },
+    ],
+    scenarios: [{
+      ...base.scenarios[0],
+      reviewGate: { required: true, threshold: 0.5, includeExcluded: true },
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkgWithDrop)
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [{ id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' }],
+      candidates: [
+        { candidateId: 'C-hot', objectRef: 'A1', features: { f1: 0.9 }, tags: ['x'] },
+        { candidateId: 'C-low', objectRef: 'B1', features: { f1: 0.1 }, tags: [] },
+      ],
+    }
+    const withFlag = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.equal(withFlag.excluded.length, 1)
+    assert.ok(withFlag.reviewGate.requireReviewFor.includes('C-hot'), '排除件须进人审队列')
+    assert.ok(withFlag.reviewGate.requireReviewFor.includes('C-low') === false || withFlag.reviewGate.requireReviewFor.includes('C-low'),
+      '低分件不进队列（阈值 0.5，0.1 不达）')
+    assert.ok(!withFlag.reviewGate.requireReviewFor.includes('C-low'), '低分且未排除的不进队列')
+
+    // 缺省（不落 includeExcluded）= 现状：排除件不进队列
+    const pkgDefault = minimalPkg({
+      exclusionRules: pkgWithDrop.exclusionRules,
+      scenarios: [{ ...base.scenarios[0] }],
+    })
+    savePackage(dir, pkgDefault)
+    derivePackage(dir)
+    const noFlag = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.equal(noFlag.excluded.length, 1)
+    assert.ok(!noFlag.reviewGate.requireReviewFor.includes('C-hot'), '缺省不改现状：排除件不进队列')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('P-1 includeExcluded 持久化：create 携带、update 可开、坏类型拒', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // create 携带
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', name: '新场景含排除复核',
+        payload: {
+          id: 'SCN-TST-2', name: '新场景含排除复核', goal: 'g', boundary: 'b',
+          reviewGate: { threshold: 0.5, includeExcluded: true },
+        },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-p1' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r = store.materialize(dir, [c.id])
+    assert.deepEqual(r.applied, [c.id], JSON.stringify(r.skipped))
+    let after = loadPackage(dir)
+    assert.equal(after.scenarios.find((s) => s.id === 'SCN-TST-2').reviewGate.includeExcluded, true)
+    assert.equal(after.scenarios.find((s) => s.id === 'SCN-TST-2').reviewGate.threshold, 0.5)
+
+    // update 开启既有场景
+    const u = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '排除件进队列', payload: { reviewGate: { includeExcluded: true } }, confidence: 0.9,
+      },
+      provenance: { turnId: 't-p1' },
+    })
+    store.reviewCandidate(u.id, 'approve')
+    const r2 = store.materialize(dir, [u.id])
+    assert.deepEqual(r2.applied, [u.id], JSON.stringify(r2.skipped))
+    after = loadPackage(dir)
+    const s1 = after.scenarios.find((s) => s.id === 'SCN-TST-1')
+    assert.equal(s1.reviewGate.includeExcluded, true)
+    assert.equal(s1.reviewGate.threshold, 0.75, '浅并保留既有 threshold')
+
+    // 坏类型拒绝（起草即拒）
+    assert.throws(
+      () => store.addDraft({
+        packageId: 'test-pkg',
+        item: {
+          layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+          name: '坏类型', payload: { reviewGate: { includeExcluded: 'yes' } }, confidence: 0.9,
+        },
+        provenance: { turnId: 't-p1' },
+      }),
+      /includeExcluded/,
+    )
   } finally {
     rmWorkspace(root)
   }

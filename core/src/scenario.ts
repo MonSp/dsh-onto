@@ -184,6 +184,16 @@ export function runScenario(
   const requireReviewFor = candidates
     .filter((c) => c.riskScore >= scenario.reviewGate.threshold)
     .map((c) => c.candidateId)
+  // P-1：includeExcluded=true 时排除件也进人工复核队列（缺省 = 现状，只收有分候选）
+  if (scenario.reviewGate.includeExcluded === true) {
+    const seen = new Set(requireReviewFor)
+    for (const ex of excluded) {
+      if (!seen.has(ex.candidateId)) {
+        seen.add(ex.candidateId)
+        requireReviewFor.push(ex.candidateId)
+      }
+    }
+  }
 
   const result: ScenarioRunResult = {
     scenarioId,
