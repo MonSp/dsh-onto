@@ -140,6 +140,8 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 | 工具 | 用途 | 面 |
 |---|---|---|
 | `get_model_graph` | 画布数据源：nodes + edges + issues（按收权投影） | 建模 |
+| `create_package` | 对话建包（D3）：DRAFT 空包、同名同版本拒绝；签发仍仅人工 | 建模 |
+| `save_skeleton` | 骨架落盘（I6 前置）：ids 语法/去重校验 + `humanApproved` 契约——确认仅由用户点头驱动 | 建模 |
 | `draft_elements` | 对话轮 → ModelDelta（只入草案队列） | 建模 |
 | `apply_draft` / `reject_draft` | 人审动作工具化（画布与对话共用；`apply_draft` 收 `candidateIds` 批量同批物化——权重归一批语义；`humanApproved` 显式人审契约 + reviewedBy 留痕） | 建模 |
 | `list_capabilities` | L1–L5 能力清单，会话里可发现「这个包能干什么」 | 发现 |
