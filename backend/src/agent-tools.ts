@@ -298,6 +298,25 @@ export function requireExistingPackage(
   return name
 }
 
+/** packageId 归一为裸包名（旧数据可能存 name@version；与 knowledge 管线同口径）。 */
+function normalizePkgId(packageId: string): string {
+  const at = packageId.lastIndexOf('@')
+  return at > 0 ? packageId.slice(0, at) : packageId
+}
+
+/**
+ * 人审契约（I1/I5）：apply_draft / reject_draft 必须显式携带 humanApproved=true——
+ * 仅当用户在会话中明确审定后代执行；agent 不得自行批准/驳回。
+ */
+export function assertHumanApproved(value: unknown, action: string): void {
+  if (value !== true) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      `humanApproved 必须为 true（人审契约：仅在用户明确指示${action}后代执行；agent 不得自行${action}）`,
+    )
+  }
+}
+
 /** 知识上传（工具面薄封装）：入参 `name@version` 校验存在性，入库 packageId 归一为裸包名。 */
 export function uploadKnowledgeForPkg(
   knowledge: KnowledgeStore,
@@ -418,9 +437,26 @@ function workspaceRedlines(ws: PackageWorkspace): string[] {
  * `InferValue<O>` 结构性不兼容（interface 无隐式索引签名，嵌套数组元素不满足
  * `JsonValue` 对象形态）。`R` 由 execute 的上下文推断为实际契约值类型；
  * 运行时由 output.schema 校验 + assertRunContract 兜底。
+ *
+ * 同时做 lossless-JSON 边界洗：harness 工具结果快照校验拒绝嵌套 undefined
+ * （JSON.stringify 会丢键但对象校验不认），显式 undefined 键在此统一剔除。
  */
 function toolOut<T, R>(value: T): R {
-  return value as unknown as R
+  return scrubUndefined(value) as unknown as R
+}
+
+/** 递归剔除显式 undefined 键/数组空洞（工具结果须可 lossless 序列化）。 */
+function scrubUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => scrubUndefined(v)) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue
+      out[k] = scrubUndefined(v)
+    }
+    return out as unknown as T
+  }
+  return value
 }
 
 /** 批量条目摘要（S2.3）：只回执行摘要，完整结果以 RunRecord 落盘供 compare/export 跟进。 */
@@ -1072,7 +1108,10 @@ export function apply(ctx: Context): void {
       name: 'draft_elements',
       description:
         '对话轮起草：把 items 入草案队列等待人审——只入队列、永不直写包（I1）。'
-        + 'items 元素：layer(O1|O2|O3)、targetKind、name、payload、confidence(0..1)、rationale。'
+        + 'items 元素：layer(O1|O2|O3)、targetKind、name、payload、confidence(0..1)、rationale；'
+        + 'op 缺省=create 新增元素。op=update 修改/接线既有元素（targetId=元素 ID，Attribute 为 OBJ.attr）：'
+        + '标量字段覆盖、weights 按键并入、数组整替，append.<字段>=[…] 追加去重（如给行为接关系）。'
+        + '改 ScoreRule.weight 会联动归一（显式权重为准，未动规则吸收残差，并同步技能模板权重）。'
         + '置信度 <0.75 自动 forcedReview；结论性表述只能 targetKind=RedLine。'
         + '可选 turnText 同时落 CONVERSATION 原料留痕（P3，含 turnId/rationale）。ISSUED 包拒绝（先 fork）。',
       parameters: {
@@ -1163,58 +1202,81 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'apply_draft',
       description:
-        '人审动作：批准一条草案并立即物化进包（唯一写包路径——经 knowledge 物化通道：ISSUED 拒绝、'
-        + '骨架门 I6、结论性表述拦截）。物化被门禁跳过时草案保持 approved 可重试；返回物化元素 ID。',
+        '人审动作：批准一条或多条草案并作为同一批物化进包（唯一写包路径——经 knowledge 物化通道：'
+        + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
+        + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
+        + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
+        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。',
       parameters: {
-        candidateId: { type: 'string', required: true, description: '草案 ID（dc-…）' },
+        candidateIds: { type: 'array', required: true, description: '草案 ID 数组（dc-…）；同批归一，多条权重更新务必一次传入' },
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '目标版本号' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示批准时传 true；agent 不得自行批准',
+        },
       },
       output: {
         schema: {
           type: 'object',
           additionalProperties: true,
           properties: {
-            candidateId: { type: 'string', required: true },
             approved: { type: 'boolean', required: true, const: true },
-            status: { type: 'string', required: true },
+            results: { type: 'array', required: true, items: { type: 'json' } },
             materialized: { type: 'array', required: true, items: { type: 'string' } },
             skipped: { type: 'array', required: true, items: { type: 'json' } },
           },
         },
         render: (_args, value) => {
           const v = value as unknown as {
-            candidateId: string
+            results: Array<{ candidateId: string; status: string; appliedAs: string | null }>
             materialized: string[]
-            skipped: Array<{ reason: string }>
+            skipped: Array<{ id: string; reason: string }>
           }
-          const head = v.materialized.length > 0 ? `已物化为 ${v.materialized.join(', ')}` : '未物化'
-          const skips = v.skipped.map((s) => `跳过：${s.reason}`).join('\n')
-          return textBlock(`草案 ${v.candidateId}：${head}${skips ? `\n${skips}` : ''}`)
+          const lines = v.results.map((r) => `- ${r.candidateId} → ${r.status}${r.appliedAs ? `（${r.appliedAs}）` : ''}`)
+          const head = `同批 ${v.results.length} 条，物化 ${v.materialized.length}：`
+          const skips = v.skipped.map((s) => `跳过 ${s.id}：${s.reason}`)
+          return textBlock([head, ...lines, ...skips].join('\n'))
         },
       },
       execute: toolExecute(
-        (args: { candidateId: string; name: string; version: string }) => {
+        (args: { candidateIds: string[]; name: string; version: string; humanApproved: boolean }) => {
+          assertHumanApproved(args.humanApproved, '批准')
+          if (!Array.isArray(args.candidateIds) || args.candidateIds.length === 0) {
+            throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空数组')
+          }
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
           if (pkg.meta.status === 'ISSUED') {
             throw new AgentToolError('INVALID_ARGS', `${args.name}@${args.version} 已签发只读：请 fork 新版本（P1）`)
           }
-          // approve 与物化同一动作（S1 闭环）；CONCLUSION_BLOCKED / CANDIDATE_* 业务码经信封透传。
-          knowledge.reviewCandidate(args.candidateId, 'approve')
-          const res = knowledge.materialize(dir, [args.candidateId])
-          const after = knowledge.getCandidate(args.candidateId)
-          const materialized =
-            res.applied.includes(args.candidateId) && typeof after.appliedAs === 'string' ? [after.appliedAs] : []
+          for (const id of args.candidateIds) {
+            const before = knowledge.getCandidate(id)
+            if (normalizePkgId(before.packageId) !== args.name) {
+              throw new AgentToolError(
+                'INVALID_ARGS',
+                `package mismatch: 草案 ${id} 属于 ${before.packageId}，目标包为 ${args.name}`,
+              )
+            }
+          }
+          // approve 与物化同一动作（S1 闭环）；同批一次 materialize → 权重归一按批语义。
+          for (const id of args.candidateIds) {
+            knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'agent-tool' })
+          }
+          const res = knowledge.materialize(dir, args.candidateIds)
+          const results = args.candidateIds.map((id) => {
+            const after = knowledge.getCandidate(id)
+            return {
+              candidateId: id,
+              status: after.status,
+              appliedAs: typeof after.appliedAs === 'string' ? after.appliedAs : null,
+            }
+          })
+          const materialized = results.flatMap((r) => (r.appliedAs !== null ? [r.appliedAs] : []))
           return toolOut(
             enforceOutputPolicy(
-              {
-                candidateId: args.candidateId,
-                approved: true,
-                status: after.status,
-                materialized,
-                skipped: res.skipped,
-              },
+              { approved: true, results, materialized, skipped: res.skipped },
               phrasesOfPkg(pkg),
             ),
           )
@@ -1228,9 +1290,18 @@ export function apply(ctx: Context): void {
   ctx.tools.register(
     defineTool({
       name: 'reject_draft',
-      description: '人审动作：驳回一条待审草案（状态置 rejected，留痕可回看；不写包）。',
+      description:
+        '人审动作：驳回一条待审草案（状态置 rejected，留痕可回看；不写包）。'
+        + 'humanApproved 同 apply_draft 人审契约：仅当用户明确指示驳回时传 true。',
       parameters: {
         candidateId: { type: 'string', required: true, description: '草案 ID（dc-…）' },
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示驳回时传 true；agent 不得自行驳回',
+        },
       },
       output: {
         schema: {
@@ -1246,10 +1317,27 @@ export function apply(ctx: Context): void {
           return textBlock(`草案 ${v.candidateId} 已驳回（${v.status}）`)
         },
       },
-      execute: toolExecute((args: { candidateId: string }) => {
-        const c = knowledge.reviewCandidate(args.candidateId, 'reject')
-        return toolOut({ candidateId: c.id, status: c.status })
-      }),
+      execute: toolExecute(
+        (args: { candidateId: string; name: string; version: string; humanApproved: boolean }) => {
+          assertHumanApproved(args.humanApproved, '驳回')
+          const dir = ws.versionDir(args.name, args.version)
+          const pkg = loadPackage(dir)
+          if (pkg.meta.status === 'ISSUED') {
+            throw new AgentToolError('INVALID_ARGS', `${args.name}@${args.version} 已签发只读（P1）`)
+          }
+          const before = knowledge.getCandidate(args.candidateId)
+          if (normalizePkgId(before.packageId) !== args.name) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `package mismatch: 草案属于 ${before.packageId}，目标包为 ${args.name}`,
+            )
+          }
+          const c = knowledge.reviewCandidate(args.candidateId, 'reject', { reviewedBy: 'agent-tool' })
+          return toolOut({ candidateId: c.id, status: c.status })
+        },
+        [],
+        (args) => redlines(args),
+      ),
     }),
   )
 

@@ -275,7 +275,8 @@ export function heuristicParse(request: LlmParseRequest): DraftItem[] {
     }
     case 'CONVERSATION': {
       // 对话轮词面路由（conversational-modeling P3）：前缀/关键词识别元素；
-      // 置信度全部 ≤0.74 → forcedReview，人审才物化；结论性表述照常转红线。
+      // 元素草案置信度 ≤0.74 → forcedReview，人审才物化；结论性表述转红线（0.85，
+      // 不设 forcedReview，但 approve 照样人审动作）。
       const afterColon = (line: string): string => {
         const i = line.search(/[：:]/)
         return i >= 0 ? line.slice(i + 1).trim() : ''

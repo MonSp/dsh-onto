@@ -5,7 +5,7 @@ duties:
     stepId: s1
     stepType: DATA_INGEST
     stageDuty: 数据归一、建图
-    toolRefs:
+    toolRefs: &a1
       - TOOL-AML-CUSTOMER
       - TOOL-AML-ACCOUNT
       - TOOL-AML-TXN
@@ -28,22 +28,7 @@ duties:
     stepId: s2
     stepType: BEHAVIOR_CALL
     stageDuty: 行为实例生成与关系聚合
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: *a1
     llm: allowed
     humanGate: false
   - id: AGT-AML-FIND-CLUES-s3
@@ -51,22 +36,7 @@ duties:
     stepId: s3
     stepType: RULE_EVALUATE
     stageDuty: 规则引擎判定（排除/打分）
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: []
     llm: forbidden
     humanGate: false
   - id: AGT-AML-FIND-CLUES-s4
@@ -74,22 +44,7 @@ duties:
     stepId: s4
     stepType: RULE_EVALUATE
     stageDuty: 规则引擎判定（排除/打分）
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: []
     llm: forbidden
     humanGate: false
   - id: AGT-AML-FIND-CLUES-s5
@@ -97,22 +52,7 @@ duties:
     stepId: s5
     stepType: SKILL_RUN
     stageDuty: 方法论模板叙述（证据摘要）
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: *a1
     llm: allowed
     humanGate: false
   - id: AGT-AML-FIND-CLUES-s6
@@ -120,22 +60,7 @@ duties:
     stepId: s6
     stepType: AUDIT_CHECK
     stageDuty: 三层闭合审计闸门
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: []
     llm: forbidden
     humanGate: false
   - id: AGT-AML-FIND-CLUES-s7
@@ -143,21 +68,6 @@ duties:
     stepId: s7
     stepType: HUMAN_REVIEW
     stageDuty: 人工复核（认定唯一出口）
-    toolRefs:
-      - TOOL-AML-CUSTOMER
-      - TOOL-AML-ACCOUNT
-      - TOOL-AML-TXN
-      - TOOL-AML-MERCHANT
-      - TOOL-AML-BENEFICIARY
-      - TOOL-AML-LIST-HIT
-      - TOOL-AML-HOLDS
-      - TOOL-AML-OUTBOUND
-      - TOOL-AML-INBOUND
-      - TOOL-AML-CONTROLS
-      - TOOL-AML-BENEFITS
-      - TOOL-AML-SAME-DEVICE
-      - TOOL-AML-SAME-ADDR
-      - TOOL-AML-PAID-TO
-      - TOOL-AML-HIT
+    toolRefs: []
     llm: forbidden
     humanGate: true

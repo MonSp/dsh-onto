@@ -43,8 +43,6 @@ import {
   verifyDerived,
   writeQualityReport,
   type KnowledgeSourceRecord,
-  type DraftCandidate,
-  type DraftItem,
   type ModelGraph,
   type OntologyPackage,
   type PackageMeta,
@@ -471,35 +469,11 @@ export class OntoKnowledge extends TypertRemoteService {
     mergeIntoName?: string
   }): Promise<{ candidate: unknown }> {
     return guard(() => ({
-      candidate: this.store.reviewCandidate(request.id, request.action, { mergeIntoName: request.mergeIntoName }),
+      candidate: this.store.reviewCandidate(request.id, request.action, {
+        mergeIntoName: request.mergeIntoName,
+        reviewedBy: 'workbench',
+      }),
     }))
-  }
-
-  /** 对话/画布直起草（conversational-modeling P3）：只入草案队列，永不直写包（I1）。 */
-  @Remote('addDraft')
-  async remoteExportAddDraft(request: {
-    name: string
-    version: string
-    item: DraftItem
-    turnId?: string
-  }): Promise<{ candidate: DraftCandidate }> {
-    return guard(() => {
-      if (!request?.name || !request?.version || !request?.item) {
-        throw ontoError('onto/bad-request', 'name/version/item required')
-      }
-      const dir = this.ws.versionDir(request.name, request.version)
-      const meta = readPackageMeta(dir)
-      if (meta.status === 'ISSUED') {
-        throw ontoError('onto/readonly', `${meta.name}@${meta.version} is ISSUED (fork before drafting)`)
-      }
-      return {
-        candidate: this.store.addDraft({
-          packageId: meta.name,
-          item: request.item,
-          provenance: { turnId: request.turnId },
-        }),
-      }
-    })
   }
 
   /** 对话开局骨架（P3/I6）：domainCode + 全量 ID 清单 + 确认态；骨架门在物化前置。 */

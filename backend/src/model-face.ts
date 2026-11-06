@@ -78,6 +78,8 @@ export function buildCapabilities(pkg: OntologyPackage, manifest: DerivedManifes
       files: filesOf('L2'),
       apiSources: pkg.apiSources.map((s) => ({ id: s.id, name: s.name, sourceType: s.sourceType })),
       fieldMapCount: pkg.fieldMaps.length,
+      // 对象/关系 → tool-contracts.tools 1:1（derive：object-read/relation-read 各一条）；
+      // 未派生时为投影数，派生后即派生文件内的工具条目数。
       toolContractCount: pkg.objects.length + pkg.relations.length,
     },
     L3: {

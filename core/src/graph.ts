@@ -18,7 +18,7 @@ import type {
 
 const LEVEL_RANK: Record<IssueLevel, number> = { error: 3, warn: 2, info: 1 }
 
-/** where → 节点 ID。支持 '元素ID' / 'PREFIX 元素ID(.attr)' 两种形态；文件路径与 'package' → 包级。 */
+/** where → 节点 ID。支持 '元素ID' / 'PREFIX 元素ID(.attr)' 两种形态；定位不到（含文件路径、'package'）返回 undefined。 */
 export function whereToNodeId(where: string, nodeIds: ReadonlySet<string>): string | undefined {
   if (!where || where === 'package') return undefined
   if (nodeIds.has(where)) return where
@@ -47,6 +47,40 @@ function pushIdRefs(
   for (const ref of extractIdRefs(text)) {
     pushEdge(edges, seen, nodeIds, { from, to: ref, kind })
   }
+}
+
+/**
+ * 草案 payload 里的语义引用字段（只取引用位，不扫 name/description 自由文本——
+ * 避免文本里出现 ID 字面即连边的假阳性）。
+ */
+function payloadRefTexts(payload: Record<string, unknown>): string[] {
+  const out: string[] = []
+  const take = (v: unknown): void => {
+    if (typeof v === 'string') out.push(v)
+  }
+  for (const key of [
+    'anchor',
+    'from',
+    'to',
+    'refObject',
+    'enumValuesRef',
+    'scenarioId',
+    'target',
+    'expression',
+    'condition',
+    'evidenceTemplate',
+  ]) {
+    take(payload[key])
+  }
+  for (const key of ['skillRefs', 'relations']) {
+    const v = payload[key]
+    if (Array.isArray(v)) v.forEach(take)
+  }
+  const weights = payload['weights']
+  if (weights && typeof weights === 'object' && !Array.isArray(weights)) {
+    out.push(...Object.keys(weights))
+  }
+  return out
 }
 
 /**
@@ -89,16 +123,18 @@ export function buildModelGraph(input: {
   for (const s of pkg.scenarios) add(s.id, 'scenario', 'O3', s.name)
 
   // 草案节点（pending 与 approved-未物化均画虚线；merged 经 provenance 回连，rejected 出画布）
+  // 注意：工具面结果须过 harness lossless-JSON 校验——可选字段用条件展开，禁止显式 undefined 键。
   for (const c of candidates) {
     if (c.status === 'merged' || c.status === 'rejected') continue
+    const provenance = c.provenance ?? (c.sourceId ? { sourceId: c.sourceId } : undefined)
     nodes.push({
       id: c.id,
       kind: 'draft',
       layer: c.layer,
       name: c.name,
       draft: true,
-      provenance: c.provenance ?? (c.sourceId ? { sourceId: c.sourceId } : undefined),
-      forcedReview: c.forcedReview || undefined,
+      ...(provenance ? { provenance } : {}),
+      ...(c.forcedReview ? { forcedReview: true } : {}),
     })
   }
 
@@ -156,10 +192,16 @@ export function buildModelGraph(input: {
   for (const r of pkg.exclusionRules) {
     pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.condition ?? '', 'ref')
   }
-  // 草案 payload 里的 ID 引用（anchor/from/to/refObject/scenarioId 等按文本抽取）
+  // 草案 payload 里的语义引用位（anchor/from/to/refObject/scenarioId/weights 等）
+  // 与 update 草案的 targetId（指向被修改的既有元素）
   for (const c of candidates) {
     if (c.status !== 'pending') continue
-    pushIdRefs(edges, edgeSeen, nodeIds, c.id, JSON.stringify(c.payload ?? {}), 'ref')
+    for (const text of payloadRefTexts(c.payload ?? {})) {
+      pushIdRefs(edges, edgeSeen, nodeIds, c.id, text, 'ref')
+    }
+    if (c.targetId) {
+      pushIdRefs(edges, edgeSeen, nodeIds, c.id, c.targetId, 'ref')
+    }
   }
 
   /* 溯源回连（I2）：appliedAs → 草案 provenance 上节点 */
@@ -169,21 +211,22 @@ export function buildModelGraph(input: {
   }
   for (const n of nodes) {
     const c = applied.get(n.id)
-    if (c) n.provenance = c.provenance ?? (c.sourceId ? { sourceId: c.sourceId } : undefined)
+    if (!c) continue
+    const provenance = c.provenance ?? (c.sourceId ? { sourceId: c.sourceId } : undefined)
+    if (provenance) n.provenance = provenance
   }
 
-  /* issues 定位（I3） */
+  /* issues 定位（I3）：where 归一为「节点 ID | 'package'」——定位不到即显式包级，无孤立报错 */
   const graphIssues: ValidationIssue[] = issues.map((i) => {
     const nodeId = whereToNodeId(i.where, nodeIds)
-    const node = nodeId ? nodes.find((n) => n.id === nodeId) : undefined
-    if (node) {
-      if (!node.issueLevel || LEVEL_RANK[i.level] > LEVEL_RANK[node.issueLevel]) node.issueLevel = i.level
+    if (nodeId) {
+      const node = nodes.find((n) => n.id === nodeId)
+      if (node && (!node.issueLevel || LEVEL_RANK[i.level] > LEVEL_RANK[node.issueLevel])) {
+        node.issueLevel = i.level
+      }
+      return nodeId === i.where ? i : { ...i, where: nodeId }
     }
-    // 文件路径类 where 不是节点定位：显式归为包级
-    if (i.where !== 'package' && !nodeId && !isElementWhere(i.where)) {
-      return { ...i, where: 'package' }
-    }
-    return i
+    return i.where === 'package' ? i : { ...i, where: 'package' }
   })
 
   /* S4 运行命中高亮 */
@@ -202,13 +245,8 @@ export function buildModelGraph(input: {
     edges,
     issues: graphIssues,
     revision: input.revision ?? 0,
-    skeleton: input.skeleton
-      ? { confirmed: input.skeleton.confirmed, ids: input.skeleton.ids }
-      : undefined,
+    ...(input.skeleton
+      ? { skeleton: { confirmed: input.skeleton.confirmed, ids: input.skeleton.ids } }
+      : {}),
   }
-}
-
-/** where 是否已是元素定位串（'PREFIX id' 形态；不校验节点存在——未解析引用也属元素级）。 */
-function isElementWhere(where: string): boolean {
-  return /^[A-Z]{2,4} [A-Z]+-[A-Z0-9-]+/.test(where)
 }

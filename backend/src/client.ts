@@ -139,7 +139,6 @@ window.__ModuleLoader__.load({
       desc('ontoKnowledge', 'reviewCandidate', true, 'KRC', 'Human review: approve / reject / merge.'),
       desc('ontoKnowledge', 'previewMaterialize', true, 'KPV', 'Dry-run materialize: show what would be written.'),
       desc('ontoKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
-      desc('ontoKnowledge', 'addDraft', true, 'KAD', 'Queue a draft item from a conversation turn (never writes the package).'),
       desc('ontoKnowledge', 'saveSkeleton', true, 'KSK', 'Save/confirm the modeling skeleton (I6 gate).'),
       // ontoRuntime
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),

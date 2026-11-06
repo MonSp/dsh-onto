@@ -229,9 +229,7 @@ window.__ModuleLoader__.load({
       // 对话式建模（conversational-modeling P1/P3）
       canvasView: '图谱画布',
       listView: '清单视图',
-      draftTurn: '对话起草',
-      draftPlaceholder: '一句话描述要建的元素（对象：… / 规则：… 权重0.3 / 场景：…），入 CONVERSATION 知识管线',
-      draftHint: '虚线 = 待审草案；点节点打开检视器。dsh 主会话可让 agent 直接起草（draft_elements 工具）。',
+      draftHint: '虚线 = 待审草案。建模请在主对话口述（AI 起草、画布自动生长）；人审动作在节点检视器。',
       skeleton: '骨架',
       skelNone: '未建骨架（物化门未启用）',
       skelUnconfirmed: '骨架未确认（物化门已锁）',
@@ -409,9 +407,7 @@ window.__ModuleLoader__.load({
       // conversational modeling (P1/P3)
       canvasView: 'Graph canvas',
       listView: 'List view',
-      draftTurn: 'Draft turn',
-      draftPlaceholder: 'Describe one element (Object: … / Rule: … weight 0.3 / Scenario: …) → CONVERSATION pipeline',
-      draftHint: 'Dashed = pending draft; click a node for the inspector. In the dsh chat, the agent can draft via draft_elements.',
+      draftHint: 'Dashed = pending draft. Describe modeling in the main chat (AI drafts, canvas grows); review actions in the node inspector.',
       skeleton: 'Skeleton',
       skelNone: 'No skeleton (materialize gate inactive)',
       skelUnconfirmed: 'Skeleton unconfirmed (gate locked)',
@@ -553,8 +549,7 @@ window.__ModuleLoader__.load({
       '.ogc-issue{border-left:3px solid #dc2626;padding:2px 8px;margin:2px 0;font-size:12px;background:#fee2e2;color:#7f1d1d;border-radius:0 6px 6px 0;word-break:break-word;}',
       '.ogc-issue.warn{border-left-color:#d97706;background:#fef3c7;color:#78350f;}',
       '.ogc-skel{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;padding:6px 10px;border:1px dashed var(--dsw-alias-line,#d1d5db);border-radius:8px;}',
-      '.ogc-draft{display:flex;gap:8px;align-items:flex-start;}',
-      '.ogc-draft textarea{flex:1;min-height:46px;resize:vertical;}',
+
       '.ogc-node{cursor:pointer;}',
       '.ogc-right .ogc-grid{grid-template-columns:1fr;}',
       '.ogc-right{max-width:none;}',
@@ -1373,7 +1368,7 @@ window.__ModuleLoader__.load({
           )
         }
 
-        /** issue.where → 当前节点（'元素ID' / 'PREFIX 元素ID(.attr)' 两种形态；文件路径已在 core 归包级）。 */
+        /** issue.where → 当前节点（graph.issues.where 已在 core 归一为「节点 ID | 'package'」；PREFIX 形态为兼容保留）。 */
         function matchIssueWhere(where: string, id: string): boolean {
           if (where === id || where.startsWith(`${id}.`)) return true
           const m = /^([A-Z]{2,4}) ([A-Z]+-[A-Z0-9-]+)(?:\.[A-Za-z0-9_-]+)?$/.exec(where)
@@ -1489,7 +1484,8 @@ window.__ModuleLoader__.load({
 
         /* ═══════════════════════════════════════════════════════════════
          * GraphWorkbench —— 画布工作台（主区建模视图与右栏图谱 tab 共用）
-         * 状态自带：图谱轮询 / 对话起草 / 人审物化 / 骨架门（P1/P3）
+         * 状态自带：图谱轮询 / 人审物化 / 骨架门（P1/P3）。草拟单一入口在
+         * dsh 主对话（agent → draft_elements），画布只展示状态与人审动作。
          * ═══════════════════════════════════════════════════════════════ */
 
         function GraphWorkbench(props: {
@@ -1504,7 +1500,6 @@ window.__ModuleLoader__.load({
           const kApi = apis.remote['ontoKnowledge']
           const [graph, setGraph] = useState<OgGraph | null>(null)
           const [selNode, setSelNode] = useState<string | null>(null)
-          const [draftText, setDraftText] = useState('')
           const [candidates, setCandidates] = useState<Array<Record<string, unknown>>>([])
           const [skelOpen, setSkelOpen] = useState(false)
           const [skelIds, setSkelIds] = useState('')
@@ -1556,40 +1551,6 @@ window.__ModuleLoader__.load({
           }, [graph, skelOpen])
 
           const readOnly = graph?.status === 'ISSUED'
-
-          const draftTurn = (): void => {
-            const text = draftText.trim()
-            if (!text || !selected || readOnly || !kApi) return
-            void (async () => {
-              setBusy('draft')
-              setError('')
-              setInfo('')
-              try {
-                const src = unwrap<{ source: { id: string } }>(
-                  await kApi.uploadSource({
-                    packageId: `${selected.name}@${selected.version}`,
-                    sourceType: 'CONVERSATION',
-                    name: `turn-${Date.now()}`,
-                    content: text,
-                  }),
-                )
-                const rep = unwrap<{ added?: Array<{ id: string }>; report?: { accepted?: number } }>(
-                  await kApi.parseSource({ sourceId: src.source.id }),
-                )
-                await loadGraph()
-                onChanged?.()
-                const n = rep.added?.length ?? rep.report?.accepted ?? 0
-                setInfo(`✓ ${t('draftTurn')}: ${n}`)
-                setDraftText('')
-                // 自动弹右栏暂缓：harness 的 openTab 只置展开旗标、面板可能不挂载
-                //（半开态风险）。图谱经引导卡打开一次后常驻，轮询继续生长（P1）。
-              } catch (e) {
-                setError(errText(e))
-              } finally {
-                setBusy('')
-              }
-            })()
-          }
 
           const draftAction = (id: string, action: 'approve' | 'reject'): void => {
             if (!selected || readOnly || !kApi) return
@@ -1724,30 +1685,8 @@ window.__ModuleLoader__.load({
             )
           }
           if (!readOnly) {
-            canvasChildren.push(
-              h(
-                'div',
-                { key: 'draft', className: 'ogc-draft', style: { marginTop: 10 } },
-                h('textarea', {
-                  className: 'ow-textarea',
-                  placeholder: t('draftPlaceholder'),
-                  value: draftText,
-                  onChange: (e: { target: { value: string } }) => setDraftText(e.target.value),
-                  onKeyDown: (e: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      draftTurn()
-                    }
-                  },
-                }),
-                h('button', {
-                  className: 'ow-btn',
-                  disabled: !!busy || !draftText.trim(),
-                  onClick: draftTurn,
-                }, busy === 'draft' ? t('busy') : t('draftTurn')),
-              ),
-              h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')),
-            )
+            // 草拟单一入口在 dsh 主对话（P1：对话是入口，画布是状态）——此处只留引导。
+            canvasChildren.push(h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')))
           }
           canvasChildren.push(
             h(

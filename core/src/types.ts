@@ -416,6 +416,10 @@ export type DraftTargetKind = (typeof DRAFT_TARGET_KINDS)[number]
 export interface DraftItem {
   layer: 'O1' | 'O2' | 'O3'
   targetKind: DraftTargetKind
+  /** 'update' = 修改/接线既有元素（targetId 必填）；缺省 'create' = 新增元素（conversational-modeling P3）。 */
+  op?: 'create' | 'update'
+  /** op='update' 时的既有元素 ID（Attribute 为 'OBJ.attr' 形态）。 */
+  targetId?: string
   name: string
   payload: Record<string, unknown>
   confidence: number
@@ -436,8 +440,11 @@ export interface DraftCandidate extends DraftItem {
   conclusionLike: boolean
   /** 溯源（conversational-modeling I2）：对话轮次或知识源。 */
   provenance?: DraftProvenance
-  /** 物化后写入的元素 ID（canvas 由元素回查 provenance）。 */
+  /** 物化后写入的元素 ID（canvas 由元素回查 provenance）；属性类为 'OBJ.attr' 属性引用形态。 */
   appliedAs?: string
+  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'agent-tool' 会话代执行）与时间。 */
+  reviewedBy?: string
+  reviewedAt?: string
   createdAt: string
 }
 

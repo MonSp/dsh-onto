@@ -5,6 +5,7 @@ import {
   KnowledgeStore,
   buildModelGraph,
   whereToNodeId,
+  validateDraftItem,
   validatePackage,
   derivePackage,
   loadPackage,
@@ -167,6 +168,113 @@ test('skeleton 校验门：骨架外 ID → SKELETON_OUT_OF_SCOPE 且 where=元�
   }
 })
 
+test('skeleton 门：Attribute 不新增 ID，按 owner ID 段校验（I6 口径）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    const mkAttr = (name) => {
+      const c = store.addDraft({
+        packageId: 'test-pkg',
+        item: {
+          layer: 'O1',
+          targetKind: 'Attribute',
+          name,
+          payload: { ownerId: 'OBJ-TST-A', name, type: 'string' },
+          confidence: 0.9,
+        },
+        provenance: { turnId: 't-attr' },
+      })
+      store.reviewCandidate(c.id, 'approve')
+      return c
+    }
+
+    // owner 在骨架内 → 物化为 'OBJ.attr' 属性引用（不新增 ID），按 ID 段通过
+    store.skeletons.save({ packageId: 'test-pkg', domainCode: 'TST', confirmed: true, ids: fullIds() })
+    const c1 = mkAttr('a3')
+    const r1 = store.materialize(dir, [c1.id])
+    assert.deepEqual(r1.applied, [c1.id])
+    const merged = store.listCandidates({ packageId: 'test-pkg' }).find((x) => x.id === c1.id)
+    assert.equal(merged.appliedAs, 'OBJ-TST-A.a3')
+    assert.ok(
+      loadPackage(dir).objects.find((o) => o.id === 'OBJ-TST-A').attributes.some((a) => a.name === 'a3'),
+      '属性已进包',
+    )
+
+    // owner 不在骨架内 → 拒（ID 段超骨架）
+    store.skeletons.save({
+      packageId: 'test-pkg',
+      domainCode: 'TST',
+      confirmed: true,
+      ids: fullIds().filter((id) => id !== 'OBJ-TST-A'),
+    })
+    const c2 = mkAttr('a4')
+    const r2 = store.materialize(dir, [c2.id])
+    assert.equal(r2.applied.length, 0)
+    assert.match(r2.skipped[0].reason, /OBJ-TST-A 不在骨架内/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('人审留痕：reviewCandidate 落 reviewedBy/reviewedAt 并随队列持久化', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: { layer: 'O1', targetKind: 'ObjectType', name: '留痕对象', payload: { id: 'OBJ-TST-NEW', attributes: [] }, confidence: 0.9 },
+      provenance: { turnId: 't-audit' },
+    })
+    const done = store.reviewCandidate(c.id, 'reject', { reviewedBy: 'agent-tool' })
+    assert.equal(done.reviewedBy, 'agent-tool')
+    assert.ok(typeof done.reviewedAt === 'string' && done.reviewedAt !== '', 'reviewedAt 有值')
+    const reloaded = store.getCandidate(c.id)
+    assert.equal(reloaded.reviewedBy, 'agent-tool')
+    assert.equal(reloaded.reviewedAt, done.reviewedAt)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('草案引用边只从语义字段抽取（自由文本不连边，防假阳性）', () => {
+  const { root, pkg } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // name/description 自由文本里出现 ID 字面 → 不连边
+    const cFree = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O1',
+        targetKind: 'ObjectType',
+        name: '提及 OBJ-TST-A 的文本',
+        payload: { name: '提及 OBJ-TST-A 的文本', description: '参考 OBJ-TST-B', attributes: [] },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-free' },
+    })
+    // anchor 引用位 → 连边
+    const cAnchor = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O1',
+        targetKind: 'BehaviorType',
+        name: '新行为',
+        payload: { name: '新行为', anchor: 'OBJ-TST-A' },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-anchor' },
+    })
+    const g = buildModelGraph({ pkg, candidates: store.listCandidates({ packageId: 'test-pkg' }) })
+    assert.ok(!g.edges.some((e) => e.from === cFree.id), '自由文本里的 ID 字面不连边')
+    assert.ok(
+      g.edges.some((e) => e.from === cAnchor.id && e.to === 'OBJ-TST-A' && e.kind === 'ref'),
+      'anchor 引用位连边',
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('图谱构建：节点/边齐备，issue 定位到节点或包级（I3）', () => {
   const { root, pkg } = mkWorkspaceWithPkg()
   try {
@@ -190,10 +298,10 @@ test('图谱构建：节点/边齐备，issue 定位到节点或包级（I3）',
     assert.ok(g.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'SKL-TST-N' && e.kind === 'scenario-step'))
     assert.ok(g.edges.some((e) => e.from === 'FM-TST-1' && e.to === 'OBJ-TST-A' && e.kind === 'applies'))
 
-    // I3：每条 issue 要么 where=package，要么能定位到节点；无孤立报错
+    // I3：每条 issue 要么 where=package，要么 where 已归一为节点 ID；无孤立报错
     const nodeIds = new Set(g.nodes.map((n) => n.id))
     for (const i of g.issues) {
-      const located = i.where === 'package' || whereToNodeId(i.where, nodeIds) !== undefined
+      const located = i.where === 'package' || nodeIds.has(i.where)
       assert.ok(located, `${i.code} where=${i.where} 未定位`)
     }
     // 悬空关系 issue → 节点标红
@@ -285,6 +393,247 @@ test('manifest 层标注：tool-contracts→L2 / agent-duties→L4 / skill-templ
     // 指纹字段不受 layer 影响：重派生 sourceDigest 稳定
     const again = derivePackage(dir)
     assert.equal(again.sourceDigest, m.sourceDigest)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('图谱结果无显式 undefined 键（工具面 lossless-JSON 契约）', () => {
+  const { root, pkg } = mkWorkspaceWithPkg()
+  try {
+    // 手工候选：无 provenance、forcedReview=false/true 两种，覆盖可选字段缺省路径
+    const g = buildModelGraph({
+      pkg,
+      candidates: [
+        {
+          id: 'dc-lo-1', packageId: 'test-pkg', sourceId: '', status: 'pending',
+          layer: 'O1', targetKind: 'ObjectType', name: '甲草案', payload: {},
+          confidence: 0.9, forcedReview: false, conclusionLike: false, createdAt: '',
+        },
+        {
+          id: 'dc-lo-2', packageId: 'test-pkg', sourceId: 'src-1', status: 'pending',
+          layer: 'O2', targetKind: 'ScoreRule', name: '乙草案', payload: {},
+          confidence: 0.5, forcedReview: true, conclusionLike: false, createdAt: '',
+        },
+      ],
+      // 无 skeleton / 无 revision → 覆盖返回对象可选字段路径
+    })
+    const undefinedKeys = []
+    const walk = (v, path) => {
+      if (Array.isArray(v)) return v.forEach((x, i) => walk(x, `${path}[${i}]`))
+      if (v && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) {
+          if (x === undefined) undefinedKeys.push(`${path}.${k}`)
+          else walk(x, `${path}.${k}`)
+        }
+      }
+    }
+    walk(g, '$')
+    assert.deepEqual(undefinedKeys, [], '不得有显式 undefined 键（harness lossless-JSON 拒绝）')
+    const n1 = g.nodes.find((n) => n.id === 'dc-lo-1')
+    const n2 = g.nodes.find((n) => n.id === 'dc-lo-2')
+    assert.ok(!('forcedReview' in n1), 'forcedReview=false 不带键')
+    assert.equal(n2.forcedReview, true, 'forcedReview=true 保留')
+    assert.ok(!('provenance' in n1), '无溯源不带键')
+    assert.deepEqual(n2.provenance, { sourceId: 'src-1' })
+    assert.ok(!('skeleton' in g), '无骨架不带键')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('op=update：改权重联动归一 + 技能模板同权（P3）', () => {
+  const { dir, root } = mkWorkspaceWithPkg({
+    scoreRules: [
+      { id: 'RULE-TST-A', name: '规则A', weight: 0.5, expression: '1' },
+      { id: 'RULE-TST-B', name: '规则B', weight: 0.5, expression: '1' },
+    ],
+    skillTemplates: [
+      { id: 'SKL-TST-N', name: '叙述', weights: { 'RULE-TST-A': 0.5, 'RULE-TST-B': 0.5 }, steps: [], outputTemplate: '' },
+    ],
+  })
+  try {
+    const store = new KnowledgeStore(root)
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O2', targetKind: 'ScoreRule', op: 'update', targetId: 'RULE-TST-A',
+        name: '调整A权重', payload: { weight: 0.3 }, confidence: 0.9, rationale: '改权重',
+      },
+      provenance: { turnId: 't-w' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r = store.materialize(dir, [c.id])
+    assert.deepEqual(r.applied, [c.id])
+    const merged = store.listCandidates({ packageId: 'test-pkg' }).find((x) => x.id === c.id)
+    assert.equal(merged.appliedAs, 'RULE-TST-A', 'update 的 appliedAs = targetId')
+
+    const after = loadPackage(dir)
+    const a = after.scoreRules.find((x) => x.id === 'RULE-TST-A')
+    const b = after.scoreRules.find((x) => x.id === 'RULE-TST-B')
+    assert.equal(a.weight, 0.3, '显式权重为准')
+    assert.ok(Math.abs(b.weight - 0.7) < 1e-9, `未动规则吸收残差，得 ${b.weight}`)
+    // 技能模板同权（键集+数值）
+    const w = after.skillTemplates[0].weights
+    assert.deepEqual(Object.keys(w).sort(), ['RULE-TST-A', 'RULE-TST-B'])
+    assert.ok(Math.abs(w['RULE-TST-A'] - 0.3) < 1e-9 && Math.abs(w['RULE-TST-B'] - 0.7) < 1e-9)
+    // 终检无权重错误
+    const v = validatePackage(after)
+    assert.ok(!v.errors.some((e) => e.code === 'WEIGHT_SUM' || e.code === 'WEIGHT_SET_MISMATCH'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('op=update：同批多条权重固定 → 未动规则吸收残差（批语义，供批量物化面）', () => {
+  const { dir, root } = mkWorkspaceWithPkg({
+    scoreRules: [
+      { id: 'RULE-TST-A', name: '规则A', weight: 1 / 3, expression: '1' },
+      { id: 'RULE-TST-B', name: '规则B', weight: 1 / 3, expression: '1' },
+      { id: 'RULE-TST-C', name: '规则C', weight: 1 / 3, expression: '1' },
+    ],
+    skillTemplates: [
+      {
+        id: 'SKL-TST-N', name: '叙述', steps: [], outputTemplate: '',
+        weights: { 'RULE-TST-A': 1 / 3, 'RULE-TST-B': 1 / 3, 'RULE-TST-C': 1 / 3 },
+      },
+    ],
+  })
+  try {
+    const store = new KnowledgeStore(root)
+    const mkUpd = (targetId, weight, name) => {
+      const c = store.addDraft({
+        packageId: 'test-pkg',
+        item: { layer: 'O2', targetKind: 'ScoreRule', op: 'update', targetId, name, payload: { weight }, confidence: 0.9 },
+        provenance: { turnId: 't-b' },
+      })
+      store.reviewCandidate(c.id, 'approve')
+      return c.id
+    }
+    // 同批两条显式权重（A=0.5、C=0.1），B 吸收残差 0.4
+    const r = store.materialize(dir, [mkUpd('RULE-TST-A', 0.5, 'A调0.5'), mkUpd('RULE-TST-C', 0.1, 'C调0.1')])
+    assert.equal(r.applied.length, 2, JSON.stringify(r.skipped))
+    const after = loadPackage(dir)
+    const w = Object.fromEntries(after.scoreRules.map((x) => [x.id, x.weight]))
+    assert.equal(w['RULE-TST-A'], 0.5)
+    assert.equal(w['RULE-TST-C'], 0.1)
+    assert.ok(Math.abs(w['RULE-TST-B'] - 0.4) < 1e-9, `B 吸收残差，得 ${w['RULE-TST-B']}`)
+    const v = validatePackage(after)
+    assert.ok(!v.errors.some((e) => e.code === 'WEIGHT_SUM' || e.code === 'WEIGHT_SET_MISMATCH'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('op=update：标量覆盖、append 接线去重、阈值调整；目标不存在拒', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    const upd = (item) => {
+      const c = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-u' } })
+      store.reviewCandidate(c.id, 'approve')
+      return c
+    }
+    // 标量覆盖 + append 去重（已有的 REL-TST-AB 再追加不重复）
+    upd({
+      layer: 'O2', targetKind: 'BehaviorType', op: 'update', targetId: 'BHV-TST-X',
+      name: '行为接线', payload: { trigger: '新开户', append: { relations: ['REL-TST-AB'] } },
+      confidence: 0.9,
+    })
+    // 字典值追加（接线语义）
+    upd({
+      layer: 'O1', targetKind: 'Dictionary', op: 'update', targetId: 'dict-tst-k',
+      name: '字典扩值', payload: { append: { values: ['z'] } }, confidence: 0.9,
+    })
+    // 阈值调整
+    upd({
+      layer: 'O2', targetKind: 'ScoreRule', op: 'update', targetId: 'RULE-TST-S1',
+      name: '调阈值', payload: { threshold: 0.8 }, confidence: 0.9,
+    })
+    const r = store.materialize(dir, [
+      ...store.listCandidates({ packageId: 'test-pkg' }).map((x) => x.id),
+    ])
+    assert.equal(r.applied.length, 3, JSON.stringify(r.skipped))
+    const after = loadPackage(dir)
+    const bhv = after.behaviors.find((x) => x.id === 'BHV-TST-X')
+    assert.equal(bhv.trigger, '新开户')
+    assert.deepEqual(bhv.relations, ['REL-TST-AB'], 'append 去重')
+    assert.deepEqual(after.dictionaries[0].values, ['x', 'y', 'z'])
+    assert.equal(after.scoreRules[0].threshold, 0.8)
+
+    // 目标不存在 → 拒
+    const missing = upd({
+      layer: 'O2', targetKind: 'ScoreRule', op: 'update', targetId: 'RULE-TST-GONE',
+      name: '改不存在', payload: { weight: 0.1 }, confidence: 0.9,
+    })
+    const r2 = store.materialize(dir, [missing.id])
+    assert.equal(r2.applied.length, 0)
+    assert.match(r2.skipped[0].reason, /元素不存在/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('op=update：校验与幂等、图谱 targetId 引用边、骨架门口径、RedLine 拒 update', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    // 校验闸门
+    assert.equal(
+      validateDraftItem({ layer: 'O1', targetKind: 'ObjectType', op: 'update', name: 'x', payload: {}, confidence: 0.9 }),
+      'update requires targetId',
+    )
+    assert.equal(
+      validateDraftItem({ layer: 'O1', targetKind: 'ObjectType', op: 'nope', targetId: 'OBJ-TST-A', name: 'x', payload: {}, confidence: 0.9 }),
+      'bad op',
+    )
+
+    const store = new KnowledgeStore(root)
+    const mk = (name) => store.addDraft({
+      packageId: 'test-pkg',
+      item: { layer: 'O1', targetKind: 'ObjectType', op: 'update', targetId: 'OBJ-TST-A', name, payload: { idRule: '<c>:<a2>' }, confidence: 0.9 },
+      provenance: { turnId: 't-i' },
+    })
+    const c1 = mk('改规则')
+    const c2 = mk('改规则') // 同 targetId+name 幂等
+    assert.equal(c1.id, c2.id)
+    const c3 = mk('改规则二') // 不同 name 独立
+    assert.notEqual(c1.id, c3.id)
+
+    // 图谱：pending update 草案 → targetId 引用边
+    const g = buildModelGraph({ pkg: loadPackage(dir), candidates: store.listCandidates({ packageId: 'test-pkg' }) })
+    assert.ok(g.edges.some((e) => e.from === c1.id && e.to === 'OBJ-TST-A' && e.kind === 'ref'), 'targetId 连边')
+
+    // 骨架门口径：targetId 在骨架内通过；元素存在但在骨架外 → I6 拒
+    store.skeletons.save({ packageId: 'test-pkg', domainCode: 'TST', confirmed: true, ids: fullIds() })
+    store.reviewCandidate(c1.id, 'approve')
+    const ok = store.materialize(dir, [c1.id])
+    assert.deepEqual(ok.applied, [c1.id])
+    store.skeletons.save({
+      packageId: 'test-pkg',
+      domainCode: 'TST',
+      confirmed: true,
+      ids: fullIds().filter((id) => id !== 'RULE-TST-S1'),
+    })
+    const oos = store.addDraft({
+      packageId: 'test-pkg',
+      item: { layer: 'O2', targetKind: 'ScoreRule', op: 'update', targetId: 'RULE-TST-S1', name: '改骨架外', payload: { weight: 0.1 }, confidence: 0.9 },
+      provenance: { turnId: 't-i' },
+    })
+    store.reviewCandidate(oos.id, 'approve')
+    const bad = store.materialize(dir, [oos.id])
+    assert.equal(bad.applied.length, 0)
+    assert.match(bad.skipped[0].reason, /RULE-TST-S1 不在骨架内/)
+
+    // RedLine 拒 update
+    const rl = store.addDraft({
+      packageId: 'test-pkg',
+      item: { layer: 'O3', targetKind: 'RedLine', op: 'update', targetId: 'SCN-TST-1', name: '红线改', payload: { phrases: ['认定'] }, confidence: 0.9 },
+      provenance: { turnId: 't-i' },
+    })
+    store.reviewCandidate(rl.id, 'approve')
+    const r3 = store.materialize(dir, [rl.id])
+    assert.equal(r3.applied.length, 0)
+    assert.match(r3.skipped[0].reason, /RedLine 只支持追加/)
   } finally {
     rmWorkspace(root)
   }

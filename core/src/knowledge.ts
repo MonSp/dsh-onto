@@ -18,6 +18,7 @@ import type {
   DraftCandidate,
   DraftItem,
   DraftProvenance,
+  DraftTargetKind,
   KnowledgeSourceRecord,
   LlmPort,
   OntologyPackage,
@@ -58,6 +59,11 @@ export function validateDraftItem(item: unknown): string | null {
   const it = item as Record<string, unknown>
   if (it['layer'] !== 'O1' && it['layer'] !== 'O2' && it['layer'] !== 'O3') return 'bad layer'
   if (!(DRAFT_TARGET_KINDS as readonly string[]).includes(it['targetKind'] as string)) return 'bad targetKind'
+  const op = it['op']
+  if (op !== undefined && op !== 'create' && op !== 'update') return 'bad op'
+  if (op === 'update' && (typeof it['targetId'] !== 'string' || !it['targetId'].trim())) {
+    return 'update requires targetId'
+  }
   if (typeof it['name'] !== 'string' || !it['name'].trim()) return 'bad name'
   const payload = it['payload']
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'bad payload'
@@ -269,9 +275,17 @@ export class KnowledgeStore {
         continue
       }
       const item = raw as DraftItem
-      const key = `${src.packageId}|${item.layer}|${item.targetKind}|${item.name}`
-      // 幂等键用 sourceName（解析原始名）；人审改 name 不影响同源去重
-      if (queue.some((c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key)) {
+      // 幂等键用 sourceName（解析原始名）；人审改 name 不影响同源去重；update 按 targetId 区分
+      const nm = item.name
+      const key =
+        item.op === 'update'
+          ? `${src.packageId}|${item.layer}|${item.targetKind}|${item.targetId}|${nm}`
+          : `${src.packageId}|${item.layer}|${item.targetKind}|${nm}`
+      const sameKey = (c: DraftCandidate): boolean =>
+        c.op === 'update'
+          ? `${c.packageId}|${c.layer}|${c.targetKind}|${c.targetId}|${c.sourceName ?? c.name}` === key
+          : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key
+      if (queue.some(sameKey)) {
         idempotentSkipped++
         continue
       }
@@ -323,10 +337,16 @@ export class KnowledgeStore {
     const bad = validateDraftItem(input.item)
     if (bad) throw new KnowledgeError('BAD_DRAFT', `draft invalid: ${bad}`)
     const item = input.item
-    const key = `${packageId}|${item.layer}|${item.targetKind}|${item.name}`
+    const nm = item.name
+    const key =
+      item.op === 'update'
+        ? `${packageId}|${item.layer}|${item.targetKind}|${item.targetId}|${nm}`
+        : `${packageId}|${item.layer}|${item.targetKind}|${nm}`
     const queue = this.loadQueue()
-    const existing = queue.find(
-      (c) => `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key,
+    const existing = queue.find((c) =>
+      c.op === 'update'
+        ? `${c.packageId}|${c.layer}|${c.targetKind}|${c.targetId}|${c.sourceName ?? c.name}` === key
+        : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key,
     )
     if (existing) return existing
     const cand: DraftCandidate = {
@@ -436,6 +456,9 @@ export class KnowledgeStore {
       c.status = 'merged'
       c.payload = { ...c.payload, mergeInto: opts.mergeIntoName }
     }
+    // 人审留痕（I1/I5）：谁在哪个面执行了审定动作，入队列可审计回看。
+    if (opts.reviewedBy !== undefined) c.reviewedBy = String(opts.reviewedBy)
+    c.reviewedAt = new Date().toISOString()
     this.saveQueue(queue)
     return c
   }
@@ -500,23 +523,30 @@ export class KnowledgeStore {
     }
 
     const pkg = loadPackage(versionDir)
+    const weightTouched = new Set<string>()
     for (const c of eligible) {
       // 自动分配 ID 也必须在骨架内：先干跑应用，超界即回滚该条（I6 全覆盖）。
+      // 口径：I6 只约束新增 Schema ID；update/属性/红线不新增 ID，按 ID 段对照骨架。
       const before = snapshotPkg(pkg)
       try {
         c.appliedAs = applyDraftToPackage(pkg, c)
-        if (!inSkeleton(c.appliedAs)) {
-          const oosId = c.appliedAs
+        const idSegment = c.appliedAs.split('.')[0]
+        if (!inSkeleton(idSegment)) {
           restorePkg(pkg, before)
           delete c.appliedAs
-          skipped.push({ id: c.id, reason: `生成 ID ${oosId} 不在骨架内（I6）` })
+          skipped.push({ id: c.id, reason: `ID ${idSegment} 不在骨架内（I6）` })
           continue
+        }
+        if (c.op === 'update' && c.targetKind === 'ScoreRule' && 'weight' in (c.payload ?? {})) {
+          weightTouched.add(c.appliedAs)
         }
         applied.push(c.id)
       } catch (e) {
         skipped.push({ id: c.id, reason: e instanceof Error ? e.message : String(e) })
       }
     }
+    // 权重联动归一（P3）：显式权重为准，未动规则吸收残差并同步技能模板——批量一次，避免互相打架。
+    if (weightTouched.size > 0) renormalizeWeights(pkg, weightTouched)
     savePackage(versionDir, pkg)
 
     for (const c of queue) {
@@ -705,11 +735,152 @@ function tagOf(pkg: OntologyPackage): string {
   return domain.slice(0, 12)
 }
 
+/* ── 更新/接线（conversational-modeling P3：op='update'） ───────────────── */
+
+/** 各 targetKind 可更新字段（与 create 分支同源；未列字段一律拒改，防脏键入包）。 */
+const UPDATABLE: Record<string, string[]> = {
+  ObjectType: ['name', 'idRule', 'attributes', 'lifecycle'],
+  RelationType: ['name', 'from', 'to', 'attributes'],
+  Attribute: ['name', 'type', 'refObject', 'enumValuesRef'],
+  Dictionary: ['name', 'values'],
+  BehaviorType: ['name', 'anchor', 'relations', 'states', 'trigger'],
+  ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate'],
+  ExclusionRule: ['name', 'action', 'factor', 'condition'],
+  SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
+  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'outputContract', 'reviewGate', 'auditChecks'],
+  FieldMap: ['name', 'source', 'target'],
+  ApiSource: ['name', 'sourceType', 'endpoint'],
+}
+
+const clamp01 = (w: number): number => Math.min(1, Math.max(0, w))
+
+/** 合并更新载荷到既有元素：标量覆盖、对象浅并（weights 按键并入）、数组整替；`append.<field>` 追加去重（接线）。 */
+function mergeUpdateFields(el: Record<string, unknown>, payload: Record<string, unknown>, kind: string): void {
+  const allowed = new Set(UPDATABLE[kind] ?? [])
+  for (const [k, v] of Object.entries(payload)) {
+    if (k === 'targetId' || k === 'op' || k === 'append') continue
+    if (!allowed.has(k)) continue
+    if (v === undefined) continue
+    const cur = el[k]
+    if (
+      cur !== null && typeof cur === 'object' && !Array.isArray(cur) &&
+      v !== null && typeof v === 'object' && !Array.isArray(v)
+    ) {
+      el[k] = { ...(cur as Record<string, unknown>), ...(v as Record<string, unknown>) }
+    } else {
+      el[k] = v
+    }
+  }
+  const append = payload['append']
+  if (append && typeof append === 'object' && !Array.isArray(append)) {
+    for (const [k, v] of Object.entries(append as Record<string, unknown>)) {
+      if (!allowed.has(k) || !Array.isArray(v)) continue
+      const cur = Array.isArray(el[k]) ? (el[k] as unknown[]) : []
+      const seen = new Set(cur.map((x) => JSON.stringify(x)))
+      const add = (v as unknown[]).filter((x) => {
+        const s = JSON.stringify(x)
+        if (seen.has(s)) return false
+        seen.add(s)
+        return true
+      })
+      el[k] = [...cur, ...add]
+    }
+  }
+}
+
+/**
+ * op='update' 物化：按 targetId 定位既有元素做增量合并（改权重/阈值/接线），
+ * 不新增 ID（I6 口径：门禁只约束新增）；返回 targetId（溯源 I2）。
+ */
+function applyUpdateToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
+  const targetId = String(c.targetId ?? '').trim()
+  if (targetId === '') throw new KnowledgeError('UPDATE_TARGET_NOT_FOUND', 'update 草案缺 targetId')
+  if (c.targetKind === 'RedLine') {
+    throw new KnowledgeError('BAD_TARGET_KIND', 'RedLine 只支持追加（create），不支持 update')
+  }
+  if (c.conclusionLike) {
+    throw new KnowledgeError('CONCLUSION_BLOCKED', '结论性表述禁止进入业务元素（只能落 RedLine）')
+  }
+  const p = (c.payload ?? {}) as Record<string, unknown>
+
+  if (c.targetKind === 'Attribute') {
+    const dot = targetId.indexOf('.')
+    const ownerId = dot > 0 ? targetId.slice(0, dot) : ''
+    const attrName = dot > 0 ? targetId.slice(dot + 1) : ''
+    const owner =
+      pkg.objects.find((o) => o.id === ownerId) ?? pkg.relations.find((r) => r.id === ownerId)
+    const attr = owner?.attributes?.find((a) => a.name === attrName)
+    if (!owner || !attr) throw new KnowledgeError('UPDATE_TARGET_NOT_FOUND', `属性不存在: ${targetId}`)
+    mergeUpdateFields(attr as unknown as Record<string, unknown>, p, 'Attribute')
+    return targetId
+  }
+
+  const tables: Partial<Record<DraftTargetKind, Array<{ id: string; name?: string }>>> = {
+    ObjectType: pkg.objects,
+    RelationType: pkg.relations,
+    Dictionary: pkg.dictionaries,
+    BehaviorType: pkg.behaviors,
+    ScoreRule: pkg.scoreRules,
+    ExclusionRule: pkg.exclusionRules,
+    SkillTemplate: pkg.skillTemplates,
+    ScenarioCard: pkg.scenarios,
+    FieldMap: pkg.fieldMaps,
+    ApiSource: pkg.apiSources,
+  }
+  const table = tables[c.targetKind]
+  const el = table?.find((x) => x.id === targetId || (x.name !== undefined && x.name === targetId))
+  if (!el) throw new KnowledgeError('UPDATE_TARGET_NOT_FOUND', `元素不存在: ${targetId}`)
+  mergeUpdateFields(el as unknown as Record<string, unknown>, p, c.targetKind)
+  return el.id
+}
+
+/**
+ * 打分规则权重归一（P3「权重联动自动归一」）：显式改过权重的规则（fixedIds）保持原值，
+ * 未动规则按比例吸收残差至合计 1.0；随后把规则权重同步进各技能模板（同权口径，
+ * 消除手抄漂移）。批量一次调用——避免同批多条权重更新互相打架。
+ */
+export function renormalizeWeights(pkg: OntologyPackage, fixedIds: ReadonlySet<string>): void {
+  const rules = pkg.scoreRules
+  if (rules.length === 0) return
+  const fixed = rules.filter((r) => fixedIds.has(r.id))
+  const others = rules.filter((r) => !fixedIds.has(r.id))
+  for (const r of fixed) r.weight = clamp01(r.weight)
+  if (others.length === 0) {
+    syncSkillWeights(pkg) // 全显式：数值交给 WEIGHT_SUM 校验，键集仍须同步
+    return
+  }
+  const fixedSum = fixed.reduce((a, r) => a + r.weight, 0)
+  const target = Math.max(0, 1 - fixedSum)
+  const othersSum = others.reduce((a, r) => a + Math.max(0, r.weight), 0)
+  if (othersSum <= 0) {
+    const each = target / others.length
+    for (const r of others) r.weight = each
+  } else {
+    for (const r of others) r.weight = (Math.max(0, r.weight) / othersSum) * target
+  }
+  const sum = rules.reduce((a, r) => a + r.weight, 0)
+  const residual = 1 - sum
+  if (residual !== 0) {
+    const biggest = others.reduce((a, b) => (b.weight > a.weight ? b : a))
+    biggest.weight += residual
+  }
+  syncSkillWeights(pkg)
+}
+
+/** 技能模板权重与规则同权（WEIGHT_SET_MISMATCH 口径：键集与数值全等）。 */
+function syncSkillWeights(pkg: OntologyPackage): void {
+  const map = Object.fromEntries(pkg.scoreRules.map((r) => [r.id, r.weight]))
+  for (const s of pkg.skillTemplates) s.weights = { ...map }
+}
+
 /** 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）；返回物化的元素 ID（溯源 I2）。 */
 export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
   const p = c.payload ?? {}
   const tag = tagOf(pkg)
 
+  if (c.op === 'update') {
+    return applyUpdateToPackage(pkg, c)
+  }
   if (c.targetKind === 'RedLine') {
     // 结论性表述/禁语 → 只允许进场景 forbiddenPhrases（§5.3.2）
     const phrases: string[] = Array.isArray(p['phrases'])

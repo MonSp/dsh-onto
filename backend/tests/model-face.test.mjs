@@ -84,10 +84,9 @@ test('I5：全部建模/专家工具登记进 ONTOOL_NAMES（guard 白名单）'
 
 /* ── 描述符手工表同步（AGENTS.md：新增 @Remote 必须登记） ─────────────── */
 
-test('手工描述符表登记 getGraph / addDraft / saveSkeleton', () => {
+test('手工描述符表登记 getGraph / saveSkeleton', () => {
   const src = readFileSync(join(REPO, 'backend', 'src', 'client.ts'), 'utf8')
   assert.ok(src.includes(`desc('ontoModel', 'getGraph'`), 'ontoModel.getGraph 未登记')
-  assert.ok(src.includes(`desc('ontoKnowledge', 'addDraft'`), 'ontoKnowledge.addDraft 未登记')
   assert.ok(src.includes(`desc('ontoKnowledge', 'saveSkeleton'`), 'ontoKnowledge.saveSkeleton 未登记')
 })
 
@@ -106,13 +105,10 @@ test('get_model_graph 数据源：元素节点 + 引用边 + issue 定位（I3�
     assert.ok(graph.edges.some((e) => e.kind === 'anchor'))
     assert.ok(graph.revision > 0)
 
-    // I3：每条 issue 要么 package 级、要么 where 能定位到节点
+    // I3：graph.issues.where 恒为「节点 ID | 'package'」（core 归一，无孤立报错）
     const nodeIds = new Set(graph.nodes.map((n) => n.id))
     for (const i of graph.issues) {
-      const located =
-        i.where === 'package' ||
-        nodeIds.has(i.where) ||
-        /^[A-Z]{2,4} [A-Z]+-[A-Z0-9-]+/.test(i.where)
+      const located = i.where === 'package' || nodeIds.has(i.where)
       assert.ok(located, `${i.code} where=${i.where} 未定位`)
     }
     // 渲染冒烟
@@ -204,11 +200,21 @@ test('buildExpertProfiles：派生后 duties 上墙，打分步 llm:forbidden、
     assert.equal(e.steps.length, 7, 'AML 七步 pipeline')
     const ruleSteps = e.steps.filter((s) => s.stepType === 'RULE_EVALUATE')
     assert.ok(ruleSteps.length >= 2)
-    for (const s of ruleSteps) assert.equal(s.llm, 'forbidden', '打分步必须 llm:forbidden')
+    for (const s of ruleSteps) {
+      assert.equal(s.llm, 'forbidden', '打分步必须 llm:forbidden')
+      assert.equal(s.toolCount, 0, '打分步不挂工具白名单（步级收权）')
+    }
+    const dataSteps = e.steps.filter((s) => s.stepType === 'DATA_INGEST' || s.stepType === 'BEHAVIOR_CALL')
+    for (const s of dataSteps) assert.ok(s.toolCount > 0, `${s.stepType} 挂对象粒度读工具`)
     assert.ok(e.humanGates >= 1, 'HUMAN_REVIEW 人审闸')
+    assert.equal(e.steps.find((s) => s.stepType === 'HUMAN_REVIEW').toolCount, 0, '人审步不挂工具白名单')
     assert.ok(e.tools.length > 0, '工具白名单来自 tool-contracts')
     assert.ok(e.skills.includes('SKL-AML-NARRATIVE'))
-    assert.ok(renderExperts({ experts, derived }).includes('SCN-AML-FIND-CLUES'))
+    const text = renderExperts({ experts, derived })
+    assert.ok(text.includes('SCN-AML-FIND-CLUES'))
+    // render 即模型可见面：步级收权（toolCount/llm/人审闸）必须上墙（I7 可发现）
+    assert.match(text, /- \S+ RULE_EVALUATE · 工具 0 · llm:forbidden/, '打分步 render 含工具 0 与 llm:forbidden')
+    assert.match(text, /- \S+ DATA_INGEST · 工具 [1-9]\d* · llm:allowed/, '数据步 render 含非零工具数')
   } finally {
     cleanup(root)
   }

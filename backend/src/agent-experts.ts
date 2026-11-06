@@ -168,7 +168,7 @@ export function assertDutiesAligned(
   }
 }
 
-/** list_experts 渲染：每专家一行 + 未派生提示。 */
+/** list_experts 渲染：每专家一行 + 步级收权明细（模型可见面即 render，I7 步级边界须可发现）+ 未派生提示。 */
 export function renderExperts(v: { experts?: ExpertProfile[]; derived?: boolean }): string {
   const experts = v.experts ?? []
   const lines = [`专家 ${experts.length} 个（duties ${v.derived === true ? '已派生' : '未派生：profile 降级自场景骨架'}）`]
@@ -178,6 +178,11 @@ export function renderExperts(v: { experts?: ExpertProfile[]; derived?: boolean 
       `${e.expertId}「${e.name}」— ${e.steps.length} 步 · 技能 ${e.skills.length} · 工具白名单 ${e.tools.length}${gates}`,
     )
     lines.push(`  目标：${e.goal}`)
+    for (const s of e.steps) {
+      const llm = s.llm ? ` · llm:${s.llm}` : ''
+      const gate = s.humanGate ? ' · 人审闸' : ''
+      lines.push(`  - ${s.stepId} ${s.stepType} · 工具 ${s.toolCount}${llm}${gate}`)
+    }
   }
   return lines.join('\n')
 }
