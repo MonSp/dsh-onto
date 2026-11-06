@@ -4,7 +4,7 @@
  * 硬规则（§5.3）：
  *  1. 原料永不直写包内 YAML；只产 draft 候选。
  *  2. 结论性表述禁止进入 O3 输出契约（只能落红线 forbiddenPhrases）。
- *  3. 同 (包 + 层 + kind + name) 幂等跳过。
+ *  3. 同 (包 + 层 + kind + name) 对 pending/approved/merged 幂等跳过；rejected 不挡同名重提（恢复路径）。
  *  4. confidence < 0.75 强制人审；LLM 失败回落词面启发。
  *  5. LLM 永不直写生效版——物化只发生在人工 approve 之后。
  */
@@ -67,6 +67,15 @@ export function validateDraftItem(item: unknown): string | null {
   if (typeof it['name'] !== 'string' || !it['name'].trim()) return 'bad name'
   const payload = it['payload']
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'bad payload'
+  // update：白名单外字段起草即拒（fail-loud；曾静默入队并在物化时报 merged，冒烟才暴露——D9）
+  if (op === 'update') {
+    const kind = it['targetKind'] as string
+    const norm = normalizeUpdatePayload(kind, payload as Record<string, unknown>)
+    const bad = findNonUpdatableKey(kind, norm)
+    if (bad !== undefined) {
+      return `update payload field not updatable: ${bad} (allowed: ${(UPDATABLE[kind] ?? []).join(', ')})`
+    }
+  }
   const rationale = it['rationale']
   if (rationale !== undefined && rationale !== null && typeof rationale !== 'string') return 'bad rationale'
   // 已知数值字段：出现即须为有限数字（null/缺省视作未填，由物化侧默认）
@@ -285,14 +294,16 @@ export class KnowledgeStore {
         c.op === 'update'
           ? `${c.packageId}|${c.layer}|${c.targetKind}|${c.targetId}|${c.sourceName ?? c.name}` === key
           : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key
-      if (queue.some(sameKey)) {
+      // 幂等只挡在途/已定稿（pending/approved/merged）；rejected 不挡——驳回后可同名重解析（D6 恢复路径）
+      if (queue.some((c) => sameKey(c) && c.status !== 'rejected')) {
         idempotentSkipped++
         continue
       }
+      const retries = queue.filter(sameKey).length
       const conclusionLike = isConclusionLike(item)
       const cand: DraftCandidate = {
         ...item,
-        id: draftCandidateId(key),
+        id: draftCandidateId(retries === 0 ? key : `${key}|retry-${retries}`),
         packageId: src.packageId,
         sourceId,
         sourceName: item.name,
@@ -343,15 +354,18 @@ export class KnowledgeStore {
         ? `${packageId}|${item.layer}|${item.targetKind}|${item.targetId}|${nm}`
         : `${packageId}|${item.layer}|${item.targetKind}|${nm}`
     const queue = this.loadQueue()
-    const existing = queue.find((c) =>
+    const sameKey = (c: DraftCandidate): boolean =>
       c.op === 'update'
         ? `${c.packageId}|${c.layer}|${c.targetKind}|${c.targetId}|${c.sourceName ?? c.name}` === key
-        : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key,
-    )
-    if (existing) return existing
+        : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key
+    // 幂等只挡在途/已定稿；rejected 同名允许重新起草（驳回→修复→重提的恢复路径，D6）
+    const matches = queue.filter(sameKey)
+    const live = matches.find((c) => c.status !== 'rejected')
+    if (live) return live
+    const retries = matches.length
     const cand: DraftCandidate = {
       ...item,
-      id: draftCandidateId(key),
+      id: draftCandidateId(retries === 0 ? key : `${key}|retry-${retries}`),
       packageId,
       sourceId: input.provenance?.sourceId ?? '',
       sourceName: item.name,
@@ -754,12 +768,53 @@ const UPDATABLE: Record<string, string[]> = {
 
 const clamp01 = (w: number): number => Math.min(1, Math.max(0, w))
 
+/**
+ * update 载荷归一（与 create 同源，消除字段路径不对称）：
+ * ScenarioCard 顶层 `mustInclude` → `outputContract.mustInclude`（create 分支即读顶层，
+ * update 白名单只认 outputContract——曾导致同一字段 create 可写、update 静默丢失）。
+ */
+function normalizeUpdatePayload(kind: string, payload: Record<string, unknown>): Record<string, unknown> {
+  if (kind !== 'ScenarioCard' || payload['mustInclude'] === undefined) return payload
+  const { mustInclude, ...rest } = payload
+  const oc = rest['outputContract']
+  const base = oc !== null && typeof oc === 'object' && !Array.isArray(oc) ? (oc as Record<string, unknown>) : {}
+  return { ...rest, outputContract: { ...base, mustInclude } }
+}
+
+/**
+ * update 白名单检查：返回首个非法键（meta 键 targetId/op/append 结构另行处理）。
+ * 无 UPDATABLE 登记的 kind（RedLine 等）不做键集约束，由各自专用规则拒绝。
+ */
+function findNonUpdatableKey(kind: string, payload: Record<string, unknown>): string | undefined {
+  const allowedList = UPDATABLE[kind]
+  if (!allowedList) return undefined
+  const allow = new Set(allowedList)
+  for (const k of Object.keys(payload)) {
+    if (k === 'targetId' || k === 'op' || k === 'append') continue
+    if (!allow.has(k)) return k
+  }
+  const ap = payload['append']
+  if (ap !== null && typeof ap === 'object' && !Array.isArray(ap)) {
+    for (const k of Object.keys(ap as Record<string, unknown>)) {
+      if (!allow.has(k)) return `append.${k}`
+    }
+  }
+  return undefined
+}
+
 /** 合并更新载荷到既有元素：标量覆盖、对象浅并（weights 按键并入）、数组整替；`append.<field>` 追加去重（接线）。 */
 function mergeUpdateFields(el: Record<string, unknown>, payload: Record<string, unknown>, kind: string): void {
+  const eff = normalizeUpdatePayload(kind, payload)
+  const bad = findNonUpdatableKey(kind, eff)
+  if (bad !== undefined) {
+    throw new KnowledgeError(
+      'UPDATE_FIELD_NOT_UPDATABLE',
+      `update payload field not updatable: ${bad} (allowed: ${(UPDATABLE[kind] ?? []).join(', ')})`,
+    )
+  }
   const allowed = new Set(UPDATABLE[kind] ?? [])
-  for (const [k, v] of Object.entries(payload)) {
+  for (const [k, v] of Object.entries(eff)) {
     if (k === 'targetId' || k === 'op' || k === 'append') continue
-    if (!allowed.has(k)) continue
     if (v === undefined) continue
     const cur = el[k]
     if (
@@ -771,7 +826,7 @@ function mergeUpdateFields(el: Record<string, unknown>, payload: Record<string, 
       el[k] = v
     }
   }
-  const append = payload['append']
+  const append = eff['append']
   if (append && typeof append === 'object' && !Array.isArray(append)) {
     for (const [k, v] of Object.entries(append as Record<string, unknown>)) {
       if (!allowed.has(k) || !Array.isArray(v)) continue
