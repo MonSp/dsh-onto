@@ -2,7 +2,7 @@ kind: DerivedManifest
 package: aml-analysis
 version: 1.0.0
 domain: AML
-generatedAt: 2026-11-02T10:11:56.420Z
+generatedAt: 2026-11-06T03:04:31.412Z
 sourceDigest: efdb1feef5cab140fdced9671ded6f2ff9515f6c7277ae446b4ab7dd0f17650f
 sources:
   - path: package.yaml
@@ -27,20 +27,27 @@ sources:
     sha256: a23cb9502c6c913afa6408d3fb71e7851adfa92b97a367c54c96c27740915d2d
   - path: o2-behavior-rules/skill-templates/SKL-AML-NARRATIVE.yaml
     sha256: 8bb0359d1434f20afd2ac4f1b84cf6fda6d84f589022080ca493f941cdc88546
+    layer: L3
   - path: o3-scenarios/SCN-AML-FIND-CLUES.yaml
     sha256: 89375bf0178ccdd65925f33f8a6ad3565ec64cd72faffe9a9c4176e8cc805bc3
   - path: bindings/field-maps.yaml
     sha256: cab4d7a172b0948879934f36a98761373d7009037d009bef30fe10f4fd28c265
+    layer: L2
   - path: bindings/api-sources.yaml
     sha256: 9a2d7e86c060cb50d43a3e207d0f44c23321ea2f08a2ec258ca7d487c42f9a65
+    layer: L2
 derived:
   - path: derived/tool-contracts/tool-contracts.yaml
     sha256: 601e0754ed311b0d2ba89a21094bda5bee0d0ebb4cd78bcf9de0ed70603843a5
+    layer: L2
   - path: derived/rule-engine-config/rule-engine-config.yaml
     sha256: 419d24f5d695fccdb48542651c127d89869368339132b2f08987e140809c14ea
   - path: derived/agent-duties.yaml
-    sha256: 1a03bf64116d4159639d53c3337bc5f65b5a1f52f3e730030b9bbc936485bde2
+    sha256: 138b3ef9fa786782f1fe28d1eac406eda5762f786b8fad1d40d2284b205ddd68
+    layer: L4
   - path: derived/audit-checks.yaml
     sha256: e50d7b4453c701aaba9769c1b86e8b714ee4faa29bdf4b3f8579f29492ad08f5
+    layer: L4
   - path: derived/scenario-orchestration.yaml
     sha256: 0aa8de60acdc5f85dab470153ed20f0c7c30eef35f6d58f53b6d53645ed00793
+    layer: L4

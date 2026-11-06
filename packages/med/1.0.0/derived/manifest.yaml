@@ -2,7 +2,7 @@ kind: DerivedManifest
 package: med-safety
 version: 1.0.0
 domain: MED
-generatedAt: 2026-11-02T10:12:35.097Z
+generatedAt: 2026-11-06T03:04:31.630Z
 sourceDigest: 5afcf1ba6390428bdc3d1d4cc798ebaa407e0830abccdc8a0fb2a7b3afdb2b34
 sources:
   - path: package.yaml
@@ -23,20 +23,27 @@ sources:
     sha256: 84f81c2e67a570634c8977badea630fe35dc433c4b408357845f260ad8fe3bde
   - path: o2-behavior-rules/skill-templates/SKL-MED-NARRATIVE.yaml
     sha256: e0fa3d7a3b7c59b2f8269d6539f9de940e620c3aacdcc8f084e6bfc8217e9642
+    layer: L3
   - path: o3-scenarios/SCN-MED-RISK-NOTICE.yaml
     sha256: 6bd9b8c0ea01ae70e2626d554cacee6eaf97b55b2e91e0bb86aeb2bef0bb87e3
   - path: bindings/field-maps.yaml
     sha256: 409b7e2c382598019340fe2c18119f95c90e4424dd0146ff7b0198a6c61aad7a
+    layer: L2
   - path: bindings/api-sources.yaml
     sha256: e20a95de5654f112b2fe06d638e125ba9e9b8eaaa287691ef0477de80caa9f9d
+    layer: L2
 derived:
   - path: derived/tool-contracts/tool-contracts.yaml
     sha256: 536b16b265065641e805dd12a14c6ff7186eb7c089eb0dcd70ee7cc4c4731e7d
+    layer: L2
   - path: derived/rule-engine-config/rule-engine-config.yaml
     sha256: 28f449f89123a584c132e6eefdcd37ffc7aefeef32f48bf12094167a1f30b4ae
   - path: derived/agent-duties.yaml
-    sha256: 705c6329890a8e1c154875c87fc3a14c34b1cf02d5369e182909a337060afc7c
+    sha256: fc312d2ef61053623368aff614609078ce39128bf57662e9ea456f30fdfa788f
+    layer: L4
   - path: derived/audit-checks.yaml
     sha256: 33e56c05e1bd946fa0bc2626705b5f27750bb101cb536c47386d4a5959908416
+    layer: L4
   - path: derived/scenario-orchestration.yaml
     sha256: 45a3bcd595e4409af51e82cae8abc69470e99082351572d5ba08392534dd91dc
+    layer: L4

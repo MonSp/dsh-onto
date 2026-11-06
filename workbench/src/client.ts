@@ -32,6 +32,17 @@ interface Ctx {
   slots: SlotsRuntime
   remote: Record<string, Record<string, RemoteFn> | undefined>
   provide(name: string, value: unknown): void
+  /** 右栏 tab 类型注册表（shell 的 ui-sidebar-right reflect 服务；结构面手写，零 import）。 */
+  sidebarRightTabs: { register(def: SidebarRightTabDefinitionLike): () => void }
+}
+
+/** SidebarRightTabDefinition 最小结构面（与 ui-sidebar-right 对齐）。 */
+interface SidebarRightTabDefinitionLike {
+  id: string
+  kind: string
+  priority?: 'extension' | 'builtin' | 'fallback'
+  title: (address: string) => string
+  guide?: Array<{ id: string; order: number; title: () => string; description?: () => string }>
 }
 
 interface ModuleRequire {
@@ -59,6 +70,9 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-onto.workbench'
     const PANEL_ID = 'dsh-onto-workbench'
+    /** 右栏「本体图谱」页型：kind 为打开名，id 为实现身份（pane.tab 的 key）。 */
+    const GRAPH_TAB_ID = '@dsh-onto/workbench'
+    const GRAPH_TAB_KIND = 'ontology-graph'
 
     const zh = {
       panel: 'dsh-onto',
@@ -212,6 +226,31 @@ window.__ModuleLoader__.load({
       illegalRelPath: '非法相对路径（禁 ..、反斜杠、绝对路径）',
       mergeFallback: '模型加载失败，merge 目标改为手输',
       readme: '建模到运行：建包 → 建模/知识库物化 → 校验 → 签发 → 派生 → 场景运行。ISSUED 只读，改需 fork。',
+      // 对话式建模（conversational-modeling P1/P3）
+      canvasView: '图谱画布',
+      listView: '清单视图',
+      draftHint: '虚线 = 待审草案。建模请在主对话口述（AI 起草、画布自动生长）；人审动作在节点检视器。',
+      skeleton: '骨架',
+      skelNone: '未建骨架（物化门未启用）',
+      skelUnconfirmed: '骨架未确认（物化门已锁）',
+      skelConfirmed: '骨架已确认',
+      skelEdit: '编辑骨架',
+      skelIds: '骨架 ID 清单（每行一个）',
+      skelCode: '域码',
+      skelSave: '保存骨架',
+      approveMat: '批准并物化',
+      prov: '溯源',
+      pkgIssues: '包级问题',
+      nodeIssues: '节点问题',
+      noSelection: '点画布上的节点查看检视器',
+      payload: '载荷',
+      rationale: '依据',
+      attrCount: '属性',
+      draftCount: '待审草案',
+      revision: '修订',
+      graphTabTitle: '本体图谱',
+      graphTabDesc: '对话旁的常驻画布：每轮起草自动长出节点',
+      rightSelected: '图谱包',
     }
     const en = {
       panel: 'dsh-onto',
@@ -365,6 +404,31 @@ window.__ModuleLoader__.load({
       illegalRelPath: 'illegal relPath (no .., backslash, or absolute path)',
       mergeFallback: 'model load failed; merge target falls back to free input',
       readme: 'Flow: create → model/knowledge → validate → issue → derive → run. ISSUED is read-only; fork to edit.',
+      // conversational modeling (P1/P3)
+      canvasView: 'Graph canvas',
+      listView: 'List view',
+      draftHint: 'Dashed = pending draft. Describe modeling in the main chat (AI drafts, canvas grows); review actions in the node inspector.',
+      skeleton: 'Skeleton',
+      skelNone: 'No skeleton (materialize gate inactive)',
+      skelUnconfirmed: 'Skeleton unconfirmed (gate locked)',
+      skelConfirmed: 'Skeleton confirmed',
+      skelEdit: 'Edit skeleton',
+      skelIds: 'Skeleton IDs (one per line)',
+      skelCode: 'Domain code',
+      skelSave: 'Save skeleton',
+      approveMat: 'Approve & materialize',
+      prov: 'Provenance',
+      pkgIssues: 'Package-level issues',
+      nodeIssues: 'Node issues',
+      noSelection: 'Click a node on the canvas to inspect',
+      payload: 'Payload',
+      rationale: 'Rationale',
+      attrCount: 'Attributes',
+      draftCount: 'Pending drafts',
+      revision: 'Rev',
+      graphTabTitle: 'Ontology graph',
+      graphTabDesc: 'Persistent canvas beside chat: drafts grow nodes per turn',
+      rightSelected: 'Graph package',
     }
 
     function errText(e: unknown): string {
@@ -390,6 +454,39 @@ window.__ModuleLoader__.load({
 
     function fmt(n: number | undefined, digits = 3): string {
       return typeof n === 'number' ? n.toFixed(digits) : '—'
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+     * 包选中共享态：主区工作台与右栏图谱同一来源（conversational-modeling P1 修正）
+     * ═══════════════════════════════════════════════════════════════════ */
+
+    interface SelectedPkg {
+      name: string
+      version: string
+    }
+
+    const selectedStore = {
+      value: null as SelectedPkg | null,
+      listeners: new Set<() => void>(),
+      get(): SelectedPkg | null {
+        return this.value
+      },
+      set(next: SelectedPkg | null): void {
+        this.value = next
+        for (const fn of [...this.listeners]) fn()
+      },
+      subscribe(fn: () => void): () => void {
+        this.listeners.add(fn)
+        return () => {
+          this.listeners.delete(fn)
+        }
+      },
+    }
+
+    function useSharedSelected(): [SelectedPkg | null, (next: SelectedPkg | null) => void] {
+      const [v, setV] = useState<SelectedPkg | null>(selectedStore.get())
+      useEffect(() => selectedStore.subscribe(() => setV(selectedStore.get())), [])
+      return [v, (next) => selectedStore.set(next)]
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -439,6 +536,27 @@ window.__ModuleLoader__.load({
       '.ow-diff{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:8px;padding:8px 10px;background:var(--dsw-alias-fill,#f8fafc);}',
       '.ow-diff pre{margin:6px 0 0;}',
       '.ow-actions{display:flex;gap:4px;flex-wrap:wrap;}',
+      '.ogc-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
+      '.ogc-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start;}',
+      '.ogc-box{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:10px;overflow:hidden;background:transparent;}',
+      '.ogc-box svg{display:block;width:100%;height:auto;}',
+      '.ogc-legend{display:flex;gap:10px;flex-wrap:wrap;padding:6px 10px;border-top:1px dashed var(--dsw-alias-line,#e5e7eb);font-size:11px;color:var(--dsw-alias-label-secondary,#6b7280);}',
+      '.ogc-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle;}',
+      '.ogc-insp{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;max-height:560px;overflow:auto;font-size:12.5px;}',
+      '.ogc-insp h4{margin:0;font-size:13px;font-weight:650;word-break:break-all;}',
+      '.ogc-kv{display:flex;gap:8px;font-size:12px;}',
+      '.ogc-kv b{color:var(--dsw-alias-label-secondary,#6b7280);font-weight:600;min-width:52px;flex-shrink:0;}',
+      '.ogc-issue{border-left:3px solid #dc2626;padding:2px 8px;margin:2px 0;font-size:12px;background:#fee2e2;color:#7f1d1d;border-radius:0 6px 6px 0;word-break:break-word;}',
+      '.ogc-issue.warn{border-left-color:#d97706;background:#fef3c7;color:#78350f;}',
+      '.ogc-skel{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;padding:6px 10px;border:1px dashed var(--dsw-alias-line,#d1d5db);border-radius:8px;}',
+
+      '.ogc-node{cursor:pointer;}',
+      '.ogc-right .ogc-grid{grid-template-columns:1fr;}',
+      '.ogc-right{max-width:none;}',
+      '.ogc-node:hover text{text-decoration:underline;}',
+      '.ogc-lbl{font-size:10px;fill:var(--dsw-alias-label-primary,#1c2333);pointer-events:none;}',
+      '.ogc-edge{stroke-width:1;fill:none;opacity:.65;}',
+      '@media (max-width:900px){.ogc-grid{grid-template-columns:1fr;}}',
     ].join('\n')
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -738,6 +856,7 @@ window.__ModuleLoader__.load({
         'remote.ontoDerive',
         'remote.ontoKnowledge',
         'remote.ontoRuntime',
+        'sidebarRightTabs',
       ],
       apply(ctx: Ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-onto-workbench: dictionaries')
@@ -1048,6 +1167,599 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /* ═══════════════════════════════════════════════════════════════
+         * 图谱画布（conversational-modeling P1）：分层力导 GraphCanvas + 检视器
+         * ═══════════════════════════════════════════════════════════════ */
+
+        interface OgNode {
+          id: string
+          kind: string
+          layer: 'O1' | 'O2' | 'O3'
+          name: string
+          draft: boolean
+          provenance?: { turnId?: string; sourceId?: string }
+          issueLevel?: 'error' | 'warn' | 'info'
+          forcedReview?: boolean
+          runHit?: boolean
+        }
+        interface OgEdge {
+          from: string
+          to: string
+          kind: string
+          label?: string
+        }
+        interface OgIssue {
+          level: 'error' | 'warn' | 'info'
+          code: string
+          message: string
+          where: string
+        }
+        interface OgGraph {
+          package: string
+          version: string
+          status: string
+          nodes: OgNode[]
+          edges: OgEdge[]
+          issues: OgIssue[]
+          revision: number
+          skeleton?: { confirmed: boolean; ids: string[] }
+        }
+
+        const OG_W = 880
+        const OG_H = 460
+        const OG_FILL: Record<string, string> = { O1: '#eaf0f7', O2: '#fdf1e2', O3: '#e9f7ef' }
+        const OG_STROKE: Record<string, string> = { O1: '#4a6fa5', O2: '#e8933a', O3: '#3d9970' }
+        const OG_EDGE: Record<string, string> = {
+          relation: '#4a6fa5',
+          anchor: '#e8933a',
+          dict: '#b8a46b',
+          'skill-rule': '#e8933a',
+          'scenario-step': '#4a6fa5',
+          ref: '#9aa3b2',
+          applies: '#9aa3b2',
+        }
+
+        /** 分层力导向：按 O1/O2/O3/草案分列初始 + 固定轮数迭代（确定性，无随机）。 */
+        function layoutGraph(graph: OgGraph): Map<string, { x: number; y: number }> {
+          const nodes = graph.nodes
+          const n = nodes.length
+          const pos = new Map<string, { x: number; y: number }>()
+          if (n === 0) return pos
+          const colX: Record<string, number> = { O1: OG_W * 0.16, O2: OG_W * 0.5, O3: OG_W * 0.8, draft: OG_W * 0.93 }
+          const buckets: Record<string, OgNode[]> = { O1: [], O2: [], O3: [], draft: [] }
+          for (const nd of nodes) buckets[nd.draft ? 'draft' : nd.layer].push(nd)
+          for (const key of Object.keys(buckets)) {
+            const arr = buckets[key]
+            const spread = (OG_H - 72) / Math.max(arr.length, 1)
+            arr.forEach((nd, i) => {
+              pos.set(nd.id, { x: colX[key], y: 36 + spread * (i + 0.5) })
+            })
+          }
+          if (n > 420) return pos // 大图退化为分列布局（斥力 O(n²) 设上限）
+          const K = 4200
+          const REST = 96
+          for (let tick = 0; tick < 130; tick++) {
+            const fx = new Map<string, { x: number; y: number }>()
+            const add = (id: string, dx: number, dy: number): void => {
+              const cur = fx.get(id) ?? { x: 0, y: 0 }
+              cur.x += dx
+              cur.y += dy
+              fx.set(id, cur)
+            }
+            for (let i = 0; i < n; i++) {
+              for (let j = i + 1; j < n; j++) {
+                const a = nodes[i]
+                const b = nodes[j]
+                const pa = pos.get(a.id)
+                const pb = pos.get(b.id)
+                if (!pa || !pb) continue
+                let dx = pa.x - pb.x
+                let dy = pa.y - pb.y
+                let d2 = dx * dx + dy * dy
+                if (d2 < 1) {
+                  dx = (i % 7) - 3 || 1
+                  dy = (j % 5) - 2 || 1
+                  d2 = dx * dx + dy * dy
+                }
+                const d = Math.sqrt(d2)
+                const f = K / d2
+                add(a.id, (dx / d) * f, (dy / d) * f)
+                add(b.id, (-dx / d) * f, (-dy / d) * f)
+              }
+            }
+            for (const e of graph.edges) {
+              const pa = pos.get(e.from)
+              const pb = pos.get(e.to)
+              if (!pa || !pb) continue
+              const dx = pb.x - pa.x
+              const dy = pb.y - pa.y
+              const d = Math.sqrt(dx * dx + dy * dy) || 1
+              const f = (d - REST) * 0.04
+              add(e.from, (dx / d) * f, (dy / d) * f)
+              add(e.to, (-dx / d) * f, (-dy / d) * f)
+            }
+            for (const nd of nodes) {
+              const p = pos.get(nd.id)
+              if (!p) continue
+              const tx = colX[nd.draft ? 'draft' : nd.layer]
+              add(nd.id, (tx - p.x) * 0.045, (OG_H / 2 - p.y) * 0.012)
+            }
+            for (const nd of nodes) {
+              const d = fx.get(nd.id)
+              const p = pos.get(nd.id)
+              if (!d || !p) continue
+              const mag = Math.sqrt(d.x * d.x + d.y * d.y) || 1
+              const lim = Math.max(13 - tick * 0.08, 1.5)
+              const step = Math.min(mag, lim) * 0.6
+              p.x += (d.x / mag) * step
+              p.y += (d.y / mag) * step
+              p.x = Math.max(52, Math.min(OG_W - 52, p.x))
+              p.y = Math.max(24, Math.min(OG_H - 24, p.y))
+            }
+          }
+          return pos
+        }
+
+        function GraphCanvas(props: { graph: OgGraph; selected: string | null; onSelect: (id: string) => void }) {
+          const { graph, selected, onSelect } = props
+          const pos = useMemo(() => layoutGraph(graph), [graph])
+          return h(
+            'svg',
+            { viewBox: `0 0 ${OG_W} ${OG_H}`, role: 'img', 'aria-label': 'ontology graph' },
+            h(
+              'defs',
+              null,
+              h(
+                'marker',
+                { id: 'ogc-ar', viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' },
+                h('path', { d: 'M1,1 L6,4 L1,7', fill: 'none', stroke: '#9aa3b2', strokeWidth: 1.2 }),
+              ),
+            ),
+            ...graph.edges.map((e, i) => {
+              const a = pos.get(e.from)
+              const b = pos.get(e.to)
+              if (!a || !b) return null
+              return h('line', {
+                key: `e${i}`,
+                className: 'ogc-edge',
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+                stroke: OG_EDGE[e.kind] ?? '#9aa3b2',
+                markerEnd: 'url(#ogc-ar)',
+              })
+            }),
+            ...graph.nodes.map((nd) => {
+              const p = pos.get(nd.id)
+              if (!p) return null
+              const label = nd.name.length > 12 ? `${nd.name.slice(0, 11)}…` : nd.name
+              const w = Math.max(56, Math.min(140, 30 + label.length * 11))
+              const stroke = nd.runHit
+                ? '#dc2626'
+                : nd.issueLevel === 'error'
+                  ? '#dc2626'
+                  : nd.issueLevel === 'warn'
+                    ? '#d97706'
+                    : OG_STROKE[nd.layer] ?? '#9aa3b2'
+              const isSel = selected === nd.id
+              return h(
+                'g',
+                {
+                  key: nd.id,
+                  className: 'ogc-node',
+                  transform: `translate(${p.x - w / 2},${p.y - 14})`,
+                  onClick: () => onSelect(nd.id),
+                },
+                h('title', null, `${nd.id}${nd.draft ? '（草案）' : ''}${nd.runHit ? '（运行命中）' : ''}`),
+                h('rect', {
+                  width: w,
+                  height: 28,
+                  rx: 7,
+                  fill: OG_FILL[nd.layer] ?? '#f3f4f6',
+                  fillOpacity: nd.draft ? 0.5 : 1,
+                  stroke,
+                  strokeWidth: isSel ? 2.4 : 1.4,
+                  strokeDasharray: nd.draft ? '5 3' : undefined,
+                }),
+                h('text', { className: 'ogc-lbl', x: w / 2, y: 18, textAnchor: 'middle' }, label),
+              )
+            }),
+          )
+        }
+
+        /** issue.where → 当前节点（graph.issues.where 已在 core 归一为「节点 ID | 'package'」；PREFIX 形态为兼容保留）。 */
+        function matchIssueWhere(where: string, id: string): boolean {
+          if (where === id || where.startsWith(`${id}.`)) return true
+          const m = /^([A-Z]{2,4}) ([A-Z]+-[A-Z0-9-]+)(?:\.[A-Za-z0-9_-]+)?$/.exec(where)
+          return m !== null && m[2] === id
+        }
+
+        function findElement(
+          pkg: Record<string, unknown> | null,
+          id: string,
+        ): { key: string; el: Record<string, unknown> } | null {
+          if (!pkg) return null
+          for (const key of [
+            'objects',
+            'relations',
+            'dictionaries',
+            'behaviors',
+            'scoreRules',
+            'exclusionRules',
+            'skillTemplates',
+            'scenarios',
+            'fieldMaps',
+            'apiSources',
+          ]) {
+            const arr = pkg[key] as Array<Record<string, unknown>> | undefined
+            const hit = arr?.find((x) => String(x['id']) === id)
+            if (hit) return { key, el: hit }
+          }
+          return null
+        }
+
+        function InspectorView(props: {
+          t: (k: string) => string
+          graph: OgGraph
+          node: OgNode | null
+          pkg: Record<string, unknown> | null
+          candidates: Array<Record<string, unknown>>
+          busy: string
+          readOnly: boolean
+          onDraftAction: (id: string, action: 'approve' | 'reject') => void
+        }) {
+          const { t, graph, node, pkg, candidates, busy, readOnly, onDraftAction } = props
+          if (!node) {
+            return h('div', { className: 'ogc-insp' }, h('p', { className: 'ow-note' }, t('noSelection')))
+          }
+          const issues = graph.issues.filter((i) => i.level !== 'info' && matchIssueWhere(i.where, node.id))
+          const found = node.draft ? null : findElement(pkg, node.id)
+          const cand = node.draft ? candidates.find((c) => String(c['id']) === node.id) ?? null : null
+          const kv = (label: string, value: unknown): ReactNode =>
+            h('div', { className: 'ogc-kv' }, h('b', null, label), h('span', null, String(value ?? '—')))
+          const rows: ReactNode[] = [
+            h('div', { key: 'tags', className: 'ow-row' },
+              h(Tag, { text: `${node.layer} · ${node.kind}` }),
+              node.draft ? h(Tag, { text: t('queue'), tone: 'warn' }) : null,
+              node.forcedReview ? h(Tag, { text: t('forcedReview'), tone: 'warn' }) : null,
+              node.issueLevel ? h(Tag, { text: node.issueLevel, tone: node.issueLevel === 'error' ? 'err' : 'warn' }) : null,
+              node.runHit ? h(Tag, { text: 'run-hit', tone: 'ok' }) : null,
+            ),
+            kv(t('name'), node.name),
+          ]
+          if (node.provenance?.turnId || node.provenance?.sourceId) {
+            rows.push(kv(t('prov'), [node.provenance.turnId, node.provenance.sourceId].filter(Boolean).join(' · ')))
+          }
+          if (found) {
+            const el = found.el
+            if (el['idRule']) rows.push(kv(t('idRule'), el['idRule']))
+            if (el['from'] !== undefined && el['to'] !== undefined) rows.push(kv(t('from'), `${el['from']} → ${el['to']}`))
+            if (el['anchor'] !== undefined) rows.push(kv(t('anchor'), el['anchor']))
+            if (el['weight'] !== undefined) rows.push(kv(t('weight'), `${el['weight']}  ${String(el['expression'] ?? '')}`))
+            if (el['condition'] !== undefined) rows.push(kv(t('condition'), el['condition']))
+            if (el['goal'] !== undefined) rows.push(kv(t('goal'), el['goal']))
+            if (el['boundary'] !== undefined) rows.push(kv(t('boundary'), el['boundary']))
+            const attrs = el['attributes'] as unknown[] | undefined
+            if (Array.isArray(attrs)) rows.push(kv(t('attrCount'), attrs.length))
+            const values = el['values'] as unknown[] | undefined
+            if (Array.isArray(values)) rows.push(kv(t('dictionaries'), values.join(', ')))
+          }
+          if (issues.length > 0) {
+            rows.push(
+              h('div', { key: 'issues' },
+                h('b', { className: 'ow-note' }, t('nodeIssues')),
+                ...issues.map((i, k) =>
+                  h('div', { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
+                    h('b', null, `${i.code} @ ${i.where}`), ' ', i.message))),
+            )
+          }
+          if (cand) {
+            rows.push(kv(t('confidence'), cand['confidence']))
+            if (cand['rationale']) rows.push(kv(t('rationale'), cand['rationale']))
+            rows.push(
+              h('pre', { key: 'payload', className: 'ow-mono', style: { maxHeight: 140, overflow: 'auto', margin: 0 } },
+                JSON.stringify(cand['payload'] ?? {}, null, 2)),
+            )
+            rows.push(
+              h('div', { key: 'act', className: 'ow-row' },
+                readOnly
+                  ? null
+                  : h('button', {
+                      className: 'ow-btn',
+                      disabled: !!busy,
+                      onClick: () => onDraftAction(node.id, 'approve'),
+                    }, busy ? t('busy') : t('approveMat')),
+                readOnly
+                  ? null
+                  : h('button', {
+                      className: 'ow-btn ghost',
+                      disabled: !!busy,
+                      onClick: () => onDraftAction(node.id, 'reject'),
+                    }, t('reject'))),
+            )
+          }
+          return h('div', { className: 'ogc-insp' }, h('h4', null, node.id), ...rows)
+        }
+
+        /* ═══════════════════════════════════════════════════════════════
+         * GraphWorkbench —— 画布工作台（主区建模视图与右栏图谱 tab 共用）
+         * 状态自带：图谱轮询 / 人审物化 / 骨架门（P1/P3）。草拟单一入口在
+         * dsh 主对话（agent → draft_elements），画布只展示状态与人审动作。
+         * ═══════════════════════════════════════════════════════════════ */
+
+        function GraphWorkbench(props: {
+          t: (k: string) => string
+          apis: Ctx
+          selected: { name: string; version: string } | null
+          /** 主区视图传入：物化后刷新 pkg/统计（右栏 tab 不传）。 */
+          onChanged?: () => void
+        }) {
+          const { t, apis, selected, onChanged } = props
+          const api = apis.remote['ontoModel']
+          const kApi = apis.remote['ontoKnowledge']
+          const [graph, setGraph] = useState<OgGraph | null>(null)
+          const [selNode, setSelNode] = useState<string | null>(null)
+          const [candidates, setCandidates] = useState<Array<Record<string, unknown>>>([])
+          const [skelOpen, setSkelOpen] = useState(false)
+          const [skelIds, setSkelIds] = useState('')
+          const [skelCode, setSkelCode] = useState('')
+          const [skelConfirmed, setSkelConfirmed] = useState(false)
+          const [busy, setBusy] = useState('')
+          const [error, setError] = useState('')
+          const [info, setInfo] = useState('')
+          const [pkg, setPkg] = useState<Record<string, unknown> | null>(null)
+
+          const loadGraph = useCallback(async () => {
+            if (!api || !kApi || !selected) return
+            try {
+              const out = unwrap<{ graph: OgGraph }>(
+                await api.getGraph({ name: selected.name, version: selected.version }),
+              )
+              setGraph(out.graph)
+              const cq = unwrap<{ items: Array<Record<string, unknown>> }>(
+                await kApi.listCandidates({ packageId: selected.name }),
+              )
+              setCandidates(cq.items)
+              const p = unwrap<{ pkg: Record<string, unknown> }>(
+                await api.load({ name: selected.name, version: selected.version }),
+              )
+              setPkg(p.pkg)
+            } catch {
+              /* 画布刷新失败静默（DRAFT/空包轮询） */
+            }
+          }, [apis, selected])
+
+          useEffect(() => {
+            void loadGraph()
+          }, [loadGraph])
+
+          // P1 订阅刷新：轮询 revision——dsh 会话起草 / 知识库人审后画布增量生长
+          useEffect(() => {
+            const timer = setInterval(() => {
+              void loadGraph()
+            }, 4000)
+            return () => clearInterval(timer)
+          }, [loadGraph])
+
+          // 骨架输入只在非编辑态同步（防轮询覆盖正在输入的内容）
+          useEffect(() => {
+            if (!skelOpen && graph) {
+              setSkelIds(graph.skeleton ? graph.skeleton.ids.join('\n') : '')
+              setSkelConfirmed(graph.skeleton ? graph.skeleton.confirmed : false)
+            }
+          }, [graph, skelOpen])
+
+          const readOnly = graph?.status === 'ISSUED'
+
+          const draftAction = (id: string, action: 'approve' | 'reject'): void => {
+            if (!selected || readOnly || !kApi) return
+            void (async () => {
+              setBusy(action)
+              setError('')
+              setInfo('')
+              try {
+                unwrap(await kApi.reviewCandidate({ id, action }))
+                if (action === 'approve') {
+                  const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
+                    await kApi.materialize({ name: selected.name, version: selected.version, ids: [id] }),
+                  )
+                  setInfo(
+                    res.applied.length > 0
+                      ? `✓ ${t('approveMat')}`
+                      : `✓ ${t('approve')} — ${res.skipped.map((s) => s.reason).join('; ') || t('empty')}`,
+                  )
+                } else {
+                  setInfo(`✓ ${t('reject')}`)
+                }
+                await loadGraph()
+                onChanged?.()
+              } catch (e) {
+                setError(errText(e))
+                void loadGraph()
+              } finally {
+                setBusy('')
+              }
+            })()
+          }
+
+          const saveSkeleton = (): void => {
+            if (!selected || !kApi) return
+            const domainCode = skelCode.trim() || skelDomainFallback(graph)
+            const ids = skelIds
+              .split('\n')
+              .map((s) => s.trim())
+              .filter(Boolean)
+            void (async () => {
+              setBusy('skel')
+              setError('')
+              setInfo('')
+              try {
+                unwrap(
+                  await kApi.saveSkeleton({
+                    name: selected.name,
+                    version: selected.version,
+                    domainCode,
+                    confirmed: skelConfirmed,
+                    ids,
+                  }),
+                )
+                await loadGraph()
+                setInfo(`✓ ${t('skelSave')}`)
+              } catch (e) {
+                setError(errText(e))
+              } finally {
+                setBusy('')
+                setSkelOpen(false)
+              }
+            })()
+          }
+
+          if (!selected) return h('p', { className: 'ow-note' }, t('none'))
+
+          const EMPTY_GRAPH: OgGraph = { package: '', version: '', status: '', nodes: [], edges: [], issues: [], revision: 0 }
+          const g = graph ?? EMPTY_GRAPH
+          const nodeObj: OgNode | null = selNode ? g.nodes.find((nd) => nd.id === selNode) ?? null : null
+          const pkgIssues = g.issues.filter((i) => i.where === 'package' && i.level !== 'info')
+          const draftCount = g.nodes.filter((nd) => nd.draft).length
+          const domain = skelDomainFallback(graph)
+
+          const canvasChildren: ReactNode[] = []
+          if (graph) {
+            canvasChildren.push(
+              h(
+                'div',
+                { key: 'skel', className: 'ogc-skel' },
+                h(Tag, {
+                  text: t('skeleton'),
+                  tone: graph.skeleton ? (graph.skeleton.confirmed ? 'ok' : 'warn') : undefined,
+                }),
+                h(
+                  'span',
+                  { className: 'ow-note' },
+                  graph.skeleton
+                    ? `${graph.skeleton.confirmed ? t('skelConfirmed') : t('skelUnconfirmed')} · ${graph.skeleton.ids.length} ID`
+                    : t('skelNone'),
+                ),
+                readOnly
+                  ? null
+                  : h('button', {
+                      className: 'ow-btn ghost',
+                      disabled: !!busy,
+                      onClick: () => setSkelOpen((v) => !v),
+                    }, t('skelEdit')),
+                skelOpen
+                  ? h(
+                      'div',
+                      { className: 'ow-form', style: { width: '100%' } },
+                      h(Field, { label: t('skelCode') },
+                        h('input', {
+                          className: 'ow-in',
+                          value: skelCode,
+                          placeholder: domain,
+                          onChange: (e: { target: { value: string } }) => setSkelCode(e.target.value),
+                        })),
+                      h(Field, { label: t('skelIds') },
+                        h('textarea', {
+                          className: 'ow-textarea',
+                          style: { minHeight: 90 },
+                          value: skelIds,
+                          onChange: (e: { target: { value: string } }) => setSkelIds(e.target.value),
+                        })),
+                      h(
+                        'div',
+                        { className: 'ow-row' },
+                        h('label', { className: 'ow-note', style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                          h('input', {
+                            type: 'checkbox',
+                            checked: skelConfirmed,
+                            onChange: (e: { target: { checked: boolean } }) => setSkelConfirmed(e.target.checked),
+                          }),
+                          t('skelConfirmed')),
+                        h('button', { className: 'ow-btn', disabled: !!busy, onClick: saveSkeleton }, t('skelSave')),
+                        h('button', { className: 'ow-btn ghost', onClick: () => setSkelOpen(false) }, t('cancel')),
+                      ),
+                    )
+                  : null,
+              ),
+            )
+          }
+          if (!readOnly) {
+            // 草拟单一入口在 dsh 主对话（P1：对话是入口，画布是状态）——此处只留引导。
+            canvasChildren.push(h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')))
+          }
+          canvasChildren.push(
+            h(
+              'div',
+              { key: 'grid', className: 'ogc-grid' },
+              graph
+                ? h(
+                    'div',
+                    { className: 'ogc-box' },
+                    h(GraphCanvas, { graph, selected: selNode, onSelect: setSelNode }),
+                    h(
+                      'div',
+                      { className: 'ogc-legend' },
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O1, border: '1.5px solid #4a6fa5' } }), ' O1'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O2, border: '1.5px solid #e8933a' } }), ' O2'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O3, border: '1.5px solid #3d9970' } }), ' O3'),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px dashed #999' } }), ` ${t('queue')}`),
+                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #dc2626' } }), ' error / run-hit'),
+                    ),
+                  )
+                : h('p', { className: 'ow-note' }, t('loading')),
+              h(InspectorView, {
+                t,
+                graph: g,
+                node: nodeObj,
+                pkg,
+                candidates,
+                busy,
+                readOnly,
+                onDraftAction: draftAction,
+              }),
+            ),
+          )
+          if (pkgIssues.length > 0) {
+            canvasChildren.push(
+              h(
+                'div',
+                { key: 'pkgissues', style: { marginTop: 8 } },
+                h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
+                ...pkgIssues.slice(0, 12).map((i, k) =>
+                  h(
+                    'div',
+                    { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
+                    h('b', null, i.code),
+                    ' ',
+                    i.message,
+                  )),
+              ),
+            )
+          }
+
+          return h(
+            'div',
+            { className: 'ogc-work' },
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('span', { className: 'ow-stat' }, `${t('draftCount')} ${draftCount}`),
+              graph ? h('span', { className: 'ow-stat' }, `${t('revision')} ${graph.revision}`) : null,
+              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => void loadGraph() }, t('refresh')),
+            ),
+            h(ErrorBanner, { text: error }),
+            h(OkBanner, { text: info }),
+            ...canvasChildren,
+          )
+        }
+
+        /** 骨架域码回退：无图谱时用包 ID 派生的占位（保存时优先 skelCode 输入）。 */
+        function skelDomainFallback(graph: OgGraph | null): string {
+          if (graph && graph.package) return (graph.package.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'GEN')
+          return 'GEN'
+        }
+
         function ModelPanel(props: {
           t: (k: string) => string
           apis: Ctx
@@ -1063,6 +1775,8 @@ window.__ModuleLoader__.load({
           const [info, setInfo] = useState('')
           const [edit, setEdit] = useState<ElemEdit | null>(null)
           const api = apis.remote['ontoModel']
+          // 画布状态与动作在 GraphWorkbench（主区视图与右栏 tab 共用；P1 修正）
+          const [view, setView] = useState<'canvas' | 'list'>('canvas')
 
           const reload = useCallback(async () => {
             if (!api || !selected) return
@@ -1365,7 +2079,22 @@ window.__ModuleLoader__.load({
               h('span', { className: 'ow-stat' }, `${t('skillTemplates')} ${(model['skillTemplates'] ?? []).length}`),
               h('span', { className: 'ow-stat' }, `${t('scenarios')} ${(model['scenarios'] ?? []).length}`),
             ),
-            ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
+            h(
+              'div',
+              { className: 'ogc-toolbar', style: { marginTop: 10 } },
+              h('button', {
+                className: view === 'canvas' ? 'ow-btn' : 'ow-btn ghost',
+                onClick: () => setView('canvas'),
+              }, t('canvasView')),
+              h('button', {
+                className: view === 'list' ? 'ow-btn' : 'ow-btn ghost',
+                onClick: () => setView('list'),
+              }, t('listView')),
+            ),
+            ...(view === 'canvas'
+              ? [h(GraphWorkbench, { key: 'gw', t, apis, selected, onChanged: reload })]
+              : [
+                  ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
             h(
               Card,
               { title: t('yamlImport') },
@@ -1422,6 +2151,8 @@ window.__ModuleLoader__.load({
                 busy === 'yaml' ? t('busy') : t('yamlWrite'),
               ),
             ),
+            ]
+            )
           )
         }
 
@@ -2458,7 +3189,8 @@ window.__ModuleLoader__.load({
           const { t, ctx: apis } = props
           const [tab, setTab] = useState('packages')
           const [versions, setVersions] = useState<VersionRow[]>([])
-          const [selected, setSelected] = useState<{ name: string; version: string } | null>(null)
+          // 与右栏图谱 tab 共享的包选中态（P1 修正）
+          const [selected, setSelected] = useSharedSelected()
           const [listError, setListError] = useState('')
 
           const reload = useCallback(async () => {
@@ -2531,6 +3263,98 @@ window.__ModuleLoader__.load({
                     : h(RunPanel, { t, apis, selected }),
           )
         }
+
+        /* ═══════════════════════════════════════════════════════════════
+         * 右栏「本体图谱」tab：对话留 main，图谱常驻右栏（P1 修正）
+         * ═══════════════════════════════════════════════════════════════ */
+
+        function GraphRightTab() {
+          const [selected, setSelected] = useSharedSelected()
+          const [versions, setVersions] = useState<VersionRow[]>([])
+          const [listError, setListError] = useState('')
+          useEffect(() => {
+            const api = ctx.remote['ontoWorkspace']
+            if (!api) return
+            void (async () => {
+              try {
+                const out = unwrap<VersionRow[]>(await api.listVersions())
+                const rows = Array.isArray(out) ? out : []
+                setVersions(rows)
+                setListError('')
+                // 未选包时自动选第一个（右栏首开即有图）
+                if (!selectedStore.get() && rows.length > 0) {
+                  selectedStore.set({ name: rows[0].name, version: rows[0].version })
+                }
+              } catch (e) {
+                setListError(errText(e))
+              }
+            })()
+          }, [])
+          const selValue = selected ? `${selected.name}@${selected.version}` : ''
+          return h(
+            'div',
+            { className: 'ow-wrap ogc-right' },
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('span', { className: 'ow-label' }, t('rightSelected')),
+              h(
+                'select',
+                {
+                  className: 'ow-sel',
+                  value: selValue,
+                  onChange: (e: { target: { value: string } }) => {
+                    const v = e.target.value
+                    const at = v.lastIndexOf('@')
+                    if (at > 0) setSelected({ name: v.slice(0, at), version: v.slice(at + 1) })
+                  },
+                },
+                versions.length === 0
+                  ? h('option', { key: '', value: '' }, t('none'))
+                  : null,
+                ...versions.map((v) =>
+                  h(
+                    'option',
+                    { key: `${v.name}@${v.version}`, value: `${v.name}@${v.version}` },
+                    `${v.name}@${v.version}（${v.status}）`,
+                  )),
+              ),
+            ),
+            listError ? h(ErrorBanner, { text: listError }) : null,
+            selected
+              ? h(GraphWorkbench, { t, apis: ctx, selected })
+              : h('p', { className: 'ow-note' }, t('none')),
+          )
+        }
+
+        // 右栏 tab 类型（guide 卡片可发现）+ tab 内容席位
+        ctx.effect(
+          () =>
+            ctx.sidebarRightTabs.register({
+              id: GRAPH_TAB_ID,
+              kind: GRAPH_TAB_KIND,
+              title: () => t('graphTabTitle'),
+              guide: [
+                {
+                  id: 'main',
+                  order: 100,
+                  title: () => t('graphTabTitle'),
+                  description: () => t('graphTabDesc'),
+                },
+              ],
+            }),
+          'dsh-onto-workbench: ontology-graph tab',
+        )
+        ctx.effect(
+          () =>
+            ctx.slots.inject('sidebar.right.pane.tab', () =>
+              ctx.slots.register(
+                { name: 'sidebar.right.pane.tab', key: GRAPH_TAB_ID, locale: NS },
+                GraphRightTab,
+              ),
+            ),
+          'dsh-onto-workbench: ontology-graph body',
+        )
 
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS }, Workbench),

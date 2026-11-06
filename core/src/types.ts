@@ -8,8 +8,8 @@
 /** 包签发状态机（§3.4）：DRAFT → IN_REVIEW → ISSUED。 */
 export type PackageStatus = 'DRAFT' | 'IN_REVIEW' | 'ISSUED'
 
-/** 知识原料五类（§5.1）。 */
-export type SourceType = 'LEGACY_SYS' | 'CASE_SAMPLE' | 'POLICY' | 'SCHEMA_API' | 'WORK_ORDER'
+/** 知识原料六类（§5.1；CONVERSATION 为对话轮次原料，conversational-modeling P3）。 */
+export type SourceType = 'LEGACY_SYS' | 'CASE_SAMPLE' | 'POLICY' | 'SCHEMA_API' | 'WORK_ORDER' | 'CONVERSATION'
 
 export const SOURCE_TYPES: readonly SourceType[] = [
   'LEGACY_SYS',
@@ -17,6 +17,7 @@ export const SOURCE_TYPES: readonly SourceType[] = [
   'POLICY',
   'SCHEMA_API',
   'WORK_ORDER',
+  'CONVERSATION',
 ]
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -157,6 +158,13 @@ export interface O3ScenarioCard {
   inputs: O3Input[]
   outputs: { fields: string[] }
   pipeline: O3PipelineStep[]
+  /**
+   * 本场景 BEHAVIOR_CALL 步执行的行为范围（conversational-modeling v1.1）。
+   * 缺省 = 全部行为（向后兼容）；显式数组 = 限定范围，元素须闭合。
+   */
+  behaviorRefs?: string[]
+  /** 本场景 before-scoring 步执行的排除规则范围；缺省 = 全部，显式数组须闭合。 */
+  exclusionRefs?: string[]
   outputContract: O3OutputContract
   reviewGate: O3ReviewGate
   /** 三层闭合闸门清单，如 [O1_CLOSED, O2_CLOSED, O3_CLOSED]。 */
@@ -256,6 +264,8 @@ export interface QualityReport {
 export interface ManifestEntry {
   path: string
   sha256: string
+  /** O→L 层标注（conversational-modeling P4）：L2 工具池 / L3 技能 / L4 专家；引擎配置等可缺省。 */
+  layer?: 'L1' | 'L2' | 'L3' | 'L4'
 }
 
 export interface DerivedManifest {
@@ -413,6 +423,10 @@ export type DraftTargetKind = (typeof DRAFT_TARGET_KINDS)[number]
 export interface DraftItem {
   layer: 'O1' | 'O2' | 'O3'
   targetKind: DraftTargetKind
+  /** 'update' = 修改/接线既有元素（targetId 必填）；缺省 'create' = 新增元素（conversational-modeling P3）。 */
+  op?: 'create' | 'update'
+  /** op='update' 时的既有元素 ID（Attribute 为 'OBJ.attr' 形态）。 */
+  targetId?: string
   name: string
   payload: Record<string, unknown>
   confidence: number
@@ -431,7 +445,20 @@ export interface DraftCandidate extends DraftItem {
   forcedReview: boolean
   /** 结论性表述标记：只允许落红线，禁止进输出契约（§5.3.2）。 */
   conclusionLike: boolean
+  /** 溯源（conversational-modeling I2）：对话轮次或知识源。 */
+  provenance?: DraftProvenance
+  /** 物化后写入的元素 ID（canvas 由元素回查 provenance）；属性类为 'OBJ.attr' 属性引用形态。 */
+  appliedAs?: string
+  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'agent-tool' 会话代执行）与时间。 */
+  reviewedBy?: string
+  reviewedAt?: string
   createdAt: string
+}
+
+/** 草案来源定位：对话轮次（turnId）或知识源（sourceId）。 */
+export interface DraftProvenance {
+  turnId?: string
+  sourceId?: string
 }
 
 export interface LlmParseRequest {
@@ -447,4 +474,87 @@ export interface LlmParseResponse {
 /** LLM 端口：解析原料产出草案；实现可以是 DeepSeek API 或词面启发回落。 */
 export interface LlmPort {
   parseSource(request: LlmParseRequest): Promise<LlmParseResponse>
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 对话式建模：ModelDelta 与图谱（conversational-modeling P1/P3）
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** 图谱引用边：源/目标为元素 ID 或草案 ID。 */
+export interface ModelEdge {
+  from: string
+  to: string
+  /** 边语义：anchor | relation | ref | dict | skill-rule | scenario-step | applies。 */
+  kind: string
+  label?: string
+}
+
+/** 一轮对话产出的模型增量（草案不落包；人审通过才物化）。 */
+export interface ModelDelta {
+  turnId: string
+  drafts: DraftCandidate[]
+  edges: ModelEdge[]
+  /** 被这轮移除/驳回的草案 ID。 */
+  removed?: string[]
+  rationale: string
+}
+
+export type GraphNodeKind =
+  | 'object'
+  | 'relation'
+  | 'dictionary'
+  | 'behavior'
+  | 'scoreRule'
+  | 'exclusionRule'
+  | 'skillTemplate'
+  | 'scenario'
+  | 'fieldMap'
+  | 'apiSource'
+  | 'draft'
+
+/** 图谱节点：物化元素或待审草案。 */
+export interface GraphNode {
+  /** 元素 ID（物化）或草案 ID（draft=true）。 */
+  id: string
+  kind: GraphNodeKind
+  layer: 'O1' | 'O2' | 'O3'
+  name: string
+  /** 草案态（画布虚线）。 */
+  draft: boolean
+  provenance?: DraftProvenance
+  /** 该节点最重的校验级别（画布标红）。 */
+  issueLevel?: IssueLevel
+  /** 低置信度强制人审标记。 */
+  forcedReview?: boolean
+  /** S4：被最近运行命中的规则。 */
+  runHit?: boolean
+}
+
+/** 对话开局骨架（conversational-modeling P3/I6）：域码 + 全量 ID 清单 + 确认态。 */
+export interface SkeletonRecord {
+  packageId: string
+  /** 全模型唯一域码（如 RD）。 */
+  domainCode: string
+  /** 确认后方可物化（skeleton 门）。 */
+  confirmed: boolean
+  /** 骨架内允许的全量 ID 清单（含 dict-*）。 */
+  ids: string[]
+  /** 能力域清单（可选，覆盖率对照用）。 */
+  capabilities?: string[]
+  updatedAt: string
+}
+
+/** 画布数据源（get_model_graph 返回；按收权投影由工具面执行）。 */
+export interface ModelGraph {
+  package: string
+  version: string
+  status: PackageStatus
+  nodes: GraphNode[]
+  edges: ModelEdge[]
+  /** 校验 issues；where 为元素 ID 时可定位到节点，'package' 为包级（I3）。 */
+  issues: ValidationIssue[]
+  /** 最近一次人审/物化后的单调递增版本号（画布刷新信号）。 */
+  revision: number
+  /** 骨架状态（存在时下发，供画布显示门禁）。 */
+  skeleton?: { confirmed: boolean; ids: string[] }
 }

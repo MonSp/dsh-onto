@@ -65,7 +65,7 @@ function firstNumber(line: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-/** 五类原料的词面启发路由（§5.5 prompt 路由的确定性对应实现）。 */
+/** 六类原料的词面启发路由（§5.5 prompt 路由的确定性对应实现；CONVERSATION 见 conversational-modeling P3）。 */
 export function heuristicParse(request: LlmParseRequest): DraftItem[] {
   const items: DraftItem[] = []
   const lines = sentences(request.content)
@@ -104,7 +104,7 @@ export function heuristicParse(request: LlmParseRequest): DraftItem[] {
     })
   }
 
-  const pushExclusion = (line: string): void => {
+  const pushExclusion = (line: string, confidence = 0.78): void => {
     const down = /降权|downweight/i.test(line)
     const n = firstNumber(line)
     items.push({
@@ -117,7 +117,7 @@ export function heuristicParse(request: LlmParseRequest): DraftItem[] {
         factor: down ? (n !== null && n > 0 && n <= 1 ? n : 0.5) : undefined,
         condition: extractCondition(line),
       },
-      confidence: 0.78,
+      confidence,
       rationale: `从排除/白名单口径提取: ${line.slice(0, 60)}`,
     })
   }
@@ -273,6 +273,67 @@ export function heuristicParse(request: LlmParseRequest): DraftItem[] {
       }
       break
     }
+    case 'CONVERSATION': {
+      // 对话轮词面路由（conversational-modeling P3）：前缀/关键词识别元素；
+      // 元素草案置信度 ≤0.74 → forcedReview，人审才物化；结论性表述转红线（0.85，
+      // 不设 forcedReview，但 approve 照样人审动作）。
+      const afterColon = (line: string): string => {
+        const i = line.search(/[：:]/)
+        return i >= 0 ? line.slice(i + 1).trim() : ''
+      }
+      for (const line of lines) {
+        pushConclusion(line)
+        if (/^(?:对象|实体)\s*[：:]/.test(line)) {
+          const nm = afterColon(line) || pickName(line, `对象${items.length + 1}`)
+          items.push({
+            layer: 'O1',
+            targetKind: 'ObjectType',
+            name: nm,
+            payload: { name: nm, attributes: [] },
+            confidence: 0.7,
+            rationale: `对话提及「对象」：${line.slice(0, 60)}`,
+          })
+        } else if (/^(?:关系|关联)\s*[：:]/.test(line)) {
+          const nm = afterColon(line) || pickName(line, `关系${items.length + 1}`)
+          items.push({
+            layer: 'O1',
+            targetKind: 'RelationType',
+            name: nm,
+            payload: { name: nm, from: '', to: '' },
+            confidence: 0.65,
+            rationale: `对话提及「关系」（from/to 待人审补全）：${line.slice(0, 60)}`,
+          })
+        } else if (/^(?:场景|目标)\s*[：:]/.test(line)) {
+          const nm = afterColon(line).slice(0, 20) || `场景${items.length + 1}`
+          items.push({
+            layer: 'O3',
+            targetKind: 'ScenarioCard',
+            name: nm,
+            payload: { name: nm, goal: afterColon(line) },
+            confidence: 0.7,
+            rationale: `对话提及「场景/目标」：${line.slice(0, 60)}`,
+          })
+        } else if (/排除|白名单|豁免|降权/.test(line)) {
+          pushExclusion(line, 0.72)
+        } else if (/规则|打分|权重|阈值|threshold|weight/i.test(line)) {
+          const nm = afterColon(line).split(/\s+/)[0] || pickName(line, `规则${items.length + 1}`)
+          items.push({
+            layer: 'O2',
+            targetKind: 'ScoreRule',
+            name: nm.slice(0, 20),
+            payload: {
+              name: nm.slice(0, 20),
+              weight: firstNumber(line) ?? 0,
+              expression: '1',
+              description: line,
+            },
+            confidence: 0.68,
+            rationale: `对话提及规则口径（权重待人审归一）：${line.slice(0, 60)}`,
+          })
+        }
+      }
+      break
+    }
     default:
       break
   }
@@ -308,6 +369,7 @@ export function buildPrompt(request: LlmParseRequest): { system: string; user: s
     POLICY: '抽阈值、排除项、禁语红线。',
     SCHEMA_API: '抽字段语义与映射（O1 属性/绑定）。',
     WORK_ORDER: '抽场景目标、输入输出（O3 场景骨架）。',
+    CONVERSATION: '从对话轮次抽业务元素草案（对象/规则/场景/红线）；结论性表述只标记为红线候选。',
   }
   const system = [
     '你是业务本体建模助手。只起草草案（带置信度），不做规则判定，不输出认定。',

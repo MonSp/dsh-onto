@@ -27,7 +27,9 @@ import {
   runScenario,
   saveRunRecord,
   verifyDerived,
+  type DraftItem,
   type KnowledgeSourceRecord,
+  type ModelGraph,
   type OntologyPackage,
   type RunArchive,
   type RunDiff,
@@ -65,6 +67,8 @@ import {
 } from './agent-grants.js'
 import { resolveDataDir } from './services.js'
 import { compareVersions } from './agent-skills.js'
+import { buildGraphForTool, capabilitiesFor } from './model-face.js'
+import { registerExpertTools } from './agent-experts.js'
 
 /* ───────────────────────── 数据集双通道（S2.3） ───────────────────────── */
 
@@ -294,6 +298,25 @@ export function requireExistingPackage(
   return name
 }
 
+/** packageId 归一为裸包名（旧数据可能存 name@version；与 knowledge 管线同口径）。 */
+function normalizePkgId(packageId: string): string {
+  const at = packageId.lastIndexOf('@')
+  return at > 0 ? packageId.slice(0, at) : packageId
+}
+
+/**
+ * 人审契约（I1/I5）：apply_draft / reject_draft 必须显式携带 humanApproved=true——
+ * 仅当用户在会话中明确审定后代执行；agent 不得自行批准/驳回。
+ */
+export function assertHumanApproved(value: unknown, action: string): void {
+  if (value !== true) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      `humanApproved 必须为 true（人审契约：仅在用户明确指示${action}后代执行；agent 不得自行${action}）`,
+    )
+  }
+}
+
 /** 知识上传（工具面薄封装）：入参 `name@version` 校验存在性，入库 packageId 归一为裸包名。 */
 export function uploadKnowledgeForPkg(
   knowledge: KnowledgeStore,
@@ -414,9 +437,26 @@ function workspaceRedlines(ws: PackageWorkspace): string[] {
  * `InferValue<O>` 结构性不兼容（interface 无隐式索引签名，嵌套数组元素不满足
  * `JsonValue` 对象形态）。`R` 由 execute 的上下文推断为实际契约值类型；
  * 运行时由 output.schema 校验 + assertRunContract 兜底。
+ *
+ * 同时做 lossless-JSON 边界洗：harness 工具结果快照校验拒绝嵌套 undefined
+ * （JSON.stringify 会丢键但对象校验不认），显式 undefined 键在此统一剔除。
  */
 function toolOut<T, R>(value: T): R {
-  return value as unknown as R
+  return scrubUndefined(value) as unknown as R
+}
+
+/** 递归剔除显式 undefined 键/数组空洞（工具结果须可 lossless 序列化）。 */
+function scrubUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => scrubUndefined(v)) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue
+      out[k] = scrubUndefined(v)
+    }
+    return out as unknown as T
+  }
+  return value
 }
 
 /** 批量条目摘要（S2.3）：只回执行摘要，完整结果以 RunRecord 落盘供 compare/export 跟进。 */
@@ -540,6 +580,61 @@ export function renderScenarioList(scenarios: unknown[]): string {
       })
       .join('\n') || '（无场景）'
   )
+}
+
+/** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
+export function renderGraphSummary(g: ModelGraph): string {
+  const draftCount = g.nodes.filter((n) => n.draft).length
+  const errCount = g.issues.filter((i) => i.level === 'error').length
+  const warnCount = g.issues.filter((i) => i.level === 'warn').length
+  const lines = [
+    `包 ${g.package}@${g.version}（${g.status}，rev ${g.revision}）`,
+    `节点 ${g.nodes.length}（待审草案 ${draftCount}）· 边 ${g.edges.length} · issues：error ${errCount} / warn ${warnCount}`,
+  ]
+  if (g.skeleton) lines.push(`骨架：${g.skeleton.confirmed ? '已确认' : '未确认'}（${g.skeleton.ids.length} 个 ID）`)
+  const notable = g.issues.filter((i) => i.level !== 'info').slice(0, 10)
+  for (const i of notable) lines.push(`- [${i.level}] ${i.code} @ ${i.where}: ${i.message}`)
+  if (g.issues.filter((i) => i.level !== 'info').length > notable.length) {
+    lines.push(`… 其余 ${g.issues.filter((i) => i.level !== 'info').length - notable.length} 条见完整结果`)
+  }
+  return lines.join('\n')
+}
+
+/** draft_elements 渲染：入队与拒收清单。 */
+export function renderDraftResult(v: {
+  package?: string
+  turnId?: string
+  added?: Array<{ id: string; name: string; targetKind: string; forcedReview?: boolean }>
+  rejected?: Array<{ index: number; reason: string }>
+  sourceId?: string
+}): string {
+  const added = v.added ?? []
+  const rejected = v.rejected ?? []
+  const lines = [`包 ${v.package ?? ''} · 轮次 ${v.turnId ?? ''}：入队 ${added.length} 条`]
+  if (v.sourceId) lines.push(`CONVERSATION 原料：${v.sourceId}`)
+  for (const a of added) {
+    lines.push(`+ [${a.targetKind}] ${a.name}（${a.id}）${a.forcedReview ? ' · 强制人审' : ''}`)
+  }
+  for (const r of rejected) lines.push(`- 第 ${r.index + 1} 条拒收：${r.reason}`)
+  return lines.join('\n')
+}
+
+/** list_capabilities 渲染：L1–L5 每层一行。 */
+export function renderCapabilities(cap: Record<string, unknown>): string {
+  const line = (key: string): string => {
+    const layer = cap[key] as { name?: string; entries?: unknown[]; skills?: unknown[]; experts?: unknown[]; files?: unknown[]; apiSources?: unknown[]; note?: string } | undefined
+    if (!layer) return `${key}: —`
+    const parts: string[] = [`${key} ${layer.name ?? ''}`]
+    if (Array.isArray(layer.entries)) parts.push(`${layer.entries.length} 个场景入口`)
+    if (Array.isArray(layer.apiSources)) parts.push(`${layer.apiSources.length} 个数据源`)
+    if (Array.isArray(layer.skills)) parts.push(`${layer.skills.length} 个技能`)
+    if (Array.isArray(layer.experts)) parts.push(`${layer.experts.length} 个专家`)
+    if (Array.isArray(layer.files) && layer.files.length > 0) parts.push(`派生文件 ${layer.files.length}`)
+    if (layer.note) parts.push(layer.note)
+    return parts.join(' · ')
+  }
+  const head = `包 ${cap.package ?? ''}（${cap.status ?? ''}）· 派生 ${cap.derived === true ? '已生成' : '未生成'}`
+  return [head, line('L1'), line('L2'), line('L3'), line('L4'), line('L5')].join('\n')
 }
 
 export const name = 'dsh-onto-agent-tools'
@@ -967,4 +1062,319 @@ export function apply(ctx: Context): void {
       ),
     }),
   )
+
+  /* ── 对话式建模（conversational-modeling P4） ─────────────────────────── */
+
+  ctx.tools.register(
+    defineTool({
+      name: 'get_model_graph',
+      description:
+        '获取建模图谱（画布数据源）：节点（物化元素 + 待审草案虚线态）、引用边、校验 issues（元素级定位）与骨架状态。'
+        + 'DRAFT 即可用（建模在 O 层，不过派生门禁）。只读。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            package: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            nodes: { type: 'array', required: true, items: { type: 'json' } },
+            edges: { type: 'array', required: true, items: { type: 'json' } },
+            issues: { type: 'array', required: true, items: { type: 'json' } },
+            revision: { type: 'number', required: true },
+          },
+        },
+        render: (_args, value) => textBlock(renderGraphSummary(value as unknown as ModelGraph)),
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string }) => {
+          const graph = buildGraphForTool({ ws, knowledge, name: args.name, version: args.version })
+          const pkg = loadPackage(ws.versionDir(args.name, args.version))
+          return toolOut(enforceOutputPolicy(graph, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'draft_elements',
+      description:
+        '对话轮起草：把 items 入草案队列等待人审——只入队列、永不直写包（I1）。'
+        + 'items 元素：layer(O1|O2|O3)、targetKind、name、payload、confidence(0..1)、rationale；'
+        + 'op 缺省=create 新增元素。op=update 修改/接线既有元素（targetId=元素 ID，Attribute 为 OBJ.attr）：'
+        + '标量字段覆盖、weights 按键并入、数组整替，append.<字段>=[…] 追加去重（如给行为接关系）。'
+        + '改 ScoreRule.weight 会联动归一（显式权重为准，未动规则吸收残差，并同步技能模板权重）。'
+        + '置信度 <0.75 自动 forcedReview；结论性表述只能 targetKind=RedLine。'
+        + '可选 turnText 同时落 CONVERSATION 原料留痕（P3，含 turnId/rationale）。ISSUED 包拒绝（先 fork）。',
+      parameters: {
+        packageId: { type: 'string', required: true, description: '目标包 ID（name@version，如 aml-analysis@1.0.0）' },
+        turnId: { type: 'string', required: true, description: '对话轮次 ID（溯源 I2）' },
+        rationale: { type: 'string', required: true, description: '本轮起草总依据（会入 CONVERSATION 留痕）' },
+        turnText: { type: 'string', description: '本轮用户输入原文（可选）' },
+        items: { type: 'array', required: true, description: 'DraftItem 数组' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            package: { type: 'string', required: true },
+            turnId: { type: 'string', required: true },
+            added: { type: 'array', required: true, items: { type: 'json' } },
+            rejected: { type: 'array', required: true, items: { type: 'json' } },
+          },
+        },
+        render: (_args, value) => textBlock(renderDraftResult(value as Parameters<typeof renderDraftResult>[0])),
+      },
+      execute: toolExecute(
+        (args: {
+          packageId: string
+          turnId: string
+          rationale: string
+          turnText?: string
+          items: unknown
+        }) => {
+          const packageName = requireExistingPackage(ws.listVersions(), args.packageId)
+          const version = args.packageId.slice(args.packageId.lastIndexOf('@') + 1)
+          const pkg = loadPackage(ws.versionDir(packageName, version))
+          if (pkg.meta.status === 'ISSUED') {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `${packageName}@${version} 已签发只读：请 fork 新版本后起草（P1）`,
+            )
+          }
+          if (!Array.isArray(args.items) || args.items.length === 0) {
+            throw new AgentToolError('INVALID_ARGS', 'items 必须是非空数组')
+          }
+          let sourceId: string | undefined
+          if (typeof args.turnText === 'string' && args.turnText.trim() !== '') {
+            sourceId = knowledge.uploadSource({
+              packageId: packageName,
+              sourceType: 'CONVERSATION',
+              name: `turn-${args.turnId}`,
+              content: `turn: ${args.turnId}\nbasis: ${args.rationale}\n${args.turnText}`,
+            }).id
+          }
+          const added: Array<Record<string, unknown>> = []
+          const rejected: Array<{ index: number; reason: string }> = []
+          ;(args.items as unknown[]).forEach((raw, index) => {
+            try {
+              const c = knowledge.addDraft({
+                packageId: packageName,
+                item: raw as DraftItem,
+                provenance: { turnId: args.turnId, sourceId },
+              })
+              added.push({
+                id: c.id,
+                name: c.name,
+                layer: c.layer,
+                targetKind: c.targetKind,
+                forcedReview: c.forcedReview,
+                conclusionLike: c.conclusionLike,
+                status: c.status,
+              })
+            } catch (e) {
+              rejected.push({ index, reason: e instanceof Error ? e.message : String(e) })
+            }
+          })
+          return toolOut(
+            enforceOutputPolicy(
+              { package: args.packageId, turnId: args.turnId, rationale: args.rationale, added, rejected, sourceId },
+              phrasesOfPkg(pkg),
+            ),
+          )
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'apply_draft',
+      description:
+        '人审动作：批准一条或多条草案并作为同一批物化进包（唯一写包路径——经 knowledge 物化通道：'
+        + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
+        + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
+        + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
+        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。',
+      parameters: {
+        candidateIds: { type: 'array', required: true, description: '草案 ID 数组（dc-…）；同批归一，多条权重更新务必一次传入' },
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '目标版本号' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示批准时传 true；agent 不得自行批准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            approved: { type: 'boolean', required: true, const: true },
+            results: { type: 'array', required: true, items: { type: 'json' } },
+            materialized: { type: 'array', required: true, items: { type: 'string' } },
+            skipped: { type: 'array', required: true, items: { type: 'json' } },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as unknown as {
+            results: Array<{ candidateId: string; status: string; appliedAs: string | null }>
+            materialized: string[]
+            skipped: Array<{ id: string; reason: string }>
+          }
+          const lines = v.results.map((r) => `- ${r.candidateId} → ${r.status}${r.appliedAs ? `（${r.appliedAs}）` : ''}`)
+          const head = `同批 ${v.results.length} 条，物化 ${v.materialized.length}：`
+          const skips = v.skipped.map((s) => `跳过 ${s.id}：${s.reason}`)
+          return textBlock([head, ...lines, ...skips].join('\n'))
+        },
+      },
+      execute: toolExecute(
+        (args: { candidateIds: string[]; name: string; version: string; humanApproved: boolean }) => {
+          assertHumanApproved(args.humanApproved, '批准')
+          if (!Array.isArray(args.candidateIds) || args.candidateIds.length === 0) {
+            throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空数组')
+          }
+          const dir = ws.versionDir(args.name, args.version)
+          const pkg = loadPackage(dir)
+          if (pkg.meta.status === 'ISSUED') {
+            throw new AgentToolError('INVALID_ARGS', `${args.name}@${args.version} 已签发只读：请 fork 新版本（P1）`)
+          }
+          for (const id of args.candidateIds) {
+            const before = knowledge.getCandidate(id)
+            if (normalizePkgId(before.packageId) !== args.name) {
+              throw new AgentToolError(
+                'INVALID_ARGS',
+                `package mismatch: 草案 ${id} 属于 ${before.packageId}，目标包为 ${args.name}`,
+              )
+            }
+          }
+          // approve 与物化同一动作（S1 闭环）；同批一次 materialize → 权重归一按批语义。
+          for (const id of args.candidateIds) {
+            knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'agent-tool' })
+          }
+          const res = knowledge.materialize(dir, args.candidateIds)
+          const results = args.candidateIds.map((id) => {
+            const after = knowledge.getCandidate(id)
+            return {
+              candidateId: id,
+              status: after.status,
+              appliedAs: typeof after.appliedAs === 'string' ? after.appliedAs : null,
+            }
+          })
+          const materialized = results.flatMap((r) => (r.appliedAs !== null ? [r.appliedAs] : []))
+          return toolOut(
+            enforceOutputPolicy(
+              { approved: true, results, materialized, skipped: res.skipped },
+              phrasesOfPkg(pkg),
+            ),
+          )
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'reject_draft',
+      description:
+        '人审动作：驳回一条待审草案（状态置 rejected，留痕可回看；不写包）。'
+        + 'humanApproved 同 apply_draft 人审契约：仅当用户明确指示驳回时传 true。',
+      parameters: {
+        candidateId: { type: 'string', required: true, description: '草案 ID（dc-…）' },
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示驳回时传 true；agent 不得自行驳回',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            candidateId: { type: 'string', required: true },
+            status: { type: 'string', required: true, const: 'rejected' },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { candidateId: string; status: string }
+          return textBlock(`草案 ${v.candidateId} 已驳回（${v.status}）`)
+        },
+      },
+      execute: toolExecute(
+        (args: { candidateId: string; name: string; version: string; humanApproved: boolean }) => {
+          assertHumanApproved(args.humanApproved, '驳回')
+          const dir = ws.versionDir(args.name, args.version)
+          const pkg = loadPackage(dir)
+          if (pkg.meta.status === 'ISSUED') {
+            throw new AgentToolError('INVALID_ARGS', `${args.name}@${args.version} 已签发只读（P1）`)
+          }
+          const before = knowledge.getCandidate(args.candidateId)
+          if (normalizePkgId(before.packageId) !== args.name) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `package mismatch: 草案属于 ${before.packageId}，目标包为 ${args.name}`,
+            )
+          }
+          const c = knowledge.reviewCandidate(args.candidateId, 'reject', { reviewedBy: 'agent-tool' })
+          return toolOut({ candidateId: c.id, status: c.status })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'list_capabilities',
+      description:
+        'L1–L5 能力清单：这个包能干什么——L1 场景入口 / L2 工具池（数据源与派生契约）/ L3 技能 / '
+        + 'L4 专家 / L5 门面。有 manifest 时按 layer 标注分组。只读，DRAFT 即可用。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true, properties: {} },
+        render: (_args, value) => textBlock(renderCapabilities(value as Record<string, unknown>)),
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string }) => {
+          const cap = capabilitiesFor(ws, args.name, args.version)
+          const pkg = loadPackage(ws.versionDir(args.name, args.version))
+          return toolOut(enforceOutputPolicy(cap, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // L4 专家面（conversational-modeling P4）：list_experts / invoke_expert 与建模工具共用
+  // guard、错误信封与策略闸（registerExpertTools 注入依赖，避免模块环）。
+  registerExpertTools(ctx, {
+    ws,
+    loadGated: load,
+    redlines,
+    loadDatasetFromArgs,
+    textBlock,
+    toolOut,
+  })
 }

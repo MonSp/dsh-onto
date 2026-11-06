@@ -184,3 +184,36 @@ test('排除条件语法错误 → EXPR_INVALID（round-13：不再静默漏到�
     rmWorkspace(root)
   }
 })
+
+test('SCN-* 入口豁免 ID_UNREFERENCED；behaviorRefs/exclusionRefs 引用位闭合（v1.1）', () => {
+  // 1) 场景入口天然无上游 → 不再报 ID_UNREFERENCED
+  const vb = validatePackage(minimalPkg())
+  assert.ok(!vb.warnings.some((w) => w.code === 'ID_UNREFERENCED' && w.where === 'SCN-TST-1'), 'SCN 入口豁免')
+  // 基线：行为/排除此时未被引用（为下一步对照）
+  assert.ok(vb.warnings.some((w) => w.where === 'BHV-TST-X'))
+  assert.ok(vb.warnings.some((w) => w.where === 'RULE-TST-E1'))
+
+  // 2) 显式引用位：闭合通过，且消掉行为/排除的 ID_UNREFERENCED
+  const p2 = minimalPkg({
+    scenarios: [{
+      ...minimalPkg().scenarios[0],
+      behaviorRefs: ['BHV-TST-X'],
+      exclusionRefs: ['RULE-TST-E1'],
+    }],
+  })
+  const v2 = validatePackage(p2)
+  assert.ok(!v2.errors.some((e) => e.code === 'REF_UNCLOSED'), JSON.stringify(v2.errors))
+  assert.ok(!v2.warnings.some((w) => w.code === 'ID_UNREFERENCED' && (w.where === 'BHV-TST-X' || w.where === 'RULE-TST-E1')))
+
+  // 3) 悬空 / 错类型 → REF_UNCLOSED
+  const p3 = minimalPkg({
+    scenarios: [{
+      ...minimalPkg().scenarios[0],
+      behaviorRefs: ['BHV-TST-GONE'],
+      exclusionRefs: ['OBJ-TST-A'],
+    }],
+  })
+  const v3 = validatePackage(p3)
+  assert.ok(v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('behaviorRefs')))
+  assert.ok(v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('exclusionRefs')))
+})

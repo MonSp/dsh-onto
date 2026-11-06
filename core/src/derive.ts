@@ -71,14 +71,15 @@ function idTag(id: string): string {
   return parts.length > 1 ? parts[1] : 'X'
 }
 
-/** 各 pipeline 槽位的阶段职责（§8.2 口径）。 */
-const STEP_DUTY: Record<string, { stageDuty: string; llm: 'allowed' | 'forbidden' }> = {
-  DATA_INGEST: { stageDuty: '数据归一、建图', llm: 'allowed' },
-  BEHAVIOR_CALL: { stageDuty: '行为实例生成与关系聚合', llm: 'allowed' },
-  RULE_EVALUATE: { stageDuty: '规则引擎判定（排除/打分）', llm: 'forbidden' },
-  SKILL_RUN: { stageDuty: '方法论模板叙述（证据摘要）', llm: 'allowed' },
-  AUDIT_CHECK: { stageDuty: '三层闭合审计闸门', llm: 'forbidden' },
-  HUMAN_REVIEW: { stageDuty: '人工复核（认定唯一出口）', llm: 'forbidden' },
+/** 各 pipeline 槽位的阶段职责（§8.2 口径）。usesTools：步级收权（P4）——
+ * 引擎/人审步不挂工具白名单；数据/行为/技能步挂对象粒度读工具。 */
+const STEP_DUTY: Record<string, { stageDuty: string; llm: 'allowed' | 'forbidden'; usesTools: boolean }> = {
+  DATA_INGEST: { stageDuty: '数据归一、建图', llm: 'allowed', usesTools: true },
+  BEHAVIOR_CALL: { stageDuty: '行为实例生成与关系聚合', llm: 'allowed', usesTools: true },
+  RULE_EVALUATE: { stageDuty: '规则引擎判定（排除/打分）', llm: 'forbidden', usesTools: false },
+  SKILL_RUN: { stageDuty: '方法论模板叙述（证据摘要）', llm: 'allowed', usesTools: true },
+  AUDIT_CHECK: { stageDuty: '三层闭合审计闸门', llm: 'forbidden', usesTools: false },
+  HUMAN_REVIEW: { stageDuty: '人工复核（认定唯一出口）', llm: 'forbidden', usesTools: false },
 }
 
 /**
@@ -144,20 +145,21 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
 
   // O3 → 专家分工（阶段职责、工具权限、llm 禁止节点、人工门禁）
   const duties: Array<Record<string, unknown>> = []
+  // 对象/关系粒度读工具全集；按步收权（STEP_DUTY.usesTools）裁剪 toolRefs。
+  const objectToolIds = toolContracts.tools
+    .filter((t) => 'objectId' in t || 'relationId' in t)
+    .map((t) => t.id)
   for (const sc of pkg.scenarios) {
     const short = scenarioShortName(sc.id)
     for (const step of sc.pipeline) {
-      const duty = STEP_DUTY[step.stepType] ?? { stageDuty: step.stepType, llm: 'allowed' as const }
-      const toolRefs = toolContracts.tools
-        .filter((t) => 'objectId' in t || 'relationId' in t)
-        .map((t) => t.id)
+      const duty = STEP_DUTY[step.stepType] ?? { stageDuty: step.stepType, llm: 'allowed' as const, usesTools: true }
       duties.push({
         id: `AGT-${tag}-${short}-${step.stepId}`,
         scenario: sc.id,
         stepId: step.stepId,
         stepType: step.stepType,
         stageDuty: duty.stageDuty,
-        toolRefs,
+        toolRefs: duty.usesTools ? objectToolIds : [],
         llm: duty.llm,
         humanGate: step.stepType === 'HUMAN_REVIEW',
       })
@@ -200,6 +202,9 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       inputs: sc.inputs,
       outputs: sc.outputs,
       pipeline: sc.pipeline,
+      // v1.1 引用位：显式范围随编排下发；缺省 = 全部（不落键）
+      ...(sc.behaviorRefs ? { behaviorRefs: sc.behaviorRefs } : {}),
+      ...(sc.exclusionRefs ? { exclusionRefs: sc.exclusionRefs } : {}),
       outputContract: sc.outputContract,
       reviewGate: sc.reviewGate,
     })),
@@ -228,6 +233,31 @@ function closureRequirement(check: string): string {
 }
 
 /**
+ * O→L 层标注（conversational-modeling P4）：bindings/工具契约→L2，
+ * skill-templates→L3，职责/审计/编排→L4；rule-engine-config 等引擎配置不标
+ * （O2 运行配置，非 L 层执行件）。L1/L5 为入口面，不派生。
+ */
+function layerOfEntry(rel: string): ManifestEntry['layer'] {
+  if (rel.startsWith('bindings/')) return 'L2'
+  if (rel.startsWith('derived/tool-contracts')) return 'L2'
+  if (
+    rel.startsWith('derived/agent-duties') ||
+    rel.startsWith('derived/audit-checks') ||
+    rel.startsWith('derived/scenario-orchestration')
+  ) {
+    return 'L4'
+  }
+  if (rel.startsWith('o2-behavior-rules/skill-templates/')) return 'L3'
+  return undefined
+}
+
+/** manifest 条目构造：path + sha256 + 可选 layer（向后兼容，缺省即无标注）。 */
+function withLayer(path: string, sha256: string): ManifestEntry {
+  const layer = layerOfEntry(path)
+  return layer ? { path, sha256, layer } : { path, sha256 }
+}
+
+/**
  * 派生入口：生成 derived/** 并写 manifest（含全部源/派生指纹）。
  * 覆盖已有派生物（只读语义指运行时不得手改，再生成是恢复手段）。
  */
@@ -246,14 +276,12 @@ export function derivePackage(versionDir: string): DerivedManifest {
     writeFileSync(full, dumpYaml(doc), 'utf8')
   }
 
-  const sources: ManifestEntry[] = listSourceFiles(versionDir).map((rel) => ({
-    path: rel,
-    sha256: sourceFileSha256(rel, readSourceFile(versionDir, rel)),
-  }))
-  const derivedEntries: ManifestEntry[] = Object.keys(derived).map((rel) => ({
-    path: rel,
-    sha256: sha256Text(readFileSync(join(versionDir, rel), 'utf8')),
-  }))
+  const sources: ManifestEntry[] = listSourceFiles(versionDir).map((rel) =>
+    withLayer(rel, sourceFileSha256(rel, readSourceFile(versionDir, rel))),
+  )
+  const derivedEntries: ManifestEntry[] = Object.keys(derived).map((rel) =>
+    withLayer(rel, sha256Text(readFileSync(join(versionDir, rel), 'utf8'))),
+  )
 
   const meta = readPackageMeta(versionDir)
   const manifest: DerivedManifest = {

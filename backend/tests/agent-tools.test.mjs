@@ -30,6 +30,7 @@ import {
   loadToolPackage,
   projectPackageList,
   renderScenarioList,
+  assertHumanApproved,
   requireExistingPackage,
   ruleDossier,
   scenarioCatalog,
@@ -372,6 +373,16 @@ test('知识上传：packageId 必须是工作区真实包（name@version），�
   expectCode(() => requireExistingPackage(versions, 'aml-analysis'), 'INVALID_ARGS')
   expectCode(() => requireExistingPackage(versions, '@1.0.0'), 'INVALID_ARGS')
   expectCode(() => requireExistingPackage(versions, ''), 'INVALID_ARGS')
+})
+
+test('人审契约：apply_draft/reject_draft 的 humanApproved 必须显式为 true（I1/I5）', () => {
+  // 通过：仅 true
+  assert.doesNotThrow(() => assertHumanApproved(true, '批准'))
+  // 拒绝：缺省 / 假值 / 非布尔（模型手误）——agent 不得自行审定
+  for (const v of [undefined, null, false, 'true', 1]) {
+    expectCode(() => assertHumanApproved(v, '批准'), 'INVALID_ARGS')
+    expectCode(() => assertHumanApproved(v, '驳回'), 'INVALID_ARGS')
+  }
 })
 
 test('list_packages 输出投影：不回显 dir 等服务端路径', () => {
