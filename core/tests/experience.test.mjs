@@ -11,6 +11,11 @@ import {
   listExperienceNotes,
   experiencesDir,
   retrieveSimilar,
+  buildDiffTable,
+  heuristicRevise,
+  reviseDiff,
+  requiresHumanReview,
+  reviewFocusFrom,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -250,4 +255,73 @@ test('检索：跨包须 externalRefs 声明，命中降权', () => {
   } finally {
     rmWorkspace(root)
   }
+})
+
+/* ── P1-4 DiffTable 机械生成 + 差异修正双路 ── */
+
+function sigVariant(overrides = {}) {
+  const s = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  return { ...s, ...overrides, digest: `digest-${JSON.stringify(overrides).length}-${Math.random()}` }
+}
+
+test('机械差异：同构 → reusable 全中、mustChange 空、unknown 空', () => {
+  const q = sigVariant()
+  const s = sigVariant()
+  const d = buildDiffTable(q, s)
+  assert.equal(d.mustChange.length, 0)
+  assert.equal(d.unknown.length, 0)
+  assert.ok(d.reusable.some((r) => r.item === 'stepShape'))
+  assert.ok(d.reusable.some((r) => r.item === 'dataBand'))
+})
+
+test('机械差异：场景/规模档/规则增删 → mustChange 正确', () => {
+  const q = sigVariant({ scenarioId: 'SCN-NEW', dataBand: 'L', ruleRefs: ['RULE-A', 'RULE-B'] })
+  const s = sigVariant({ ruleRefs: ['RULE-B', 'RULE-C'] })
+  const d = buildDiffTable(q, s)
+  assert.ok(d.mustChange.some((m) => m.item === 'scenarioId'))
+  assert.ok(d.mustChange.some((m) => m.item === 'dataBand'))
+  const ruleChanges = d.mustChange.filter((m) => m.item === 'ruleRefs')
+  assert.ok(ruleChanges.length >= 2, 'ruleRefs 新增/源有差异应分列')
+  assert.ok(ruleChanges.some((m) => m.why.includes('RULE-A')))
+  assert.ok(ruleChanges.some((m) => m.why.includes('RULE-C')))
+})
+
+test('启发式修正：reusable 空、mustChange 保留、unknown=原 reusable、confidence 0.5 → 强制转人工', () => {
+  const d = buildDiffTable(sigVariant(), sigVariant({ dataBand: 'L' }))
+  const rev = heuristicRevise(d)
+  assert.equal(rev.engine, 'heuristic')
+  assert.equal(rev.confidence, 0.5)
+  assert.equal(rev.diff.reusable.length, 0)
+  assert.equal(rev.diff.mustChange.length, d.mustChange.length)
+  assert.equal(rev.diff.unknown.length, d.reusable.length)
+  assert.ok(requiresHumanReview(rev))
+  assert.deepEqual(reviewFocusFrom(rev), rev.diff.unknown.map((u) => u.item))
+})
+
+test('差异修正双路：LLM 成功 → engine=llm；失败/非法输出 → 回落启发式', async () => {
+  const draft = buildDiffTable(sigVariant(), sigVariant({ dataBand: 'L' }))
+  const input = { query: sigVariant(), source: sigVariant({ dataBand: 'L' }), draft }
+
+  const okLlm = {
+    complete: async () =>
+      JSON.stringify({
+        reusable: [{ item: 'stepShape', note: '同构' }],
+        mustChange: draft.mustChange,
+        unknown: [],
+        confidence: 0.9,
+      }),
+  }
+  const ok = await reviseDiff(okLlm, input)
+  assert.equal(ok.engine, 'llm')
+  assert.equal(ok.confidence, 0.9)
+  assert.equal(ok.diff.unknown.length, 0)
+  assert.equal(requiresHumanReview(ok), false)
+
+  const badLlm = { complete: async () => 'not json at all' }
+  const bad = await reviseDiff(badLlm, input)
+  assert.equal(bad.engine, 'heuristic')
+  assert.ok(requiresHumanReview(bad))
+
+  const nullLlm = await reviseDiff(null, input)
+  assert.equal(nullLlm.engine, 'heuristic')
 })
