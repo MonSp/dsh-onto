@@ -72,7 +72,7 @@ function payloadRefTexts(payload: Record<string, unknown>): string[] {
   ]) {
     take(payload[key])
   }
-  for (const key of ['skillRefs', 'relations', 'behaviorRefs', 'exclusionRefs']) {
+  for (const key of ['skillRefs', 'relations', 'behaviorRefs', 'exclusionRefs', 'scoreRefs']) {
     const v = payload[key]
     if (Array.isArray(v)) v.forEach(take)
   }

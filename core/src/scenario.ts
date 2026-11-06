@@ -44,12 +44,15 @@ export class ScenarioRunError extends Error {
 
 /**
  * 从派生配置提取规则引擎配置。
- * v1.1 引用位参与运行收窄：场景带 `exclusionRefs` 时只执行圈内排除规则（缺省 = 全部）——
- * 此前引用位只做校验与下发，运行仍全量执行，与「显式数组 = 限定范围」口径冲突（D7）。
+ * v1.1 引用位参与运行收窄：场景带 `exclusionRefs` / `scoreRefs` 时只执行圈内规则
+ * （缺省 = 全部）——此前排除与打分均全量执行，与「显式数组 = 限定范围」口径冲突
+ * （D7 排除段 / D13 打分段；打分收窄另使范围外规则不再因缺特征刷待核实）。
  */
 export function ruleEngineConfigOf(pkg: OntologyPackage, scenario?: O3ScenarioCard): RuleEngineConfig {
-  const refs = scenario?.exclusionRefs
-  const exclusions = refs ? pkg.exclusionRules.filter((r) => refs.includes(r.id)) : pkg.exclusionRules
+  const exRefs = scenario?.exclusionRefs
+  const exclusions = exRefs ? pkg.exclusionRules.filter((r) => exRefs.includes(r.id)) : pkg.exclusionRules
+  const scRefs = scenario?.scoreRefs
+  const scorings = scRefs ? pkg.scoreRules.filter((r) => scRefs.includes(r.id)) : pkg.scoreRules
   return {
     exclusion: exclusions.map((r) => ({
       id: r.id,
@@ -58,7 +61,7 @@ export function ruleEngineConfigOf(pkg: OntologyPackage, scenario?: O3ScenarioCa
       factor: r.factor ?? null,
       condition: r.condition,
     })),
-    scoring: pkg.scoreRules.map((r) => ({
+    scoring: scorings.map((r) => ({
       id: r.id,
       name: r.name,
       weight: r.weight,

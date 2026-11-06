@@ -217,3 +217,20 @@ test('SCN-* 入口豁免 ID_UNREFERENCED；behaviorRefs/exclusionRefs 引用位�
   assert.ok(v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('behaviorRefs')))
   assert.ok(v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('exclusionRefs')))
 })
+
+test('scoreRefs 引用位：闭合校验 + 悬空/错类型 → REF_UNCLOSED', () => {
+  const base = minimalPkg()
+  // 有效：scoreRefs 指向打分规则
+  const ok = minimalPkg({
+    scenarios: [{ ...base.scenarios[0], scoreRefs: ['RULE-TST-S1'] }],
+  })
+  const v1 = validatePackage(ok)
+  assert.ok(!v1.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs')), JSON.stringify(v1.errors))
+  // 悬空 / 错类型
+  const bad = minimalPkg({
+    scenarios: [{ ...base.scenarios[0], scoreRefs: ['RULE-TST-GONE', 'RULE-TST-E1'] }],
+  })
+  const v2 = validatePackage(bad)
+  assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-GONE')))
+  assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('scoreRefs') && e.message.includes('RULE-TST-E1')), '排除规则不能进 scoreRefs')
+})

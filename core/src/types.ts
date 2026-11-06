@@ -165,6 +165,11 @@ export interface O3ScenarioCard {
   behaviorRefs?: string[]
   /** 本场景 before-scoring 步执行的排除规则范围；缺省 = 全部，显式数组须闭合。 */
   exclusionRefs?: string[]
+  /**
+   * 本场景打分段执行的打分规则范围（D13 多场景协作）：缺省 = 全部（包级权重合计 1.0）；
+   * 显式数组 = 只求值圈内规则——范围外规则不参与加权、不因缺特征落待核实。
+   */
+  scoreRefs?: string[]
   outputContract: O3OutputContract
   reviewGate: O3ReviewGate
   /** 三层闭合闸门清单，如 [O1_CLOSED, O2_CLOSED, O3_CLOSED]。 */

@@ -132,14 +132,15 @@ test('派生物独立于包加载（loadPackage 不含 derived）', () => {
   }
 })
 
-test('scenario-orchestration 下发 behaviorRefs/exclusionRefs（缺省不落键）', () => {
-  const sc = { ...minimalPkg().scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'] }
+test('scenario-orchestration 下发 behaviorRefs/exclusionRefs/scoreRefs（缺省不落键）', () => {
+  const sc = { ...minimalPkg().scenarios[0], behaviorRefs: ['BHV-TST-X'], exclusionRefs: ['RULE-TST-E1'], scoreRefs: ['RULE-TST-S1'] }
   const a = mkWorkspaceWithPkg({ scenarios: [sc] })
   try {
     derivePackage(a.dir)
     const doc = loadYaml(readFileSync(join(a.dir, 'derived/scenario-orchestration.yaml'), 'utf8'))
     assert.deepEqual(doc.scenarios[0].behaviorRefs, ['BHV-TST-X'])
     assert.deepEqual(doc.scenarios[0].exclusionRefs, ['RULE-TST-E1'])
+    assert.deepEqual(doc.scenarios[0].scoreRefs, ['RULE-TST-S1'])
   } finally {
     rmWorkspace(a.root)
   }
@@ -149,6 +150,7 @@ test('scenario-orchestration 下发 behaviorRefs/exclusionRefs（缺省不落键
     const doc = loadYaml(readFileSync(join(b.dir, 'derived/scenario-orchestration.yaml'), 'utf8'))
     assert.ok(!('behaviorRefs' in doc.scenarios[0]), '缺省不落键（向后兼容）')
     assert.ok(!('exclusionRefs' in doc.scenarios[0]))
+    assert.ok(!('scoreRefs' in doc.scenarios[0]))
   } finally {
     rmWorkspace(b.root)
   }

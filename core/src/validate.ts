@@ -166,6 +166,12 @@ export function validatePackage(
         err('REF_UNCLOSED', `SCN ${sc.id}`, `exclusionRefs 引用未闭合: ${ruleId}`)
       }
     }
+    // scoreRefs（D13 多场景协作）：缺省 = 全部；显式数组须指向打分规则
+    for (const ruleId of sc.scoreRefs ?? []) {
+      if (!pkg.scoreRules.some((r) => r.id === ruleId)) {
+        err('REF_UNCLOSED', `SCN ${sc.id}`, `scoreRefs 引用未闭合: ${ruleId}`)
+      }
+    }
   }
 
   /* ── error: 属性可解析 + 字典可解析（属性表内） ───────────────────────── */

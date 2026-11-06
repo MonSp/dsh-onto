@@ -238,3 +238,53 @@ test('D7：缺省引用位 = 全部（不落键时行为与排除不受限）', 
     rmWorkspace(root)
   }
 })
+
+test('scoreRefs：执行器按场景收窄打分——范围外规则不求值、不刷待核实（D13）', () => {
+  const base = minimalPkg()
+  const pkg2 = minimalPkg({
+    scoreRules: [
+      { id: 'RULE-TST-S1', name: '规则一', weight: 0.6, expression: 'min(1, f1)', threshold: 0.5, evidenceTemplate: 'f1 = {f1}' },
+      { id: 'RULE-TST-S2', name: '规则二', weight: 0.4, expression: 'min(1, f2)', threshold: 0.5, evidenceTemplate: 'f2 = {f2}' },
+    ],
+    skillTemplates: [
+      { id: 'SKL-TST-N', name: '叙述', weights: { 'RULE-TST-S1': 0.6, 'RULE-TST-S2': 0.4 }, steps: ['候选 {candidateId}'], outputTemplate: '摘要：{riskScore}' },
+    ],
+    scenarios: [{ ...base.scenarios[0], scoreRefs: ['RULE-TST-S1'] }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [
+        { id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } },
+        { id: 'B1', type: 'OBJ-TST-B', attrs: { b1: 1 } },
+      ],
+      relations: [{ id: 'R1', type: 'REL-TST-AB', from: 'A1', to: 'B1' }],
+      behaviors: [{ id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' }],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: [] }],
+    }
+    const scoped = runScenario(dir, 'SCN-TST-1', dataset)
+    const c1 = scoped.candidates.find((c) => c.candidateId === 'C1')
+    // S2 不在圈内：不求值 → 不因缺 f2 落待核实；S1 正常命中
+    assert.ok(c1.hitRuleIds.includes('RULE-TST-S1'))
+    assert.ok(!c1.hitRuleIds.includes('RULE-TST-S2'))
+    assert.equal(c1.pendingVerification !== true && c1.pendingChecks.length === 0, true,
+      '范围外规则不得刷待核实: ' + JSON.stringify(c1.pendingChecks))
+    assert.ok(Math.abs(c1.riskScore - 0.6 * 0.9) < 1e-9, '只有圈内规则参与加权, got ' + c1.riskScore)
+
+    // 缺省（不落 scoreRefs）= 全部：S2 参与并因缺 f2 落待核实
+    const all = minimalPkg({
+      scoreRules: pkg2.scoreRules,
+      skillTemplates: pkg2.skillTemplates,
+    })
+    savePackage(dir, all)
+    derivePackage(dir)
+    const full = runScenario(dir, 'SCN-TST-1', dataset)
+    const c2 = full.candidates.find((c) => c.candidateId === 'C1')
+    assert.ok(c2.pendingChecks.length > 0, '缺省=全部：缺 f2 应落待核实')
+    assert.ok(c2.pendingVerification === true)
+  } finally {
+    rmWorkspace(root)
+  }
+})

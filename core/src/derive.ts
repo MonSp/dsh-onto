@@ -205,6 +205,7 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       // v1.1 引用位：显式范围随编排下发；缺省 = 全部（不落键）
       ...(sc.behaviorRefs ? { behaviorRefs: sc.behaviorRefs } : {}),
       ...(sc.exclusionRefs ? { exclusionRefs: sc.exclusionRefs } : {}),
+      ...(sc.scoreRefs ? { scoreRefs: sc.scoreRefs } : {}),
       outputContract: sc.outputContract,
       reviewGate: sc.reviewGate,
     })),

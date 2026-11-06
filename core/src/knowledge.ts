@@ -761,7 +761,7 @@ const UPDATABLE: Record<string, string[]> = {
   ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate'],
   ExclusionRule: ['name', 'action', 'factor', 'condition'],
   SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
-  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'outputContract', 'reviewGate', 'auditChecks'],
+  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
   ApiSource: ['name', 'sourceType', 'endpoint'],
 }
@@ -1081,6 +1081,9 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
           : {}),
         ...(Array.isArray(p['exclusionRefs'])
           ? { exclusionRefs: (p['exclusionRefs'] as string[]).map(String) }
+          : {}),
+        ...(Array.isArray(p['scoreRefs'])
+          ? { scoreRefs: (p['scoreRefs'] as string[]).map(String) }
           : {}),
         // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里
         outputContract: {

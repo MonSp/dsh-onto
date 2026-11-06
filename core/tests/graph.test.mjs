@@ -775,3 +775,42 @@ test('D6：驳回后同名可重新起草（恢复路径）；pending/merged 仍
     rmWorkspace(root)
   }
 })
+
+test('scoreRefs：场景卡 create/update 携带并持久化（UPDATABLE 白名单含 scoreRefs）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    // update：给既有场景补 scoreRefs（走白名单，不得被 D9 拦）
+    const u = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', op: 'update', targetId: 'SCN-TST-1',
+        name: '场景打分圈定', payload: { scoreRefs: ['RULE-TST-S1'] }, confidence: 0.9,
+      },
+      provenance: { turnId: 't-sr' },
+    })
+    store.reviewCandidate(u.id, 'approve')
+    const r = store.materialize(dir, [u.id])
+    assert.deepEqual(r.applied, [u.id], JSON.stringify(r.skipped))
+    let after = loadPackage(dir)
+    assert.deepEqual(after.scenarios[0].scoreRefs, ['RULE-TST-S1'])
+
+    // create：新场景携带 scoreRefs
+    const c = store.addDraft({
+      packageId: 'test-pkg',
+      item: {
+        layer: 'O3', targetKind: 'ScenarioCard', name: '新场景带圈',
+        payload: { id: 'SCN-TST-2', name: '新场景带圈', goal: 'g', boundary: 'b', scoreRefs: ['RULE-TST-S1'] },
+        confidence: 0.9,
+      },
+      provenance: { turnId: 't-sr' },
+    })
+    store.reviewCandidate(c.id, 'approve')
+    const r2 = store.materialize(dir, [c.id])
+    assert.deepEqual(r2.applied, [c.id], JSON.stringify(r2.skipped))
+    after = loadPackage(dir)
+    assert.deepEqual(after.scenarios.find((s) => s.id === 'SCN-TST-2').scoreRefs, ['RULE-TST-S1'])
+  } finally {
+    rmWorkspace(root)
+  }
+})
