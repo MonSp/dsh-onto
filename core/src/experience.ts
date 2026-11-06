@@ -499,3 +499,53 @@ export function requiresHumanReview(rev: DiffRevision): boolean {
 export function reviewFocusFrom(rev: DiffRevision): string[] {
   return rev.diff.unknown.map((u) => u.item)
 }
+
+/* ───────────────────────── 人审回填（S5.4） ───────────────────────── */
+
+/**
+ * 人审回填：pending-human 改判、误迁移只由人判（by 必须非空人工身份）、reviewFocus 沉淀。
+ * 禁改 signature / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome（机器闸不否决人审）。
+ */
+export function reviewExperienceNote(
+  root: string,
+  runId: unknown,
+  patch: {
+    outcome?: ExperienceOutcome
+    outcomeReason?: string
+    misTransfer?: { judged: boolean; by: string; note?: string }
+    reviewFocus?: string[]
+  },
+): ExperienceNote {
+  const note = loadExperienceNote(root, runId)
+  if (patch.outcome !== undefined) {
+    if (!['success', 'partial', 'failure', 'pending-human'].includes(patch.outcome)) {
+      throw new PackageStoreError('INVALID_ARGS', 'invalid outcome')
+    }
+    note.outcome = patch.outcome
+  }
+  if (patch.outcomeReason !== undefined) {
+    if (typeof patch.outcomeReason !== 'string') {
+      throw new PackageStoreError('INVALID_ARGS', 'invalid outcomeReason')
+    }
+    note.outcomeReason = patch.outcomeReason
+  }
+  if (patch.misTransfer !== undefined) {
+    const m = patch.misTransfer
+    if (typeof m.judged !== 'boolean') {
+      throw new PackageStoreError('INVALID_ARGS', 'misTransfer.judged must be boolean')
+    }
+    if (typeof m.by !== 'string' || m.by.trim() === '') {
+      throw new PackageStoreError('INVALID_ARGS', 'misTransfer.by must be a human identity')
+    }
+    note.misTransfer = { judged: m.judged, by: m.by.trim(), note: typeof m.note === 'string' ? m.note : '' }
+  }
+  if (patch.reviewFocus !== undefined) {
+    if (!Array.isArray(patch.reviewFocus) || patch.reviewFocus.some((s) => typeof s !== 'string')) {
+      throw new PackageStoreError('INVALID_ARGS', 'invalid reviewFocus')
+    }
+    note.reviewFocus = [...patch.reviewFocus]
+  }
+  note.savedAt = new Date().toISOString()
+  saveExperienceNote(root, note)
+  return note
+}

@@ -44,6 +44,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
   pnpm 用 `%LOCALAPPDATA%\pnpm\.tools\pnpm\11.28.5\bin\pnpm.CMD`。启动前先杀 3080 旧监听。
 - `scripts/dev-web.ps1` 启动（或直接 `pnpm dsh --profile dsh-onto --no-open`，工作目录 = harness）。
 - Tabbit 用 `localhost:3808` / `localhost:3080`（勿用 127.0.0.1）；token 从启动日志取。
+- **tab 数（P2-1 起）**：六个 tab（包管理|建模|知识库|校验派生|场景运行|**经验**）；
+  经验 tab 断言：列表行 + 标注列 + 回填按钮（P2-1 起 B1 含经验视图）。
 - 最小剧本（§四 B）：五 tab 全开 → aml-analysis@1.0.0 → 场景运行 `examples/aml-run.json` →
   SCN-AML-FIND-CLUES → 候选 / 证据链 / 审计 / 人审字段齐全 → 运行记录可见。
 - 本轮改动涉及的 tab 加深一步（如经验视图、知识库队列）。
@@ -79,7 +81,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P1-4 | P1 | DiffTable 机械生成 + 差异修正双路（LLM / 启发式） | unknown → 转人工路径有测试 | **完成**（轮 4） |
 | P1-5 | P1 | 闸门复用接线 + CLI `exp` 子命令 | `exp recall` / `annotate` / `diff` 可用 | **完成**（轮 5） |
 | P1-6 | P1 | 验收基准三轮 A/B/C（`examples/aml-run.json`） | `runs compare` 出 delta；C 不硬迁移 | **完成**（轮 6，P1 收官） |
-| P2-1 | P2 | 人审回填（misTransfer / reviewFocus）+ workbench 经验视图 | 浏览器可见经验列表与标注 | 待办 |
+| P2-1 | P2 | 人审回填（misTransfer / reviewFocus）+ workbench 经验视图 | 浏览器可见经验列表与标注 | **完成**（轮 7） |
 | P2-2 | P2 | agent 工具 `recall_experience` 等（过三出口） | NL 剧本 N4 全绿 | 待办 |
 | P2-3 | P2 | `DraftProvenance.runId` + 草案溯源人审面 | 知识库队列可见 runId | 待办 |
 | P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | 待办 |
@@ -113,7 +115,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 6 | 2026-11-06 | P1-6 验收三轮 A/B/C | ✓ 136/136 + ACCEPTANCE PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 7 | 2026-11-06 | P2-1 人审回填+经验视图 | ✓ core 138/138 + backend 124/124 + dump 2/2 | ✓ 六 tab+回填链路 | ✓ N1–N3 | 无 | 本轮提交 |
+| 6 | 2026-11-06 | P1-6 验收三轮 A/B/C | ✓ 136/136 + ACCEPTANCE PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 33b9bbb |
 | 5 | 2026-11-06 | P1-5 CLI exp + 闸门接线 | ✓ 136/136 + CLI 冒烟正/负例 | ✓ B1–B3 | ✓ N1–N3 | 无 | 703dc06 |
 | 4 | 2026-11-06 | P1-4 DiffTable+差异修正双路 | ✓ 136/136 | ✓ B1–B3 | ✓ N1–N3 | 无 | a8596dc |
 | 3 | 2026-11-06 | P1-3 结构检索 | ✓ 132/132 | ✓ B1–B3 | ✓ N1–N3 | 无（跨包阈值设计缺口已当场修+同步 spec） | 5fc0948 |

@@ -16,6 +16,7 @@ import {
   reviseDiff,
   requiresHumanReview,
   reviewFocusFrom,
+  reviewExperienceNote,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -324,4 +325,52 @@ test('差异修正双路：LLM 成功 → engine=llm；失败/非法输出 → �
 
   const nullLlm = await reviseDiff(null, input)
   assert.equal(nullLlm.engine, 'heuristic')
+})
+
+/* ── P2-1 人审回填 ── */
+
+test('人审回填：改判 outcome + 写 misTransfer + reviewFocus', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-rv1', outcome: 'pending-human' }))
+    const updated = reviewExperienceNote(root, 'run-rv1', {
+      outcome: 'success',
+      outcomeReason: '人工复核通过',
+      misTransfer: { judged: true, by: '张三', note: '误迁到新域' },
+      reviewFocus: ['listHitCount'],
+    })
+    assert.equal(updated.outcome, 'success')
+    assert.equal(updated.outcomeReason, '人工复核通过')
+    assert.equal(updated.misTransfer.judged, true)
+    assert.equal(updated.misTransfer.by, '张三')
+    assert.deepEqual(updated.reviewFocus, ['listHitCount'])
+    // signature 不可被 patch 改动
+    assert.equal(updated.signature.digest, makeNote({ runId: 'run-rv1', outcome: 'pending-human' }).signature.digest)
+    const reloaded = loadExperienceNote(root, 'run-rv1')
+    assert.equal(reloaded.outcome, 'success')
+    assert.equal(reloaded.misTransfer.by, '张三')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('人审回填闸门：misTransfer.by 空 → INVALID_ARGS；非法 outcome → INVALID_ARGS', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-rv2' }))
+    assert.throws(
+      () => reviewExperienceNote(root, 'run-rv2', { misTransfer: { judged: true, by: '  ', note: 'x' } }),
+      /INVALID_ARGS|human identity/,
+    )
+    assert.throws(
+      () => reviewExperienceNote(root, 'run-rv2', { outcome: 'nope' }),
+      /INVALID_ARGS|invalid outcome/,
+    )
+    assert.throws(
+      () => reviewExperienceNote(root, 'run-rv2', { misTransfer: { judged: 'yes', by: '张三' } }),
+      /INVALID_ARGS|boolean/,
+    )
+  } finally {
+    rmWorkspace(root)
+  }
 })
