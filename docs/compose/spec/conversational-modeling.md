@@ -115,6 +115,10 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
   部分，与「限定范围」口径冲突）。`SCN-*` 作为场景入口豁免 `ID_UNREFERENCED`（入口天然无上游，与 AGT-/AUD-/TOOL- 同列）。
   多场景协作口径（C4 压测拍板）：包级权重合计仍 = 1.0（WEIGHT_SUM 不变）；场景间口径
   差异靠 scoreRefs 圈定 + 带式权重分配（公共带 + 场景带）表达，不在场景内二次归一。
+  **D14（C5 冒烟发现）**：圈定后 riskScore 上限 = 圈内权重和——`reviewGate.threshold`
+  超过该和即 `REVIEW_GATE_UNREACHABLE`（error，校验期拦截）；超过 90% 报
+  `REVIEW_GATE_TIGHT`（warn，仅近满分候选可触发）。阈值必须按圈内上限标定，
+  不得沿用全包 0.75 默认。
 - **ID 骨架门**：skeleton 确认前不得物化任何元素；分片阶段新增骨架外 ID → 校验
   error（`SKELETON_OUT_OF_SCOPE`），防 ID 漂移。口径：skeleton.ids 是**全量 Schema
   元素 ID 清单**（含 `dict-*`，不含 `OBJ.attr` 属性引用）——门禁只约束**新增 ID**；
@@ -167,6 +171,9 @@ L 层（干活）= 运行时能力栈。其中 **L2/L3/L4** 是签发后由 deri
 
 - 落地不变量沿用：L 层只读（手改 → `DERIVED_DRIFT`，改 O 层重派生）；打分只在
   规则引擎；`humanReviewRequired` 恒真；签发仅人工；工具面不携带禁语本体。
+  **D15（C5 实测发现）**：manifest 锚点按**版本**匹配——fork 原样携带的上一版本
+  `issueRecord[].manifestDigest` 既不阻断新版本门禁（签发前预检不再假漂移），
+  也不被新版本派生覆写（历史锚点保真）。
 
 ## [P5] 分期落地
 

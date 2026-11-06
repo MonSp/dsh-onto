@@ -35,6 +35,9 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | P-1 | 引擎 | 否决件不进人工队列 → `reviewGate.includeExcluded`（缺省 false 兼容；create/update 持久化、坏类型起草即拒） | 8116210 |
 | D11 | 产品 | 签发前人工链 ≈8 步 UI → 校验派生 tab「签发前预检」一键串 校验写盘→派生→门禁，全绿提示转人工签发 | 8116210 |
 | P-2 | 产品+文档 | v1.1 待办沉淀口径 → 包根 `backlog.md` 附属文件（exportVersion 读面携带、不入 listSourceFiles/派生摘要——改待办零漂移、fork 自动携带）+ 清单视图展示卡 + 引导技能约定 | 8116210 |
+| D14 | 引擎 | scoreRefs 圈定后阈值沿用全包 0.75 → 数学不可达（C5 冒烟发现）：`REVIEW_GATE_UNREACHABLE`（error）+ `REVIEW_GATE_TIGHT`（warn >90% 圈内和）；包侧 fork 校准 0.60/0.30 并实证触发 | C5 内修复 |
+| D15 | 引擎 | fork 携带上一版本 manifestDigest 锚点 → 签发前预检假漂移（C5 发现）：锚点按版本匹配——门禁忽略异版本旧锚、锚点只回写同版本条目 | C5 内修复 |
+| D2残 | 文档 | 引导技能补 targetKind payload 形状速查（起草前对照、省读源码） | 见本轮 |
 | — | 文档 | spec 口径同步（update fail-loud、refs 运行收窄、scoreRefs、多场景拍板）、测试计数 110/121 | 5513832, 66b021d |
 
 ### 已拍板待修（0 项：D3 已于 087d630 完成并入 PR #5）
@@ -80,6 +83,7 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 | **P2 已完成** | D4 + D12 + D5 + DOC-1（3e9c9d7；D12 取保守解——不改围栏只补可发现性） | core 111 / backend 124（D5、D12 各 +1 测试）/ workbench build+check / dump-config 2-2 全绿 |
 | **P3 已完成** | P-1 + D11 + P-2（8116210；P-2 实现按「包根规范位 + 读面不入摘要」落地，规避改待办触发 DERIVED_DRIFT 的坑） | core 114 / backend 124 / workbench build+check / dump-config 2-2 全绿 |
 | **P4 已完成（实测指令）** | 续跑 C4-TAX：6 轮到验收 PASS；特性矩阵（scoreRefs/includeExcluded/D11/D4/P-2/D5 预防）全绿，域码事故经「拒绝直写→工作台 YAML 修复」恢复；详见压测记录 C4 续跑节 | 74/74、0/0、三场景冒烟三重点全过、3 份审计归档、backlog 落盘 |
+| **P4 续（遗留待办）** | C5-MIC 全程实测（含 D3 活体首跑）：5+2 轮双版本收口；新发现并当场修复 D14/D15；D2残同步落地；详见压测记录 C5 节 | 68/68、0/0、0.30 闸实证触发、评分 Δ=0、D3 双工具 ✓ |
 
 > 执行依赖：P1 完成后宿主需重启加载新 dist；P0/P1 均不动 harness（只读约束满足）。
 
@@ -96,6 +100,6 @@ C4 按同一方法论在骨架阶段即挖出结构性缺陷 D13（打分无场�
 
 ## 五、分支与提交现状
 
-`feat/multi-domain-stress`：15 提交（5 fix / 4 feat / 6 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 全部完成（C4 实测收口）；
+`feat/multi-domain-stress`：15 提交（5 fix / 4 feat / 6 docs），已推送并开 **PR #5**（https://github.com/MonSp/dsh-onto/pull/5）；P0–P4 + 遗留待办（D3 实测/C5/D14/D15/D2残）全部完成；仅 D8 数值格式化维持 wontfix-at-present（长尾已拍板接受）；
 C4 的 tax-risk@1.0.0（DRAFT、骨架 74 ID 已确认）与
 C1–C3 三个 ISSUED 包留在 dsh profile 数据目录，作为后续 P4 回归夹具。
