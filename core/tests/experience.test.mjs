@@ -10,6 +10,7 @@ import {
   loadExperienceNote,
   listExperienceNotes,
   experiencesDir,
+  retrieveSimilar,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -156,6 +157,96 @@ test('listExperienceNotes：savedAt 降序、损坏条目跳过', () => {
       list.map((n) => n.runId),
       ['run-b', 'run-a'],
     )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── P1-3 结构检索 ── */
+
+function variantNote(i, sigOverrides = {}, noteOverrides = {}) {
+  const n = makeNote({ runId: `run-v${i}`, savedAt: `2026-11-06T0${i}:00:00.000Z`, ...noteOverrides })
+  n.signature = { ...n.signature, ...sigOverrides, digest: `digest-v${i}` }
+  return n
+}
+
+test('检索：digest 同构短路', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const note = makeNote({ runId: 'run-d1' })
+    saveExperienceNote(root, note)
+    const r = retrieveSimilar(root, { signature: note.signature })
+    assert.equal(r.coldStart, false)
+    assert.equal(r.digestMatch.runId, 'run-d1')
+    assert.equal(r.hits[0].score, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('检索：同构全中 → score=1.0 命中；top-k 截断', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    for (let i = 1; i <= 4; i++) saveExperienceNote(root, variantNote(i))
+    const q = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+    q.digest = 'digest-query' // 走打分路径，不短路
+    const r = retrieveSimilar(root, { signature: q })
+    assert.equal(r.coldStart, false)
+    assert.equal(r.hits.length, 3)
+    assert.ok(r.hits.every((h) => h.score === 1))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('检索：结构全不同 → 冷启动（不硬迁）', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(
+      root,
+      variantNote(1, {
+        scenarioId: 'SCN-OTHER',
+        stepShape: 'DATA_INGEST',
+        ruleRefs: ['RULE-X'],
+        skillRefs: [],
+        inputShape: ['z:string'],
+        dataBand: 'L',
+      }),
+    )
+    const q = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+    q.digest = 'digest-query'
+    const r = retrieveSimilar(root, { signature: q })
+    assert.equal(r.coldStart, true)
+    assert.equal(r.hits.length, 0)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('检索：反例与已判误迁移不参赛', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, variantNote(1, {}, { counterexample: true }))
+    saveExperienceNote(root, variantNote(2, {}, { misTransfer: { judged: true, by: '张三', note: '误' } }))
+    const q = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+    q.digest = 'digest-query'
+    const r = retrieveSimilar(root, { signature: q })
+    assert.equal(r.coldStart, true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('检索：跨包须 externalRefs 声明，命中降权', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, variantNote(1, { packageScope: 'other-pkg@1.0.0' }))
+    const q = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+    q.digest = 'digest-query'
+    assert.equal(retrieveSimilar(root, { signature: q }).coldStart, true)
+    const r = retrieveSimilar(root, { signature: q, externalRefs: ['other-pkg'] })
+    assert.equal(r.coldStart, false)
+    assert.ok(Math.abs(r.hits[0].score - 0.5) < 1e-9, `score=${r.hits[0].score}`)
   } finally {
     rmWorkspace(root)
   }

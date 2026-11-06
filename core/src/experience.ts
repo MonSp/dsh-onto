@@ -216,3 +216,115 @@ export function listExperienceNotes(root: string): ExperienceNote[] {
     a.savedAt === b.savedAt ? (a.runId < b.runId ? -1 : 1) : a.savedAt > b.savedAt ? -1 : 1,
   )
 }
+
+/* ───────────────────────── 结构检索（S5.1） ───────────────────────── */
+
+export interface RetrievalHit {
+  note: ExperienceNote
+  score: number
+  reasons: string[]
+}
+
+export interface RetrievalResult {
+  hits: RetrievalHit[]
+  /** 无命中（score < 阈值）→ 冷启动：全量执行、不类比、不硬迁移。 */
+  coldStart: boolean
+  /** digest 精确同构短路命中的经验（直接复用其 DiffTable，跳过差异修正）。 */
+  digestMatch?: ExperienceNote
+}
+
+/** 集合 Jaccard 相似（双方皆空 = 1）。 */
+function jaccard(a: readonly string[], b: readonly string[]): number {
+  const A = new Set(a)
+  const B = new Set(b)
+  if (A.size === 0 && B.size === 0) return 1
+  const inter = [...A].filter((x) => B.has(x)).length
+  const union = new Set([...A, ...B]).size
+  return union === 0 ? 1 : inter / union
+}
+
+function sameArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i])
+}
+
+/** 跨包参赛须在 externalRefs 声明（按包名匹配）；命中降权因子（初始值，验收时校准）。 */
+const CROSS_SCOPE_FACTOR = 0.5
+
+/**
+ * 结构检索：纯字段匹配（无向量）。打分（初始权重，验收时校准）：
+ * 同 scenarioId +0.4｜stepShape 一致 +0.2｜ruleRefs∪skillRefs Jaccard +0.2×jac｜
+ * inputShape 一致 +0.1｜dataBand 一致 +0.1；原始分 ≥ 阈值（默认 0.6）→ top-k 命中，
+ * 否则冷启动。跨包（externalRefs 声明内）按原始分过阈，展示分 ×0.5 仅降权排序。
+ */
+export function retrieveSimilar(
+  root: string,
+  query: {
+    signature: TaskSignature
+    /** 查询方包的 externalRefs（跨包参赛声明）。 */
+    externalRefs?: readonly string[]
+  },
+  opts?: { topK?: number; threshold?: number },
+): RetrievalResult {
+  const topK = opts?.topK ?? 3
+  const threshold = opts?.threshold ?? 0.6
+  const q = query.signature
+  const qRules = [...new Set([...q.ruleRefs, ...q.skillRefs])].sort()
+  const declared = (query.externalRefs ?? []).map((s) => String(s))
+
+  const pool = listExperienceNotes(root).filter(
+    (n) => !n.counterexample && n.misTransfer?.judged !== true,
+  )
+
+  // digest 精确同构短路
+  const digestMatch = pool.find((n) => n.signature.digest === q.digest)
+  if (digestMatch) {
+    return { hits: [{ note: digestMatch, score: 1, reasons: ['digest 同构'] }], coldStart: false, digestMatch }
+  }
+
+  const hits: RetrievalHit[] = []
+  for (const note of pool) {
+    const s = note.signature
+    const pkgName = s.packageScope.split('@')[0]
+    const sameScope = s.packageScope === q.packageScope
+    const declaredCross = !sameScope && declared.some((d) => pkgName === d || pkgName.startsWith(`${d}@`))
+    if (!sameScope && !declaredCross) continue
+
+    let score = 0
+    const reasons: string[] = []
+    if (s.scenarioId === q.scenarioId) {
+      score += 0.4
+      reasons.push('同 scenarioId')
+    }
+    if (s.stepShape === q.stepShape) {
+      score += 0.2
+      reasons.push('stepShape 一致')
+    }
+    const jac = jaccard(qRules, [...new Set([...s.ruleRefs, ...s.skillRefs])])
+    if (jac > 0) {
+      score += 0.2 * jac
+      reasons.push(`规则/技能 Jaccard=${jac.toFixed(2)}`)
+    }
+    if (sameArray(s.inputShape, q.inputShape)) {
+      score += 0.1
+      reasons.push('inputShape 一致')
+    }
+    if (s.dataBand === q.dataBand) {
+      score += 0.1
+      reasons.push('dataBand 一致')
+    }
+    // 阈值按原始分判定；跨包展示分 ×0.5 仅影响排序（否则满分 0.5 永远过不了阈值）
+    if (score >= threshold) {
+      if (!sameScope) {
+        score *= CROSS_SCOPE_FACTOR
+        reasons.push(`跨包降权 ×${CROSS_SCOPE_FACTOR}`)
+      }
+      hits.push({ note, score, reasons })
+    }
+  }
+
+  hits.sort((a, b) =>
+    a.score === b.score ? (a.note.runId < b.note.runId ? -1 : 1) : b.score - a.score,
+  )
+  const top = hits.slice(0, topK)
+  return { hits: top, coldStart: top.length === 0 }
+}
