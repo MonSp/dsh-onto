@@ -1,7 +1,7 @@
 /** 经验闭环验收（spec experience-loop S4.1/S4.3）：任务结构签名 + 经验记录围栏存取。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   buildTaskSignature,
@@ -18,6 +18,7 @@ import {
   reviewFocusFrom,
   reviewExperienceNote,
   abstractSkillDrafts,
+  abstractCounterexampleDrafts,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -413,6 +414,35 @@ test('abstractSkillDrafts：簇员 < minCluster 不出草案', () => {
     assert.equal(abs.length, 0)
     const abs2 = abstractSkillDrafts(root, { pkg: minimalPkg(), minCluster: 1 })
     assert.equal(abs2.length, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('abstractCounterexampleDrafts：结论性反例 → RedLine；否则 → ExclusionRule', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = minimalPkg()
+    // 结论性反例 ×2 → RedLine
+    saveExperienceNote(root, makeNote({ runId: 'run-c1', counterexample: true, outcomeReason: '误判为认定洗钱', savedAt: '2026-11-07T01:00:00.000Z' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-c2', counterexample: true, outcomeReason: '输出含确定为', savedAt: '2026-11-07T02:00:00.000Z' }))
+    const rl = abstractCounterexampleDrafts(root, { pkg })
+    assert.equal(rl.length, 1)
+    assert.equal(rl[0].draft.targetKind, 'RedLine')
+    assert.equal(rl[0].draft.layer, 'O3')
+    assert.ok(rl[0].draft.payload.phrases.includes('认定洗钱'))
+    assert.equal(rl[0].draft.confidence, 0.7)
+
+    // 非结论性反例 ×2 → ExclusionRule（清空旧反例再测）
+    rmSync(join(root, 'experiences'), { recursive: true, force: true })
+    saveExperienceNote(root, makeNote({ runId: 'run-c3', counterexample: true, outcomeReason: '特征缺失导致误报', reviewFocus: ['listHitCount'], savedAt: '2026-11-07T03:00:00.000Z' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-c4', counterexample: true, outcomeReason: '数据漂移', savedAt: '2026-11-07T04:00:00.000Z' }))
+    const ex = abstractCounterexampleDrafts(root, { pkg })
+    assert.equal(ex.length, 1)
+    assert.equal(ex[0].draft.targetKind, 'ExclusionRule')
+    assert.equal(ex[0].draft.payload.action, 'downweight')
+    assert.equal(ex[0].draft.payload.condition, "tag == 'listHitCount'")
+    assert.equal(ex[0].draft.confidence, 0.7)
   } finally {
     rmWorkspace(root)
   }

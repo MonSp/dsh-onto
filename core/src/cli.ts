@@ -30,6 +30,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
 import {
+  abstractCounterexampleDrafts,
   abstractSkillDrafts,
   buildDiffTable,
   buildTaskSignature,
@@ -486,21 +487,28 @@ function cmdExp(sub: string | undefined, args: Args): void {
       const pkg = loadPackage(dir)
       const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
       const abs = abstractSkillDrafts(root, { pkg, minCluster })
+      const counters = abstractCounterexampleDrafts(root, { pkg, minCluster })
       // knowledge 队列在 dataDir/knowledge（backend 口径）；--root 是 workspace 根（experiences 在此）。
       // workspace 布局下 dataDir = dirname(workspace)；否则同根。
       const base = basename(root)
       const dataDir = base === 'workspace' ? dirname(root) : root
       const knowledge = new KnowledgeStore(dataDir)
-      const queued: Array<{ id: string; name: string; runId: string; members: number }> = []
-      for (const a of abs) {
+      const queued: Array<{ id: string; name: string; kind: string; runId: string; members: number }> = []
+      for (const a of [...abs, ...counters]) {
         const c = knowledge.addDraft({
           packageId: `${pkg.meta.name}@${pkg.meta.version}`,
           item: a.draft,
           provenance: { runId: a.memberRunIds[0] },
         })
-        queued.push({ id: c.id, name: c.name, runId: a.memberRunIds[0], members: a.memberRunIds.length })
+        queued.push({ id: c.id, name: c.name, kind: a.draft.targetKind, runId: a.memberRunIds[0], members: a.memberRunIds.length })
       }
-      print({ queued, clusters: abs.length, knowledgeRoot: dataDir, note: '草案已入队（pending），物化必经人审' })
+      print({
+        queued,
+        skills: abs.length,
+        counters: counters.length,
+        knowledgeRoot: dataDir,
+        note: '草案已入队（pending），物化必经人审',
+      })
       return
     }
     default:

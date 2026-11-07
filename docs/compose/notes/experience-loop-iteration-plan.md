@@ -86,7 +86,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P2-3 | P2 | `DraftProvenance.runId` + 草案溯源人审面 | 知识库队列可见 runId | **完成**（轮 9） |
 | P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | **完成**（轮 10，P2 收官） |
 | P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | **完成**（轮 11） |
-| P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | 待办 |
+| P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | **完成**（轮 12） |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | 待办 |
 
 （P1-1 起即开；每轮 T1 从上表取片。全片完成 = experience-loop.md 达 delivered。）
@@ -115,7 +115,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | 本轮提交 |
+| 12 | 2026-11-07 | P3-2 反例利用 | ✓ 142/142 + REDLINE-CHAIN PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | b9d87c1 |
 | 10 | 2026-11-07 | P2-4 med 多域验证 | ✓ 139/139 + MULTI-DOMAIN PASS | ✓ med 场景+六 tab | ✓ N1–N3（med 域） | 无 | 29a232a |
 | 9 | 2026-11-07 | P2-3 DraftProvenance.runId | ✓ core 139/139 + dump 2/2 | ✓ runId 可见+B2B3 | ✓ N1–N3 | 无 | 920e258 |
 | 8 | 2026-11-06 | P2-2 recall_experience 工具 | ✓ backend 125/125 + dump 2/2 | ✓ 六 tab+B2B3 | ✓ N4 全绿 | 无 | 15e8350 |
@@ -149,6 +150,6 @@ med（run-fd0a7117，2 候选）装配断言全过；同域复用命中 score=1.
 
 | 项 | 拍板 | 日期 |
 |---|---|---|
-| 循环间隔 | 1 小时（`0 */1 * * *`） | 2026-11-06 |
+| 循环间隔 | 30 分钟（`*/30 * * * *`，job d732893d） | 2026-11-07 |
 | 提交策略 | 每轮自动提交，不推送 | 2026-11-06 |
 | 分支 | `master` | 2026-11-06 |

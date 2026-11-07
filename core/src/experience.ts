@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { findConclusionPhrases } from './llm.js'
 import { isSafeRunId } from './runstore.js'
 import { isInsideDir, PackageStoreError } from './store.js'
 import type { DraftItem, OntologyPackage } from './types.js'
@@ -562,6 +563,76 @@ export function abstractSkillDrafts(
       rationale: `经验闭环抽象：${members.length} 条成功轨迹（${members.map((m) => m.runId).join(', ')}）`,
     }
     out.push({ clusterKey, signature: rep.signature, memberRunIds: members.map((m) => m.runId), draft })
+  }
+  return out
+}
+
+export interface CounterAbstraction {
+  clusterKey: string
+  memberRunIds: string[]
+  draft: DraftItem
+}
+
+/**
+ * 反例利用（S6，P3-2）：counterexample 经验按 packageScope+stepShape 聚簇；
+ * 簇员 ≥ minCluster → 草案——outcomeReason 含结论性表述 → RedLine（只落红线），
+ * 否则 → ExclusionRule（downweight，条件待人审细化）。confidence 0.7 < 0.75 → 强制人审。
+ */
+export function abstractCounterexampleDrafts(
+  root: string,
+  input: { pkg: OntologyPackage; minCluster?: number },
+): CounterAbstraction[] {
+  const { pkg } = input
+  const minCluster = input.minCluster ?? 2
+  const scope = `${pkg.meta.name}@${pkg.meta.version}`
+  const pool = listExperienceNotes(root).filter(
+    (n) =>
+      n.signature.packageScope === scope &&
+      n.counterexample &&
+      n.misTransfer?.judged !== true,
+  )
+  const clusters = new Map<string, ExperienceNote[]>()
+  for (const n of pool) {
+    const key = `${n.signature.packageScope}|${n.signature.stepShape}`
+    const arr = clusters.get(key) ?? []
+    arr.push(n)
+    clusters.set(key, arr)
+  }
+  const out: CounterAbstraction[] = []
+  for (const [clusterKey, members] of clusters) {
+    if (members.length < minCluster) continue
+    const rep = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))[0]
+    const runList = members.map((m) => m.runId).join(', ')
+    const texts = members.map((m) => m.outcomeReason ?? '').join(' ')
+    const phrases = [...new Set(findConclusionPhrases(texts))]
+    let draft: DraftItem
+    if (phrases.length > 0) {
+      draft = {
+        layer: 'O3',
+        targetKind: 'RedLine',
+        name: `反例红线:${phrases[0]}`,
+        payload: { scenarioId: rep.signature.scenarioId, phrases },
+        confidence: 0.7,
+        rationale: `经验反例红线：${members.length} 条（${runList}）`,
+      }
+    } else {
+      const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))]
+      const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
+      draft = {
+        layer: 'O2',
+        targetKind: 'ExclusionRule',
+        name: `${scenario?.name ?? rep.signature.scenarioId}反例排除`,
+        payload: {
+          action: 'downweight',
+          factor: 0.5,
+          condition: focus.length > 0 ? `tag == '${focus[0]}'` : "tag == 'exp-counter'",
+          description: `经验反例：${members.length} 条（${runList}）；条件待人审细化`,
+        },
+        confidence: 0.7,
+        rationale: `经验反例排除：${members.length} 条（${runList}）`,
+      }
+    }
+    out.push({ clusterKey, memberRunIds: members.map((m) => m.runId), draft })
   }
   return out
 }
