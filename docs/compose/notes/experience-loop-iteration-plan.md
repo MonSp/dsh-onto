@@ -84,7 +84,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P2-1 | P2 | 人审回填（misTransfer / reviewFocus）+ workbench 经验视图 | 浏览器可见经验列表与标注 | **完成**（轮 7） |
 | P2-2 | P2 | agent 工具 `recall_experience` 等（过三出口） | NL 剧本 N4 全绿 | **完成**（轮 8） |
 | P2-3 | P2 | `DraftProvenance.runId` + 草案溯源人审面 | 知识库队列可见 runId | **完成**（轮 9） |
-| P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | 待办 |
+| P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | **完成**（轮 10，P2 收官） |
 | P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | 待办 |
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | 待办 |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | 待办 |
@@ -115,7 +115,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 9 | 2026-11-07 | P2-3 DraftProvenance.runId | ✓ core 139/139 + dump 2/2 | ✓ runId 可见+B2B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 10 | 2026-11-07 | P2-4 med 多域验证 | ✓ 139/139 + MULTI-DOMAIN PASS | ✓ med 场景+六 tab | ✓ N1–N3（med 域） | 无 | 本轮提交 |
+| 9 | 2026-11-07 | P2-3 DraftProvenance.runId | ✓ core 139/139 + dump 2/2 | ✓ runId 可见+B2B3 | ✓ N1–N3 | 无 | 920e258 |
 | 8 | 2026-11-06 | P2-2 recall_experience 工具 | ✓ backend 125/125 + dump 2/2 | ✓ 六 tab+B2B3 | ✓ N4 全绿 | 无 | 15e8350 |
 | 7 | 2026-11-06 | P2-1 人审回填+经验视图 | ✓ core 138/138 + backend 124/124 + dump 2/2 | ✓ 六 tab+回填链路 | ✓ N1–N3 | 无 | e1a4344 |
 | 6 | 2026-11-06 | P1-6 验收三轮 A/B/C | ✓ 136/136 + ACCEPTANCE PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 33b9bbb |
@@ -129,6 +130,11 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 `runs compare` 出 delta（CAND-001 −0.175，FANOUT 命中消失）→ C（fork 1.0.1 收窄 scoreRefs +
 数据跨档 S→M）冷启动不硬迁。experience-loop.md [S7] P1 出口达成；**下一片起进入 P2**
 （人审回填 → workbench 经验视图 → agent 工具面 → med 多域）。
+
+**P2 收官记录（轮 10）**：多域验收 MULTI-DOMAIN PASS——aml（run-acdc64f3，3 候选）与
+med（run-fd0a7117，2 候选）装配断言全过；同域复用命中 score=1.0、跨域冷启动隔离、
+二域各自同域复用均成立；换包零改引擎。experience-loop.md [S7] P2 出口达成；
+**下一片起进入 P3**（自动技能抽象草案 → 反例利用 → 压缩/遗忘）。
 
 **轮 1 缺陷台账**
 
