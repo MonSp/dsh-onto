@@ -577,6 +577,9 @@ export class KnowledgeStore {
         }
         applied.push(c.id)
       } catch (e) {
+        // 半成品回滚（E1-3：接线失败不得留下已 push 的 skillTemplates）
+        restorePkg(pkg, before)
+        delete c.appliedAs
         skipped.push({ id: c.id, reason: e instanceof Error ? e.message : String(e) })
       }
     }
@@ -1071,6 +1074,8 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
     }
     case 'SkillTemplate': {
       const id = pickId(p, 'SKL', tag, pkg)
+      // 先解析接线目标再 push，避免 throw 后留下半成品模板
+      const wire = resolveSkillWireTarget(pkg, p)
       pkg.skillTemplates.push({
         id,
         name: String(p['name'] ?? c.name),
@@ -1078,6 +1083,7 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
         steps: Array.isArray(p['steps']) ? (p['steps'] as string[]) : undefined,
         outputTemplate: typeof p['outputTemplate'] === 'string' ? p['outputTemplate'] : undefined,
       })
+      if (wire) appendSkillRef(wire, id)
       return id
     }
     case 'ScenarioCard': {
@@ -1169,6 +1175,42 @@ function idTaken(pkg: OntologyPackage, id: string): boolean {
     pkg.fieldMaps.some((x) => x.id === id) ||
     pkg.apiSources.some((x) => x.id === id)
   )
+}
+
+/**
+ * E1-3 SkillTemplate 物化接线：把新 SKL id append 到目标场景 pipeline.skillRefs。
+ * 目标场景 = payload.scenarioId；缺省且包内仅一场景时用之；多场景无 scenarioId 则不接线
+ * （不猜，避免错挂）。显式 scenarioId 不存在 → fail-loud（WIRE_SCENARIO_NOT_FOUND）。
+ */
+function resolveSkillWireTarget(
+  pkg: OntologyPackage,
+  p: Record<string, unknown>,
+): OntologyPackage['scenarios'][number] | null {
+  const explicit = typeof p['scenarioId'] === 'string' ? p['scenarioId'].trim() : ''
+  if (explicit) {
+    const sc = pkg.scenarios.find((s) => s.id === explicit)
+    if (!sc) throw new KnowledgeError('WIRE_SCENARIO_NOT_FOUND', `skillRefs 接线场景不存在: ${explicit}`)
+    return sc
+  }
+  if (pkg.scenarios.length === 1) return pkg.scenarios[0]
+  return null
+}
+
+/** 优先挂已有 SKILL_RUN 步，其次已有 skillRefs 的步，否则在 HUMAN_REVIEW 前插一步 SKILL_RUN。 */
+function appendSkillRef(scenario: OntologyPackage['scenarios'][number], skillId: string): void {
+  if (scenario.pipeline.some((step) => (step.skillRefs ?? []).includes(skillId))) return
+  let step = scenario.pipeline.find((s) => s.stepType === 'SKILL_RUN')
+  if (!step) step = scenario.pipeline.find((s) => (s.skillRefs?.length ?? 0) > 0)
+  if (!step) {
+    const humanIdx = scenario.pipeline.findIndex((s) => s.stepType === 'HUMAN_REVIEW')
+    const insertAt = humanIdx >= 0 ? humanIdx : scenario.pipeline.length
+    const used = new Set(scenario.pipeline.map((s) => s.stepId))
+    let n = 1
+    while (used.has(`s${n}`)) n += 1
+    step = { stepId: `s${n}`, stepType: 'SKILL_RUN' }
+    scenario.pipeline.splice(insertAt, 0, step)
+  }
+  step.skillRefs = [...(step.skillRefs ?? []), skillId]
 }
 
 function pickId(p: Record<string, unknown>, prefix: string, tag: string, pkg: OntologyPackage): string {

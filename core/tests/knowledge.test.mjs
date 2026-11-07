@@ -657,6 +657,97 @@ test('物化侧数值兜底：reviewGate.threshold/weight 的 NaN 不入库，�
   assert.equal(rule.threshold, undefined)
 })
 
+test('E1-3 SkillTemplate 物化接线：append SKL 到对应场景 pipeline.skillRefs', () => {
+  const pkg = minimalPkg()
+  const before = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(!before.includes('SKL-TST-EXP-1'))
+  const id = applyDraftToPackage(pkg, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '经验模板',
+    payload: {
+      id: 'SKL-TST-EXP-1',
+      scenarioId: 'SCN-TST-1',
+      weights: { 'RULE-TST-S1': 1 },
+      steps: ['候选 {candidateId}'],
+    },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.equal(id, 'SKL-TST-EXP-1')
+  const after = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(after.includes('SKL-TST-EXP-1'), `skillRefs 应含新 SKL: ${after.join(',')}`)
+  // 已有 SKILL_RUN 步上追加，不新建步（duties 对齐不破）
+  const skillSteps = pkg.scenarios[0].pipeline.filter((s) => s.stepType === 'SKILL_RUN')
+  assert.equal(skillSteps.length, 1)
+  assert.deepEqual(skillSteps[0].skillRefs, ['SKL-TST-N', 'SKL-TST-EXP-1'])
+  // 显式错误 scenarioId → fail-loud（resolve 在 push 前，不得留下半成品）
+  assert.throws(
+    () => applyDraftToPackage(pkg, {
+      layer: 'O2', targetKind: 'SkillTemplate', name: '坏接线',
+      payload: { id: 'SKL-TST-EXP-2', scenarioId: 'SCN-NOPE', weights: {} },
+      confidence: 0.9, rationale: '', conclusionLike: false,
+    }),
+    /WIRE_SCENARIO_NOT_FOUND|接线场景不存在/,
+  )
+  assert.ok(!pkg.skillTemplates.some((s) => s.id === 'SKL-TST-EXP-2'), '失败接线不得留下模板')
+})
+
+test('E1-3 materialize 接线失败回滚：模板与 skillRefs 均不落盘', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-skl-wire-fail',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O2',
+      targetKind: 'SkillTemplate',
+      name: '坏接线模板',
+      payload: { id: 'SKL-TST-WIRE-FAIL', scenarioId: 'SCN-GHOST', weights: {} },
+      confidence: 0.9,
+      rationale: '',
+      status: 'approved',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    }], null, 2))
+    const r = store.materialize(dir, ['dc-skl-wire-fail'])
+    assert.equal(r.applied.length, 0)
+    assert.ok(r.skipped.some((s) => /接线场景不存在/.test(s.reason)))
+    const pkg = loadPackage(dir)
+    assert.ok(!pkg.skillTemplates.some((s) => s.id === 'SKL-TST-WIRE-FAIL'))
+    const refs = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(!refs.includes('SKL-TST-WIRE-FAIL'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('E1-3 多场景无 scenarioId 不猜接线；单场景缺省接线', () => {
+  const base = minimalPkg()
+  const sc2 = JSON.parse(JSON.stringify(base.scenarios[0]))
+  sc2.id = 'SCN-TST-2'
+  sc2.name = '第二场景'
+  const multi = minimalPkg({ scenarios: [base.scenarios[0], sc2] })
+  applyDraftToPackage(multi, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '无目标',
+    payload: { id: 'SKL-TST-EXP-M', weights: {} },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  for (const sc of multi.scenarios) {
+    const refs = sc.pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(!refs.includes('SKL-TST-EXP-M'), `多场景无 scenarioId 不应接线到 ${sc.id}`)
+  }
+  const single = minimalPkg()
+  applyDraftToPackage(single, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '单场景缺省',
+    payload: { id: 'SKL-TST-EXP-S', weights: {} },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  const refs = single.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(refs.includes('SKL-TST-EXP-S'))
+})
+
 test('字典 ID 自动生成加盐：同名 CJK 字典同批可共存；显式 payload.id 撞车仍拒绝', async () => {
   const { ws, dir, root } = mkWorkspaceWithPkg()
   try {

@@ -614,6 +614,8 @@ export function abstractSkillDrafts(
       name: `${scenario?.name ?? rep.signature.scenarioId}经验模板`,
       payload: {
         id: `SKL-${domainTag}-EXP-${slug}`,
+        // E1-3：物化时按此接线 pipeline.skillRefs（专家 skills 收口）
+        scenarioId: rep.signature.scenarioId,
         weights,
         steps: ['候选 {candidateId}', ...focus],
         outputTemplate: '摘要：{riskScore}',
