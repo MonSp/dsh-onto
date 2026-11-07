@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { isSafeRunId } from './runstore.js'
 import { isInsideDir, PackageStoreError } from './store.js'
-import type { OntologyPackage } from './types.js'
+import type { DraftItem, OntologyPackage } from './types.js'
 
 export const EXPERIENCES_DIR = 'experiences'
 
@@ -498,6 +498,72 @@ export function requiresHumanReview(rev: DiffRevision): boolean {
 /** unknown 条目列入本轮 reviewFocus（§5.2 人工闸）。 */
 export function reviewFocusFrom(rev: DiffRevision): string[] {
   return rev.diff.unknown.map((u) => u.item)
+}
+
+/* ───────────────────────── 抽象巩固（S6，P3-1） ───────────────────────── */
+
+export interface SkillAbstraction {
+  /** 聚簇键：packageScope + stepShape。 */
+  clusterKey: string
+  signature: TaskSignature
+  memberRunIds: string[]
+  /** 待入草案队列的 SkillTemplate 草案（含 weights 对齐包内规则；provenance.runId = 代表轨迹）。 */
+  draft: DraftItem
+}
+
+/**
+ * 自动技能抽象（S6）：成功且非反例、未判误迁移的经验按 packageScope+stepShape 聚簇；
+ * 簇员 ≥ minCluster（默认 2）→ 产出 SkillTemplate 草案（weights 对齐包内打分规则，
+ * steps 含 reviewFocus 沉淀）。草案只入队列（pending），物化必经人审——自动化止步于草案。
+ */
+export function abstractSkillDrafts(
+  root: string,
+  input: { pkg: OntologyPackage; minCluster?: number },
+): SkillAbstraction[] {
+  const { pkg } = input
+  const minCluster = input.minCluster ?? 2
+  const scope = `${pkg.meta.name}@${pkg.meta.version}`
+  const pool = listExperienceNotes(root).filter(
+    (n) =>
+      n.signature.packageScope === scope &&
+      n.outcome === 'success' &&
+      !n.counterexample &&
+      n.misTransfer?.judged !== true,
+  )
+  const clusters = new Map<string, ExperienceNote[]>()
+  for (const n of pool) {
+    const key = `${n.signature.packageScope}|${n.signature.stepShape}`
+    const arr = clusters.get(key) ?? []
+    arr.push(n)
+    clusters.set(key, arr)
+  }
+  const out: SkillAbstraction[] = []
+  for (const [clusterKey, members] of clusters) {
+    if (members.length < minCluster) continue
+    // 代表轨迹 = 最新一条（签名与簇一致）
+    const rep = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))[0]
+    const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
+    const slug = rep.signature.scenarioId.replace(/^SCN-[A-Z0-9]+-/, '') || 'EXP'
+    const domainTag = pkg.meta.domain || 'EXP'
+    const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))]
+    const weights: Record<string, number> = {}
+    for (const r of pkg.scoreRules) weights[r.id] = r.weight
+    const draft: DraftItem = {
+      layer: 'O2',
+      targetKind: 'SkillTemplate',
+      name: `${scenario?.name ?? rep.signature.scenarioId}经验模板`,
+      payload: {
+        id: `SKL-${domainTag}-EXP-${slug}`,
+        weights,
+        steps: ['候选 {candidateId}', ...focus],
+        outputTemplate: '摘要：{riskScore}',
+      },
+      confidence: 0.8,
+      rationale: `经验闭环抽象：${members.length} 条成功轨迹（${members.map((m) => m.runId).join(', ')}）`,
+    }
+    out.push({ clusterKey, signature: rep.signature, memberRunIds: members.map((m) => m.runId), draft })
+  }
+  return out
 }
 
 /* ───────────────────────── 人审回填（S5.4） ───────────────────────── */

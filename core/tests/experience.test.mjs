@@ -17,6 +17,7 @@ import {
   requiresHumanReview,
   reviewFocusFrom,
   reviewExperienceNote,
+  abstractSkillDrafts,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -370,6 +371,48 @@ test('人审回填闸门：misTransfer.by 空 → INVALID_ARGS；非法 outcome 
       () => reviewExperienceNote(root, 'run-rv2', { misTransfer: { judged: 'yes', by: '张三' } }),
       /INVALID_ARGS|boolean/,
     )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── P3-1 自动技能抽象 ── */
+
+test('abstractSkillDrafts：成功同构聚簇 ≥2 → SkillTemplate 草案；反例/误迁移不参聚', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = minimalPkg()
+    // 两条成功同构
+    saveExperienceNote(root, makeNote({ runId: 'run-s1', savedAt: '2026-11-07T01:00:00.000Z', reviewFocus: ['f1'] }))
+    saveExperienceNote(root, makeNote({ runId: 'run-s2', savedAt: '2026-11-07T02:00:00.000Z' }))
+    // 反例与误迁移不参聚
+    saveExperienceNote(root, makeNote({ runId: 'run-x1', counterexample: true }))
+    saveExperienceNote(root, makeNote({ runId: 'run-m1', misTransfer: { judged: true, by: '张三', note: '' } }))
+    const abs = abstractSkillDrafts(root, { pkg })
+    assert.equal(abs.length, 1)
+    const a = abs[0]
+    assert.equal(a.memberRunIds.length, 2)
+    assert.ok(a.memberRunIds.includes('run-s1') && a.memberRunIds.includes('run-s2'))
+    assert.equal(a.draft.targetKind, 'SkillTemplate')
+    assert.equal(a.draft.layer, 'O2')
+    assert.equal(a.draft.payload.id, 'SKL-TST-EXP-1')
+    assert.deepEqual(a.draft.payload.weights, { 'RULE-TST-S1': 1 })
+    assert.ok(a.draft.payload.steps.includes('候选 {candidateId}'))
+    assert.ok(a.draft.payload.steps.includes('f1'))
+    assert.equal(a.draft.confidence, 0.8)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('abstractSkillDrafts：簇员 < minCluster 不出草案', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-lonely' }))
+    const abs = abstractSkillDrafts(root, { pkg: minimalPkg() })
+    assert.equal(abs.length, 0)
+    const abs2 = abstractSkillDrafts(root, { pkg: minimalPkg(), minCluster: 1 })
+    assert.equal(abs2.length, 1)
   } finally {
     rmWorkspace(root)
   }

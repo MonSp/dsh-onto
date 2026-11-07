@@ -85,7 +85,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P2-2 | P2 | agent 工具 `recall_experience` 等（过三出口） | NL 剧本 N4 全绿 | **完成**（轮 8） |
 | P2-3 | P2 | `DraftProvenance.runId` + 草案溯源人审面 | 知识库队列可见 runId | **完成**（轮 9） |
 | P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | **完成**（轮 10，P2 收官） |
-| P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | 待办 |
+| P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | **完成**（轮 11） |
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | 待办 |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | 待办 |
 
@@ -115,7 +115,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 10 | 2026-11-07 | P2-4 med 多域验证 | ✓ 139/139 + MULTI-DOMAIN PASS | ✓ med 场景+六 tab | ✓ N1–N3（med 域） | 无 | 本轮提交 |
+| 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | 本轮提交 |
+| 10 | 2026-11-07 | P2-4 med 多域验证 | ✓ 139/139 + MULTI-DOMAIN PASS | ✓ med 场景+六 tab | ✓ N1–N3（med 域） | 无 | 29a232a |
 | 9 | 2026-11-07 | P2-3 DraftProvenance.runId | ✓ core 139/139 + dump 2/2 | ✓ runId 可见+B2B3 | ✓ N1–N3 | 无 | 920e258 |
 | 8 | 2026-11-06 | P2-2 recall_experience 工具 | ✓ backend 125/125 + dump 2/2 | ✓ 六 tab+B2B3 | ✓ N4 全绿 | 无 | 15e8350 |
 | 7 | 2026-11-06 | P2-1 人审回填+经验视图 | ✓ core 138/138 + backend 124/124 + dump 2/2 | ✓ 六 tab+回填链路 | ✓ N1–N3 | 无 | e1a4344 |
@@ -142,6 +143,7 @@ med（run-fd0a7117，2 候选）装配断言全过；同域复用命中 score=1.
 |---|---|---|---|
 | D1 | P2 | `run_scenario` 的 `datasetPath` 传相对路径（`examples/aml-run.json`）报「无法读取」；绝对路径被围栏拒（设计如此）。会话 cwd 与平台 cwd 不一致时相对路径无处解析 | 待拍板：相对路径 baseDir 改为会话工作区，或错误提示直接给内联示例 |
 | D2 | P2 | dev-web 在 MiMo 运行时 node 下启动失败（Electron V8 指纹被拒） | 已修协议：T4 前置原生 Node + pnpm 路径 |
+| D3 | P2 | `exp abstract` 的 knowledge 队列 root 与 backend dataDir 不一致（workspace/knowledge vs dataDir/knowledge），草案入错队列 | 已修：abstract 按 workspace 布局派生 dataDir=dirname(workspace)；输出 knowledgeRoot 供核对 |
 
 ## 六、拍板记录
 

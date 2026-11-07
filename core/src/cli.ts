@@ -24,11 +24,13 @@
  *                         [--reason R] [--counterexample] [--reused-from <runId>] [--review-focus a,b]
  *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
  *   dsh-onto exp list
+ *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N]
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
 import {
+  abstractSkillDrafts,
   buildDiffTable,
   buildTaskSignature,
   listExperienceNotes,
@@ -150,7 +152,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   run <versionDir> <scenarioId> --data run.json [--out result.json]
   runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
   knowledge upload|parse|queue|review|materialize
-  exp recall|annotate|diff|list
+  exp recall|annotate|diff|list|abstract
 通用: --root <workspaceDir>（默认 ./workspace）
 `
 
@@ -477,6 +479,28 @@ function cmdExp(sub: string | undefined, args: Args): void {
           savedAt: n.savedAt,
         })),
       })
+      return
+    }
+    case 'abstract': {
+      const dir = flagStr(args, 'dir')
+      const pkg = loadPackage(dir)
+      const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
+      const abs = abstractSkillDrafts(root, { pkg, minCluster })
+      // knowledge 队列在 dataDir/knowledge（backend 口径）；--root 是 workspace 根（experiences 在此）。
+      // workspace 布局下 dataDir = dirname(workspace)；否则同根。
+      const base = basename(root)
+      const dataDir = base === 'workspace' ? dirname(root) : root
+      const knowledge = new KnowledgeStore(dataDir)
+      const queued: Array<{ id: string; name: string; runId: string; members: number }> = []
+      for (const a of abs) {
+        const c = knowledge.addDraft({
+          packageId: `${pkg.meta.name}@${pkg.meta.version}`,
+          item: a.draft,
+          provenance: { runId: a.memberRunIds[0] },
+        })
+        queued.push({ id: c.id, name: c.name, runId: a.memberRunIds[0], members: a.memberRunIds.length })
+      }
+      print({ queued, clusters: abs.length, knowledgeRoot: dataDir, note: '草案已入队（pending），物化必经人审' })
       return
     }
     default:
