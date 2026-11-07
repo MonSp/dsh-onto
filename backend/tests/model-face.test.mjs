@@ -49,6 +49,7 @@ const NEW_TOOLS = [
   'create_package',
   'save_skeleton',
   'recall_experience',
+  'annotate_experience',
 ]
 
 function mkAmlWorkspace({ derived = false } = {}) {
@@ -82,7 +83,7 @@ function expectCode(fn, code) {
 
 test('I5：全部建模/专家工具登记进 ONTOOL_NAMES（guard 白名单）', () => {
   for (const t of NEW_TOOLS) assert.ok(ONTOOL_NAMES.has(t), `${t} 必须在 ONTOOL_NAMES`)
-  assert.ok(ONTOOL_NAMES.size >= 19)
+  assert.ok(ONTOOL_NAMES.size >= 20)
 })
 
 /* ── 描述符手工表同步（AGENTS.md：新增 @Remote 必须登记） ─────────────── */

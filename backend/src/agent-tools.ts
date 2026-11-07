@@ -25,14 +25,19 @@ import {
   isInsideDir,
   isValidId,
   isSafeRelPath,
+  loadExperienceNote,
   loadPackage,
   loadRunRecord,
   loadRunRedlines,
   retrieveSimilar,
+  reviewExperienceNote,
   runScenario,
+  saveExperienceNote,
   saveRunRecord,
   verifyDerived,
   type DraftItem,
+  type ExperienceNote,
+  type ExperienceOutcome,
   type KnowledgeSourceRecord,
   type ModelGraph,
   type OntologyPackage,
@@ -704,6 +709,153 @@ export function renderRecallText(v: {
   return [`命中 ${v.hits.length} 条：`, ...lines, v.advice].join('\n')
 }
 
+/**
+ * annotate_experience 纯函数（experience-loop P4-3 / S5.4）：
+ * 人审回填 + 首次标注共用——note 已存在走 reviewExperienceNote，不存在则从 RunRecord 新建。
+ * humanApproved 人审契约：agent 不得自行标注；误迁移 by 必须非空人工身份（模型不自评）。
+ * 审计未过不得标 success（除非 counterexample），与 CLI `exp annotate` 同闸。
+ */
+export function annotateExperienceForTool(
+  ws: PackageWorkspace,
+  args: {
+    runId: string
+    outcome?: ExperienceOutcome
+    outcomeReason?: string
+    misTransfer?: { judged: boolean; by: string; note?: string }
+    reviewFocus?: string[]
+    counterexample?: boolean
+    humanApproved?: unknown
+  },
+): {
+  runId: string
+  outcome: ExperienceOutcome
+  counterexample: boolean
+  misTransferJudged: boolean
+  misTransferBy?: string
+  reviewFocus: string[]
+  created: boolean
+  humanReviewRequired: true
+} {
+  assertHumanApproved(args.humanApproved, '标注经验')
+  const hasPatch =
+    args.outcome !== undefined ||
+    args.outcomeReason !== undefined ||
+    args.misTransfer !== undefined ||
+    args.reviewFocus !== undefined
+  if (!hasPatch) {
+    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / misTransfer / reviewFocus 之一')
+  }
+  if (args.misTransfer !== undefined) {
+    if (typeof args.misTransfer.judged !== 'boolean') {
+      throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
+    }
+    if (typeof args.misTransfer.by !== 'string' || args.misTransfer.by.trim() === '') {
+      throw new AgentToolError('INVALID_ARGS', 'misTransfer.by 必须为非空人工身份（误迁移只由人判）')
+    }
+  }
+
+  let existing: ExperienceNote | null = null
+  try {
+    existing = loadExperienceNote(ws.root, args.runId)
+  } catch (e) {
+    if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') existing = null
+    else throw e
+  }
+
+  if (existing !== null) {
+    const note = reviewExperienceNote(ws.root, args.runId, {
+      outcome: args.outcome,
+      outcomeReason: args.outcomeReason,
+      misTransfer: args.misTransfer,
+      reviewFocus: args.reviewFocus,
+    })
+    return projectAnnotateReceipt(note, false)
+  }
+
+  // 新建路径：必须带 outcome；签名从 RunRecord + 包机械导出（同 CLI exp annotate）。
+  if (args.outcome === undefined) {
+    throw new AgentToolError('INVALID_ARGS', '经验记录不存在：创建时必须提供 outcome')
+  }
+  const rec = loadRunRecord(ws.root, args.runId)
+  const counterexample = args.counterexample === true
+  if (args.outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      '审计未通过：不得标注 success（请用 failure/partial，或显式 counterexample）',
+    )
+  }
+  const pkg = loadPackage(ws.versionDir(rec.package.name, rec.package.version))
+  const signature = buildTaskSignature({
+    pkg,
+    scenarioId: rec.scenarioId,
+    datasetSummary: rec.datasetSummary,
+  })
+  const note: ExperienceNote = {
+    runId: args.runId,
+    signature,
+    outcome: args.outcome,
+    outcomeReason: args.outcomeReason,
+    skillRefsUsed: signature.skillRefs,
+    counterexample,
+    misTransfer:
+      args.misTransfer !== undefined
+        ? { judged: args.misTransfer.judged, by: args.misTransfer.by.trim(), note: args.misTransfer.note ?? '' }
+        : undefined,
+    reviewFocus: args.reviewFocus !== undefined ? [...args.reviewFocus] : undefined,
+    savedAt: new Date().toISOString(),
+  }
+  saveExperienceNote(ws.root, note)
+  return projectAnnotateReceipt(note, true)
+}
+
+function projectAnnotateReceipt(
+  note: ExperienceNote,
+  created: boolean,
+): {
+  runId: string
+  outcome: ExperienceOutcome
+  counterexample: boolean
+  misTransferJudged: boolean
+  misTransferBy?: string
+  reviewFocus: string[]
+  created: boolean
+  humanReviewRequired: true
+} {
+  return {
+    runId: note.runId,
+    outcome: note.outcome,
+    counterexample: note.counterexample,
+    misTransferJudged: note.misTransfer?.judged ?? false,
+    misTransferBy: note.misTransfer?.by,
+    reviewFocus: note.reviewFocus ?? [],
+    created,
+    humanReviewRequired: true,
+  }
+}
+
+/** annotate_experience 渲染（N5）：只回结构位回执，无自由流程、无服务端路径。 */
+export function renderAnnotateText(v: {
+  runId: string
+  outcome: string
+  counterexample: boolean
+  misTransferJudged: boolean
+  misTransferBy?: string
+  reviewFocus: string[]
+  created: boolean
+}): string {
+  const lines = [
+    `已标注 ${v.runId} outcome=${v.outcome} 反例=${v.counterexample ? '是' : '否'}（${v.created ? '新建' : '回填'}）`,
+  ]
+  if (v.misTransferJudged) {
+    lines.push(`误迁移 judged=true by=${v.misTransferBy ?? ''}`)
+  }
+  if (v.reviewFocus.length > 0) {
+    lines.push(`reviewFocus: ${v.reviewFocus.join(', ')}`)
+  }
+  lines.push('humanReviewRequired=true（认定在人工）')
+  return lines.join('\n')
+}
+
 /** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
 export function renderGraphSummary(g: ModelGraph): string {
   const draftCount = g.nodes.filter((n) => n.draft).length
@@ -1218,6 +1370,85 @@ export function apply(ctx: Context): void {
         },
         [],
         (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'annotate_experience',
+      description:
+        '标注/回填一条经验记录（ExperienceNote 的 outcome、误迁移、reviewFocus）。'
+        + 'humanApproved 是人审契约：仅当用户明确指示标注时传 true，agent 不得自行标注；'
+        + '误迁移只由人判（misTransfer.by 须为非空人工身份）。'
+        + 'note 不存在时按 RunRecord 新建（须带 outcome；审计未过不得标 success）；'
+        + '已存在则回填。返回结构位回执（runId/outcome/误迁移/reviewFocus），认定出口只在人工。',
+      parameters: {
+        runId: { type: 'string', required: true, description: '运行 ID（如 run-abc12345）' },
+        outcome: {
+          type: 'string',
+          enum: ['success', 'partial', 'failure', 'pending-human'],
+          description: '经验结论；新建时必填',
+        },
+        outcomeReason: { type: 'string', description: '结论理由（结构位补充，非自由流程）' },
+        misTransfer: {
+          type: 'json',
+          description: '误迁移判定 {judged, by, note?}——by 必须为非空人工身份（模型不自评）',
+        },
+        reviewFocus: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '下轮检索提示的结构位条目（特征名/OBJ.attr/ruleId）',
+        },
+        counterexample: { type: 'boolean', description: '反例标记（仅新建路径）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示标注后代执行传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runId: { type: 'string', required: true },
+            outcome: { type: 'string', required: true },
+            counterexample: { type: 'boolean', required: true },
+            misTransferJudged: { type: 'boolean', required: true },
+            reviewFocus: { type: 'array', required: true, items: { type: 'string' } },
+            created: { type: 'boolean', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => textBlock(renderAnnotateText(value as never)),
+      },
+      execute: toolExecute(
+        (raw: {
+          runId: string
+          humanApproved: boolean
+          outcome?: ExperienceOutcome
+          outcomeReason?: string
+          misTransfer?: unknown
+          reviewFocus?: string[]
+          counterexample?: boolean
+        }) => {
+          const args: Parameters<typeof annotateExperienceForTool>[1] = {
+            runId: raw.runId,
+            humanApproved: raw.humanApproved,
+            outcome: raw.outcome,
+            outcomeReason: raw.outcomeReason,
+            misTransfer:
+              raw.misTransfer !== undefined && raw.misTransfer !== null
+                ? (raw.misTransfer as { judged: boolean; by: string; note?: string })
+                : undefined,
+            reviewFocus: raw.reviewFocus,
+            counterexample: raw.counterexample,
+          }
+          return toolOut(annotateExperienceForTool(ws, args))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
       ),
     }),
   )

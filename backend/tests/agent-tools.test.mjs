@@ -30,6 +30,8 @@ import {
   loadToolPackage,
   projectPackageList,
   renderRecallText,
+  renderAnnotateText,
+  annotateExperienceForTool,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -46,10 +48,14 @@ import {
   HeuristicLlm,
   KnowledgeStore,
   PackageWorkspace,
+  buildRunRecord,
+  derivePackage,
   dumpYaml,
+  loadExperienceNote,
   loadPackage,
   loadYaml,
   runScenario,
+  saveRunRecord,
   sha256Text,
 } from '@dsh-onto/core'
 
@@ -1247,4 +1253,146 @@ test('D12：datasetPath 围栏可发现性——越界报错指引内联，参�
   assert.ok(src.includes('会话工作区或外部夹具请改用 dataset 内联') || src.includes('会话工作区或外部夹具请改用 dataset 内联')
     || src.includes('外部夹具请用 dataset 内联') || src.includes('会话工作区、外部夹具请改用 dataset 内联'),
     '描述须给出内联恢复路径')
+})
+
+/* ── P4-3 annotate_experience（N5） ── */
+
+function mkAnnotateFixture({ auditPassed = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'onto-ann-'))
+  const ws = new PackageWorkspace(join(root, 'workspace'))
+  const dir = ws.versionDir('aml-analysis', '1.0.0')
+  cpSync(AML_DIR, dir, { recursive: true })
+  derivePackage(dir)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, { baseDir: REPO })
+  const result = runScenario(dir, 'SCN-AML-FIND-CLUES', dataset)
+  if (!auditPassed) {
+    result.audit = { ...result.audit, passed: false }
+  }
+  const rec = buildRunRecord({
+    package: { name: 'aml-analysis', version: '1.0.0' },
+    dataset,
+    result,
+    redlines: [],
+  })
+  saveRunRecord(ws.root, rec)
+  return { root, ws, runId: rec.runId }
+}
+
+test('annotate_experience：humanApproved 契约 + 新建/回填 + 误迁移 by 非空（N5）', () => {
+  const { root, ws, runId } = mkAnnotateFixture()
+  try {
+    // 未点头 → 人审契约拒绝
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success' }),
+      'INVALID_ARGS',
+    )
+    // 无任何 patch 字段
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // 新建：outcome=success（审计已过）
+    const created = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'success',
+      outcomeReason: '三层闭合',
+      reviewFocus: ['listHitCount'],
+      humanApproved: true,
+    })
+    assert.equal(created.created, true)
+    assert.equal(created.outcome, 'success')
+    assert.equal(created.humanReviewRequired, true)
+    assert.deepEqual(created.reviewFocus, ['listHitCount'])
+    assert.equal(created.misTransferJudged, false)
+    // 落盘可回读
+    const note = loadExperienceNote(ws.root, runId)
+    assert.equal(note.outcome, 'success')
+    assert.equal(note.signature.scenarioId, 'SCN-AML-FIND-CLUES')
+
+    // 回填：误迁移（by 非空人工身份）
+    const patched = annotateExperienceForTool(ws, {
+      runId,
+      misTransfer: { judged: true, by: '张三', note: '复用到异域' },
+      humanApproved: true,
+    })
+    assert.equal(patched.created, false)
+    assert.equal(patched.misTransferJudged, true)
+    assert.equal(patched.misTransferBy, '张三')
+
+    // 误迁移 by 空白 → 拒（模型不自评 / 必须人工身份）
+    expectCode(
+      () =>
+        annotateExperienceForTool(ws, {
+          runId,
+          misTransfer: { judged: true, by: '  ' },
+          humanApproved: true,
+        }),
+      'INVALID_ARGS',
+    )
+
+    // 新建缺 outcome → 拒
+    const second = mkAnnotateFixture()
+    try {
+      expectCode(
+        () => annotateExperienceForTool(second.ws, { runId: second.runId, humanApproved: true }),
+        'INVALID_ARGS',
+      )
+    } finally {
+      rmSync(second.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('annotate_experience：审计未过不得标 success（除非 counterexample）', () => {
+  const { root, ws, runId } = mkAnnotateFixture({ auditPassed: false })
+  try {
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // failure 可过
+    const failed = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'failure',
+      humanApproved: true,
+    })
+    assert.equal(failed.outcome, 'failure')
+    // counterexample 可过 success
+    const second = mkAnnotateFixture({ auditPassed: false })
+    try {
+      const counter = annotateExperienceForTool(second.ws, {
+        runId: second.runId,
+        outcome: 'success',
+        counterexample: true,
+        humanApproved: true,
+      })
+      assert.equal(counter.counterexample, true)
+    } finally {
+      rmSync(second.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('annotate_experience 渲染（N5）：结构位回执、无自由流程、humanReviewRequired 在场', () => {
+  const text = renderAnnotateText({
+    runId: 'run-abc12345',
+    outcome: 'success',
+    counterexample: false,
+    misTransferJudged: true,
+    misTransferBy: '张三',
+    reviewFocus: ['listHitCount'],
+    created: false,
+  })
+  assert.match(text, /run-abc12345/)
+  assert.match(text, /outcome=success/)
+  assert.match(text, /回填/)
+  assert.match(text, /误迁移 judged=true by=张三/)
+  assert.match(text, /reviewFocus: listHitCount/)
+  assert.match(text, /humanReviewRequired=true/)
+  // 无自由流程描述、无服务端路径
+  assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
 })
