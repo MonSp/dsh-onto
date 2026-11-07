@@ -364,6 +364,10 @@ export class KnowledgeStore {
     }
     const bad = validateDraftItem(input.item)
     if (bad) throw new KnowledgeError('BAD_DRAFT', `draft invalid: ${bad}`)
+    // 溯源轻校验（experience-loop S4.4）：runId 若给必须是非空字符串
+    if (input.provenance?.runId !== undefined && (typeof input.provenance.runId !== 'string' || input.provenance.runId === '')) {
+      throw new KnowledgeError('BAD_DRAFT', 'provenance.runId must be a non-empty string')
+    }
     const item = input.item
     const nm = item.name
     const key =

@@ -1207,7 +1207,7 @@ window.__ModuleLoader__.load({
           layer: 'O1' | 'O2' | 'O3'
           name: string
           draft: boolean
-          provenance?: { turnId?: string; sourceId?: string }
+          provenance?: { turnId?: string; sourceId?: string; runId?: string }
           issueLevel?: 'error' | 'warn' | 'info'
           forcedReview?: boolean
           runHit?: boolean
@@ -1458,8 +1458,8 @@ window.__ModuleLoader__.load({
             ),
             kv(t('name'), node.name),
           ]
-          if (node.provenance?.turnId || node.provenance?.sourceId) {
-            rows.push(kv(t('prov'), [node.provenance.turnId, node.provenance.sourceId].filter(Boolean).join(' · ')))
+          if (node.provenance?.turnId || node.provenance?.sourceId || node.provenance?.runId) {
+            rows.push(kv(t('prov'), [node.provenance.turnId, node.provenance.sourceId, node.provenance.runId].filter(Boolean).join(' · ')))
           }
           if (found) {
             const el = found.el
@@ -2162,7 +2162,7 @@ window.__ModuleLoader__.load({
                       h(
                         'div',
                         { key: `pd-${i}`, className: 'ow-note' },
-                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}`,
+                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}${typeof (d.provenance as { runId?: string } | undefined)?.runId === 'string' ? ` · run:${(d.provenance as { runId: string }).runId}` : ''}`,
                       )),
                     pendingDrafts.length > 40
                       ? h('span', { className: 'ow-note' }, `… +${pendingDrafts.length - 40}`)
