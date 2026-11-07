@@ -14,9 +14,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   DERIVED_FILES,
+  buildDiffTable,
+  buildRunRecord,
+  buildTaskSignature,
   loadPackage,
   loadYaml,
+  retrieveSimilar,
   runScenario,
+  saveRunRecord,
   type OntologyPackage,
   type ScenarioRunResult,
 } from '@dsh-onto/core'
@@ -25,7 +30,9 @@ import {
   assertRunContract,
   collectPhrases,
   enforceOutputPolicy,
+  recallPhrases,
   rememberPhrases,
+  retreatRenderText,
   toolExecute,
 } from './agent-policy.js'
 import { assertDatasetGranted, readToolContracts } from './agent-grants.js'
@@ -138,6 +145,59 @@ export function buildExpertProfiles(versionDir: string): { experts: ExpertProfil
   return { experts, derived: duties !== null }
 }
 
+/* ───────────────────────── E1-1：执行前经验只读提示（只提示不改分） ───────────────────────── */
+
+/** expert 包络附带的经验只读提示段（结构位投影，无自由流程）。 */
+export interface ExperienceHint {
+  coldStart: boolean
+  hits: Array<{
+    runId: string
+    score: number
+    outcome: string
+    counterexample: boolean
+    /** 下轮复核提示（人审面沉淀的结构位条目，过 value/render 闸后上墙）。 */
+    reviewFocus: string[]
+  }>
+  advice: string
+}
+
+/**
+ * 执行前结构召回（E1-1）：按 TaskSignature 检索相似经验并投影为只读提示段。
+ * 经验只提示不改分——本函数不触碰打分语义，结果仅附加到 expert 包络。
+ * 冷启动明说不硬迁移；差异含结构位变更 → 转人工话术（与 recall_experience 同口径）。
+ */
+export function experienceHintOf(input: {
+  root: string
+  pkg: OntologyPackage
+  scenarioId: string
+  datasetSummary: { objects: number; relations: number; behaviors: number; candidates: number }
+}): ExperienceHint {
+  const { root, pkg, scenarioId, datasetSummary } = input
+  const signature = buildTaskSignature({ pkg, scenarioId, datasetSummary })
+  const result = retrieveSimilar(root, {
+    signature,
+    externalRefs: pkg.meta.externalRefs,
+  })
+  const hits: ExperienceHint['hits'] = result.hits.map((h) => ({
+    runId: h.note.runId,
+    score: Number(h.score.toFixed(2)),
+    outcome: h.note.outcome,
+    counterexample: h.note.counterexample,
+    reviewFocus: h.note.reviewFocus ?? [],
+  }))
+  let advice: string
+  if (result.coldStart || hits.length === 0) {
+    advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
+  } else {
+    const draft = buildDiffTable(signature, result.hits[0].note.signature)
+    advice =
+      draft.mustChange.length > 0
+        ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
+        : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+  }
+  return { coldStart: result.coldStart && hits.length === 0, hits, advice }
+}
+
 /**
  * I7 断言：duties 与场景 pipeline 对齐，且边界不变——
  * 打分步恒 llm:forbidden、人审步恒 humanGate、toolRefs 全部落在收权清单内（越权即拒）。
@@ -240,8 +300,10 @@ export function registerExpertTools(
       name: 'invoke_expert',
       description:
         '按 duties 执行一个专家（场景执行主体）：先过派生门禁与 I7 断言（duties 对齐、打分步 llm:forbidden、'
-        + 'toolRefs 白名单越权即拒），再走与 run_scenario 相同的规则引擎契约。输出附 expert 包络'
-        + '（职责步/技能/工具白名单）；打分只在引擎，humanReviewRequired 恒 true。数据 datasetPath/dataset 二选一。',
+        + 'toolRefs 白名单越权即拒），再走与 run_scenario 相同的规则引擎契约。执行前自动按任务结构签名'
+        + '召回相似经验，输出附 expert 包络（职责步/技能/工具白名单）与 experience 只读提示段'
+        + '（coldStart/hits 含 reviewFocus/advice——经验只提示不改分）；打分只在引擎，humanReviewRequired 恒 true。'
+        + '数据 datasetPath/dataset 二选一。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
@@ -255,6 +317,7 @@ export function registerExpertTools(
           additionalProperties: true,
           properties: {
             expert: { type: 'json', required: true },
+            experience: { type: 'json', required: true },
             scenarioId: { type: 'string', required: true },
             runId: { type: 'string', required: true },
             startedAt: { type: 'string', required: true },
@@ -286,10 +349,33 @@ export function registerExpertTools(
           assertDutiesAligned(scenario, expertDuties, new Set(contracts.map((c) => c.id)))
           assertDatasetGranted(dataset, contracts)
 
+          // E1-1：执行前只读召回（经验只提示不改分——不进 runScenario、不碰 rules.ts）。
+          const experience = experienceHintOf({
+            root: ws.root,
+            pkg,
+            scenarioId: scenario.id,
+            datasetSummary: {
+              objects: dataset.objects.length,
+              relations: dataset.relations.length,
+              behaviors: dataset.behaviors?.length ?? 0,
+              candidates: dataset.candidates.length,
+            },
+          })
+
           const result = runScenario(versionDir, scenario.id, dataset)
           assertRunContract(result)
           const phrases = collectPhrases(result, scenario.outputContract.forbiddenPhrases)
           rememberPhrases(result.runId, phrases)
+          // T5 缺陷修复：专家通道同样落 RunRecord（export_audit/annotate/compare 的留痕前提）。
+          saveRunRecord(
+            ws.root,
+            buildRunRecord({
+              package: { name: pkg.meta.name, version: pkg.meta.version },
+              dataset,
+              result,
+              redlines: phrases,
+            }),
+          )
 
           const profile = buildExpertProfiles(versionDir).experts.find((e) => e.expertId === scenario.id)
           const expert = profile ?? {
@@ -303,7 +389,7 @@ export function registerExpertTools(
             humanGates: 0,
             derived: true,
           }
-          return toolOut(enforceOutputPolicy({ expert, ...result }, phrases))
+          return toolOut(enforceOutputPolicy({ expert, experience, ...result }, phrases))
         },
         [],
         (args) => redlines(args),
@@ -312,18 +398,44 @@ export function registerExpertTools(
   )
 }
 
-/** invoke_expert 渲染：expert 包络一行 + 标准运行文本。 */
+/** invoke_expert 渲染：expert 包络一行 + 经验参考段（E1-1）+ 标准运行文本；render 闸兜底。 */
 function renderInvoke(value: unknown): string {
   const v = value as {
     expert?: ExpertProfile
+    experience?: ExperienceHint
     steps?: unknown
   } & ScenarioRunResult
   const e = v.expert
   const head = e
     ? `专家 ${e.expertId}「${e.name}」· ${e.steps.length} 步 · 技能 ${e.skills.length} · 工具 ${e.tools.length} · 人审闸 ${e.humanGates}`
     : ''
+  const exp = renderExperienceSection(v.experience)
   const body = renderRunLike(v)
-  return head ? `${head}\n${body}` : body
+  const text = [head, exp, body].filter((s) => s !== '').join('\n')
+  // render 闸（P2.2）：execute 已 rememberPhrases；直调/测试路径回退命中源。
+  return retreatRenderText(text, recallPhrases(v.runId) ?? collectPhrases(v))
+}
+
+/**
+ * 经验参考段（E1-1）：只读提示上墙——冷启动明说不硬迁移；命中含 runId/score/outcome/
+ * reviewFocus 与 advice。value 闸已在 execute 覆盖本段字段；此处只做拼接。
+ */
+export function renderExperienceSection(h: ExperienceHint | undefined): string {
+  if (h === undefined) return ''
+  const lines = ['经验参考（只读提示，不参与打分）：']
+  if (h.coldStart || h.hits.length === 0) {
+    lines.push(`- ${h.advice}`)
+  } else {
+    for (const hit of h.hits) {
+      const focus = hit.reviewFocus.length > 0 ? ` 复核提示[${hit.reviewFocus.join(', ')}]` : ''
+      lines.push(
+        `- ${hit.runId} score=${hit.score.toFixed(2)} outcome=${hit.outcome} 反例=${hit.counterexample ? '是' : '否'}${focus}`,
+      )
+    }
+    lines.push(`- ${h.advice}`)
+  }
+  lines.push('humanReviewRequired=true（经验不改分，认定出口只在人工复核）')
+  return lines.join('\n')
 }
 
 /** 与 renderRunText 同要素的最小运行摘要（避免 agent-tools 循环引用）。 */

@@ -20,10 +20,15 @@ import {
 import {
   assertDutiesAligned,
   buildExpertProfiles,
+  experienceHintOf,
   readAgentDuties,
   renderExperts,
+  renderExperienceSection,
+  registerExpertTools,
 } from '../dist/agent-experts.js'
 import {
+  loadDatasetFromArgs,
+  loadToolPackage,
   renderCapabilities,
   renderDraftResult,
   renderGraphSummary,
@@ -31,13 +36,18 @@ import {
 import {
   KnowledgeStore,
   PackageWorkspace,
+  buildTaskSignature,
   derivePackage,
   loadPackage,
+  loadRunRecord,
   readManifest,
+  runScenario,
+  saveExperienceNote,
 } from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_DIR = join(REPO, 'packages', 'aml', '1.0.0')
+const AML_RUN = join(REPO, 'examples', 'aml-run.json')
 const NEW_TOOLS = [
   'get_model_graph',
   'draft_elements',
@@ -279,4 +289,157 @@ test('渲染助手全冒烟：draft/capabilities 结果可读且分层齐', () =
     rejected: [{ index: 1, reason: 'bad confidence' }],
   })
   assert.ok(text.includes('dc-1') && text.includes('拒收'))
+})
+
+/* ── E1-1：invoke_expert 执行前自动召回经验（只提示不改分） ────────────── */
+
+function mkInvokeFixture() {
+  const { root, ws, dir, knowledge } = mkAmlWorkspace({ derived: true })
+  const dataset = JSON.parse(readFileSync(AML_RUN, 'utf8'))
+  const tools = new Map()
+  const ctx = { tools: { register: (def) => void tools.set(def.name, def) } }
+  registerExpertTools(ctx, {
+    ws,
+    loadGated: (name, version) => loadToolPackage(ws, name, version),
+    redlines: () => [],
+    loadDatasetFromArgs,
+    textBlock: (text) => [{ type: 'text', text }],
+    toolOut: (v) => v,
+  })
+  return { root, ws, dir, knowledge, dataset, tools }
+}
+
+/** 打分面归一：剔除 runId/startedAt/各类 ts 等易变位，只比打分语义。 */
+function scoringFace(v) {
+  const strip = (x) => {
+    if (Array.isArray(x)) return x.map(strip)
+    if (x !== null && typeof x === 'object') {
+      const out = {}
+      for (const [k, val] of Object.entries(x)) {
+        if (k === 'ts' || k === 'runId' || k === 'startedAt') continue
+        out[k] = strip(val)
+      }
+      return out
+    }
+    return x
+  }
+  return strip({
+    scenarioId: v.scenarioId,
+    candidates: v.candidates,
+    excluded: v.excluded,
+    reviewGate: v.reviewGate,
+    humanReviewRequired: v.humanReviewRequired,
+    audit: v.audit,
+    ruleHitLog: v.ruleHitLog ?? [],
+  })
+}
+
+test('E1-1：invoke_expert 冷启动附 experience 只读提示段（不硬迁移话术）', async () => {
+  const fx = mkInvokeFixture()
+  try {
+    const invoke = fx.tools.get('invoke_expert')
+    assert.ok(invoke, 'invoke_expert 须注册')
+    const value = await invoke.execute({
+      name: 'aml-analysis',
+      version: '1.0.0',
+      scenarioId: 'SCN-AML-FIND-CLUES',
+      dataset: fx.dataset,
+    })
+    assert.equal(value.humanReviewRequired, true)
+    assert.ok(value.experience, '输出须附 experience 段')
+    assert.equal(value.experience.coldStart, true)
+    assert.match(value.experience.advice, /冷启动/)
+    assert.match(value.experience.advice, /不硬迁移/)
+    // ruleId / 证据链在场（run 契约）
+    assert.ok(value.candidates.length > 0)
+    assert.ok(value.candidates.some((c) => c.hitRuleIds.length > 0 || c.evidenceChains.length >= 0))
+    // render 含经验参考段
+    const blocks = invoke.output.render({ name: 'aml-analysis', version: '1.0.0' }, value)
+    const text = blocks.map((b) => b.text ?? '').join('\n')
+    assert.match(text, /经验参考/)
+    assert.match(text, /humanReviewRequired=true/)
+    // T5 缺陷修复：专家通道须落 RunRecord（export_audit/annotate 留痕前提）
+    const rec = loadRunRecord(fx.ws.root, value.runId)
+    assert.equal(rec.runId, value.runId)
+    assert.equal(rec.scenarioId, 'SCN-AML-FIND-CLUES')
+  } finally {
+    cleanup(fx.root)
+  }
+})
+
+test('E1-1：命中路径附 reviewFocus/advice，且打分与不召回逐字段一致', async () => {
+  const fx = mkInvokeFixture()
+  try {
+    const invoke = fx.tools.get('invoke_expert')
+    const args = {
+      name: 'aml-analysis',
+      version: '1.0.0',
+      scenarioId: 'SCN-AML-FIND-CLUES',
+      dataset: fx.dataset,
+    }
+    // 第一次：冷启动
+    const cold = await invoke.execute(args)
+    assert.equal(cold.experience.coldStart, true)
+
+    // 造一条同签名经验（含 reviewFocus），模拟上轮人审沉淀
+    const pkg = loadPackage(fx.dir)
+    const signature = buildTaskSignature({
+      pkg,
+      scenarioId: 'SCN-AML-FIND-CLUES',
+      datasetSummary: {
+        objects: fx.dataset.objects.length,
+        relations: fx.dataset.relations.length,
+        behaviors: fx.dataset.behaviors?.length ?? 0,
+        candidates: fx.dataset.candidates.length,
+      },
+    })
+    saveExperienceNote(fx.ws.root, {
+      runId: 'run-e1hit01',
+      signature,
+      outcome: 'success',
+      outcomeReason: '三层闭合',
+      skillRefsUsed: signature.skillRefs,
+      counterexample: false,
+      reviewFocus: ['listHitCount', 'OBJ-AML-ACCOUNT.balance'],
+      savedAt: new Date().toISOString(),
+    })
+
+    // 第二次：命中
+    const warm = await invoke.execute(args)
+    assert.equal(warm.experience.coldStart, false)
+    assert.ok(warm.experience.hits.length > 0, '同签名须命中')
+    const hit = warm.experience.hits[0]
+    assert.equal(hit.runId, 'run-e1hit01')
+    assert.ok(hit.reviewFocus.includes('listHitCount'), 'hits 须含 reviewFocus')
+    assert.ok(warm.experience.advice.length > 0, 'advice 在场')
+    assert.equal(warm.humanReviewRequired, true)
+
+    // 打分与不召回逐字段一致（经验只提示不改分）
+    assert.deepEqual(scoringFace(warm), scoringFace(cold))
+
+    // render 命中路径含复核提示
+    const blocks = invoke.output.render(args, warm)
+    const text = blocks.map((b) => b.text ?? '').join('\n')
+    assert.match(text, /run-e1hit01/)
+    assert.match(text, /复核提示/)
+    assert.match(text, /listHitCount/)
+  } finally {
+    cleanup(fx.root)
+  }
+})
+
+test('E1-1 源断言：召回只附包络不进引擎，experience 过 value/render 闸', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const hintIdx = src.indexOf('experienceHintOf(')
+  const runIdx = src.indexOf('runScenario(versionDir')
+  assert.ok(hintIdx > 0 && runIdx > hintIdx, '执行前召回（hint 在 runScenario 之前）')
+  assert.ok(
+    src.includes('{ expert, experience, ...result }'),
+    'experience 只随包络附加，不参与 runScenario 入参',
+  )
+  assert.ok(src.includes('enforceOutputPolicy({ expert, experience, ...result }'), 'experience 须过 value 闸')
+  assert.ok(src.includes('retreatRenderText'), 'render 须挂 retreatRenderText 兜底')
+  // 打分语义不碰：rules.ts 不得引用 experience
+  const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
+  assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
 })
