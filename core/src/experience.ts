@@ -252,10 +252,56 @@ function sameArray(a: readonly string[], b: readonly string[]): boolean {
 const CROSS_SCOPE_FACTOR = 0.5
 
 /**
+ * 字段级 signature 新旧对照（P4-5）：命中理由不只 Jaccard——
+ * 逐字段给出「同 / 源→新 / 集合增删」，结构位、可回指、无自由流程。
+ * 与 buildDiffTable 同源比对口径；digest 同构时全字段为「同」。
+ */
+export function signatureFieldReasons(query: TaskSignature, source: TaskSignature): string[] {
+  const out: string[] = []
+  const eq = (label: string, a: string, b: string): void => {
+    out.push(a === b ? `${label} 同（${a}）` : `${label} 源=${a} → 新=${b}`)
+  }
+  eq('scenarioId', source.scenarioId, query.scenarioId)
+  eq('packageScope', source.packageScope, query.packageScope)
+  eq('dataBand', source.dataBand, query.dataBand)
+  if (query.stepShape === source.stepShape) {
+    out.push('stepShape 同')
+  } else {
+    out.push(`stepShape 源≠新（源=${source.stepShape} → 新=${query.stepShape}）`)
+  }
+  if (query.goalClass === source.goalClass) {
+    out.push('goalClass 同')
+  } else {
+    out.push(`goalClass 源=「${source.goalClass}」→ 新=「${query.goalClass}」`)
+  }
+  const rules = diffStrSets(query.ruleRefs, source.ruleRefs)
+  out.push(
+    `ruleRefs 共有${rules.shared.length}/新独有${rules.onlyQ.length}/源独有${rules.onlyS.length}`
+      + (rules.onlyQ.length > 0 || rules.onlyS.length > 0
+        ? `（新:${rules.onlyQ.join(',') || '—'} 源:${rules.onlyS.join(',') || '—'}）`
+        : ''),
+  )
+  const skills = diffStrSets(query.skillRefs, source.skillRefs)
+  out.push(
+    `skillRefs 共有${skills.shared.length}/新独有${skills.onlyQ.length}/源独有${skills.onlyS.length}`
+      + (skills.onlyQ.length > 0 || skills.onlyS.length > 0
+        ? `（新:${skills.onlyQ.join(',') || '—'} 源:${skills.onlyS.join(',') || '—'}）`
+        : ''),
+  )
+  if (sameStrArray(query.inputShape, source.inputShape)) {
+    out.push(`inputShape 同（${query.inputShape.join(',') || '—'}）`)
+  } else {
+    out.push(`inputShape 源=[${source.inputShape.join(',') || '—'}] → 新=[${query.inputShape.join(',') || '—'}]`)
+  }
+  return out
+}
+
+/**
  * 结构检索：纯字段匹配（无向量）。打分（初始权重，验收时校准）：
  * 同 scenarioId +0.4｜stepShape 一致 +0.2｜ruleRefs∪skillRefs Jaccard +0.2×jac｜
  * inputShape 一致 +0.1｜dataBand 一致 +0.1；原始分 ≥ 阈值（默认 0.6）→ top-k 命中，
  * 否则冷启动。跨包（externalRefs 声明内）按原始分过阈，展示分 ×0.5 仅降权排序。
+ * 命中 reasons 附字段级 signature 新旧对照（P4-5），不止 Jaccard 数字。
  */
 export function retrieveSimilar(
   root: string,
@@ -279,7 +325,17 @@ export function retrieveSimilar(
   // digest 精确同构短路
   const digestMatch = pool.find((n) => n.signature.digest === q.digest)
   if (digestMatch) {
-    return { hits: [{ note: digestMatch, score: 1, reasons: ['digest 同构'] }], coldStart: false, digestMatch }
+    return {
+      hits: [
+        {
+          note: digestMatch,
+          score: 1,
+          reasons: ['digest 同构', ...signatureFieldReasons(q, digestMatch.signature)],
+        },
+      ],
+      coldStart: false,
+      digestMatch,
+    }
   }
 
   const hits: RetrievalHit[] = []
@@ -319,6 +375,8 @@ export function retrieveSimilar(
         score *= CROSS_SCOPE_FACTOR
         reasons.push(`跨包降权 ×${CROSS_SCOPE_FACTOR}`)
       }
+      // P4-5：命中理由附字段级 signature 新旧对照（不止 Jaccard 数字）
+      reasons.push(...signatureFieldReasons(q, s))
       hits.push({ note, score, reasons })
     }
   }

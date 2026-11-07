@@ -7,7 +7,7 @@ updated: 2026-11-07
 # 经验闭环（Experience Loop）：长在本体基座上的运行/学习层
 
 > 一句话：**本体提供类比的坐标系与验证的红线，经验闭环提供本体的演化动力。**
-> 本文是实施方案（delivered，P1–P3 三期 13 片全部落地）：在 dsh-onto 上叠加一个运行/学习层，不新建独立 agent 系统，
+> 本文是实施方案（delivered，P1–P4 全部切片落地）：在 dsh-onto 上叠加一个运行/学习层，不新建独立 agent 系统，
 > 不破坏「判定在规则引擎，认定在人工」四条产品纪律（docs/architecture.md §1）。
 
 ## [S1] 缺口与目标
@@ -169,6 +169,7 @@ interface ExperienceNote {
   全量执行、不类比、不硬迁移（「低置信度不执行」的检索侧形态）。
   跨包（声明内）按原始分过阈，**展示分 ×0.5 仅降权排序**——否则满分 0.5 永远过不了阈值，跨包检索形同虚设。
 - **短路**：`digest` 相同 → 直接复用上轮 DiffTable，跳过差异修正。
+- **命中证据（P4-5）**：`reasons` 含字段级 signature 新旧对照（scenarioId/packageScope/dataBand/stepShape/goalClass/ruleRefs/skillRefs/inputShape 的「同 / 源→新 / 集合增删」），不止 Jaccard 数字；仍只回结构位，无自由流程。
 
 ### [S5.2] 差异表与差异修正
 
@@ -230,10 +231,11 @@ interface ExperienceNote {
 | **P1 MVP** | experience.ts（签名/检索/差异表/Note）+ 差异修正双路 + 闸门复用 + CLI `exp` | aml 域离线跑通，指标基线 | **达成**（轮 1–6） |
 | **P2** | 人审回填（misTransfer/reviewFocus）+ workbench 经验视图 + agent 工具面（过 tool-face-policy）+ med 包多域验证 | 两域指标，人审闭环 | **达成**（轮 7–10） |
 | **P3** | 自动技能抽象草案 + 反例利用 + 压缩/遗忘 | 巩固产物进知识库人审流 | **达成**（轮 11–13） |
+| **P4** | 打磨：D1 方案 B、annotate_experience、tax 第三域、recall 字段级证据链 | P4 backlog 清空 | **达成**（轮 14–18） |
 
-**交付记录（2026-11-07）**：P1+P2+P3 三期 13 片全部落地并经真实浏览器 + 真实 NL 对话验证；
-验收基准三轮（冷启动/复用+delta/不硬迁）与 MULTI-DOMAIN PASS 均过；P4（打磨与增强）见
-`docs/compose/notes/experience-loop-iteration-plan.md` §三。
+**交付记录（2026-11–07）**：P1–P4 全部切片落地并经真实浏览器 + 真实 NL 对话验证；
+验收基准三轮（冷启动/复用+delta/不硬迁）与三域 MULTI-DOMAIN PASS 均过；
+backlog 见 `docs/compose/notes/experience-loop-iteration-plan.md` §三（已清空）。
 
 **指标**（P1 起统计，P2 起定基线）：首次成功率、旧经验复用率（`reusedFrom` 非空占比）、
 离线完成率、误迁移率、人工介入率（forcedReview + unknown 非空占比）、

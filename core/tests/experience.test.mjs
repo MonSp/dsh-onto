@@ -11,6 +11,7 @@ import {
   listExperienceNotes,
   experiencesDir,
   retrieveSimilar,
+  signatureFieldReasons,
   buildDiffTable,
   heuristicRevise,
   reviseDiff,
@@ -188,12 +189,38 @@ test('检索：digest 同构短路', () => {
     assert.equal(r.coldStart, false)
     assert.equal(r.digestMatch.runId, 'run-d1')
     assert.equal(r.hits[0].score, 1)
+    // P4-5：digest 命中也带字段级对照（全字段「同」）
+    assert.ok(r.hits[0].reasons.some((x) => x.includes('digest 同构')))
+    assert.ok(r.hits[0].reasons.some((x) => x.includes('ruleRefs 共有')))
+    assert.ok(r.hits[0].reasons.some((x) => x.includes('scenarioId 同')))
   } finally {
     rmWorkspace(root)
   }
 })
 
-test('检索：同构全中 → score=1.0 命中；top-k 截断', () => {
+test('P4-5：signatureFieldReasons 字段级新旧对照（不止 Jaccard）', () => {
+  const q = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  const s = buildTaskSignature({ pkg: minimalPkg(), scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  // 同构：全字段「同」
+  const same = signatureFieldReasons(q, s)
+  assert.ok(same.some((r) => r.startsWith('scenarioId 同')))
+  assert.ok(same.some((r) => r.startsWith('dataBand 同')))
+  assert.ok(same.some((r) => r.startsWith('ruleRefs 共有')))
+  assert.ok(same.some((r) => r.startsWith('skillRefs 共有')))
+  assert.ok(same.some((r) => r.startsWith('inputShape 同')))
+  assert.ok(same.every((r) => r.includes('同') || r.includes('共有')), `应全为结构位对照: ${same}`)
+
+  // 变更：源→新 与集合增删
+  const q2 = { ...q, scenarioId: 'SCN-OTHER', dataBand: 'L', ruleRefs: [...q.ruleRefs, 'RULE-NEW'] }
+  const diff = signatureFieldReasons(q2, s)
+  assert.ok(diff.some((r) => r.includes('scenarioId 源=SCN-TST-1 → 新=SCN-OTHER')))
+  assert.ok(diff.some((r) => r.includes('dataBand 源=S → 新=L') || r.includes('dataBand 源=')))
+  assert.ok(diff.some((r) => r.includes('新独有') && r.includes('RULE-NEW')))
+  // 不得出现自由流程词
+  assert.ok(!diff.some((r) => /执行流程|步骤图|自由/.test(r)))
+})
+
+test('检索：同构全中 → score=1.0 命中；reasons 含字段级对照', () => {
   const { root } = mkWorkspaceWithPkg()
   try {
     for (let i = 1; i <= 4; i++) saveExperienceNote(root, variantNote(i))
@@ -203,6 +230,11 @@ test('检索：同构全中 → score=1.0 命中；top-k 截断', () => {
     assert.equal(r.coldStart, false)
     assert.equal(r.hits.length, 3)
     assert.ok(r.hits.every((h) => h.score === 1))
+    for (const h of r.hits) {
+      assert.ok(h.reasons.some((x) => x.includes('ruleRefs 共有')), `缺字段级 ruleRefs: ${h.reasons}`)
+      assert.ok(h.reasons.some((x) => x.includes('scenarioId 同')), `缺字段级 scenarioId: ${h.reasons}`)
+      assert.ok(h.reasons.some((x) => x.includes('Jaccard')), `打分理由仍应在场: ${h.reasons}`)
+    }
   } finally {
     rmWorkspace(root)
   }

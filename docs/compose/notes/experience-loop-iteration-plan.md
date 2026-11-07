@@ -92,7 +92,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | **完成**（轮 15） |
 | P4-3 | P4 | `annotate_experience` agent 工具（回写工具面，过三出口） | NL 剧本 N5：对话中标注 outcome/误迁移，结构位回执 | **完成**（轮 16） |
 | P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | **完成**（轮 17） |
-| P4-5 | P4 | `recall_experience` 证据链增强（字段级 signature 新旧对照） | 命中理由含字段级 diff，不止 Jaccard 数字 | 待办 |
+| P4-5 | P4 | `recall_experience` 证据链增强（字段级 signature 新旧对照） | 命中理由含字段级 diff，不止 Jaccard 数字 | **完成**（轮 18，P4 清空） |
 
 （P1-1 起即开；每轮 T1 从上表取片。全片完成 = experience-loop.md 达 delivered。）
 
@@ -121,7 +121,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 17 | 2026-11-07 | P4-4 tax 第三域 MULTI-DOMAIN | ✓ core 145/145 + backend 130/130 + dump 2/2 + MULTI-DOMAIN PASS | ✓ B1–B3（tax 三场景+执行） | ✓ N1–N3（tax 批量/export/recall） | 无 | 本轮提交 |
+| 18 | 2026-11-07 | P4-5 recall 字段级 signature 对照 | ✓ core 146/146 + backend 131/131 + dump 2/2 | ✓ B1–B4 | ✓ N1–N5（字段级 reasons 实测） | 无 | 本轮提交 |
+| 17 | 2026-11-07 | P4-4 tax 第三域 MULTI-DOMAIN | ✓ core 145/145 + backend 130/130 + dump 2/2 + MULTI-DOMAIN PASS | ✓ B1–B3（tax 三场景+执行） | ✓ N1–N3（tax 批量/export/recall） | 无 | ab26dcb |
 | 16 | 2026-11-07 | P4-3 annotate_experience 工具 | ✓ backend 129/129 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3 + N5 | 无 | 1e29870 |
 | 15 | 2026-11-07 | P4-2 spec delivered 状态 | ✓ 143+126 + dump 2/2（纯文档） | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
 | 14 | 2026-11-07 | P4-1 D1 方案 B 相对路径内联示例 | ✓ backend 126/126 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3（含 D1 错误面实测） | 无 | 87072c7 |
@@ -161,6 +162,12 @@ core 三域场景全过（tax 三场景各 7 命中、白名单排除在场、�
 tax 三场景 7/7/7 hits + audit passed；浏览器 tax 包三场景可见并执行；NL 批量 3/3 ok +
 export_audit + recall 冷启动不硬迁。`packages/tax` + `examples/tax-run.json` 入库。
 
+**P4 收官记录（轮 18）——backlog P4 全部完成，循环待命**：
+P4-1 D1 方案 B → P4-2 spec delivered → P4-3 annotate_experience（N5）→ P4-4 三域
+MULTI-DOMAIN → P4-5 `signatureFieldReasons` 字段级新旧对照（命中理由含 scenarioId/
+ruleRefs/skillRefs/dataBand 等源→新，不止 Jaccard；NL 实测 reasons 含字段对照）。
+**P1–P4 全 backlog 清空**，按协议停下，等待新指示。
+
 **轮 1 缺陷台账**
 
 | # | 级 | 现象 | 处置 |
@@ -180,8 +187,8 @@ export_audit + recall 冷启动不硬迁。`packages/tax` + `examples/tax-run.js
 
 ## 七、新会话启动（P4 循环）
 
-P1–P3 已收官（13/13）。下一批是 **P4**（见 §三 backlog）。循环事实源永远是**本文件**
-（协议 §二、backlog §三、台账 §五）——新会话不需要聊天历史，读本文件即可续跑。
+**P1–P3 已收官（13/13），P4 已收官（轮 14–18）。全 backlog 清空**——下一批等新指示。
+循环事实源永远是**本文件**（协议 §二、backlog §三、台账 §五）——新会话不需要聊天历史，读本文件即可续跑。
 
 **环境前置**（同 T4）：原生 Node `%LOCALAPPDATA%\Temp\nodejs24\node-v24.22.2-win-x64`、
 pnpm `%LOCALAPPDATA%\pnpm\.tools\pnpm\11.28.5\bin`、Tabbit CLI、harness 在 `../deepseek-harness`。

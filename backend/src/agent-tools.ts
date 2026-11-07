@@ -691,8 +691,8 @@ export function renderScenarioList(scenarios: unknown[]): string {
 }
 
 /**
- * recall_experience 渲染（N4）：只回结构位（runId/score/outcome/理由），无自由流程；
- * 冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
+ * recall_experience 渲染（N4 / P4-5）：只回结构位（runId/score/outcome/理由含字段级对照），
+ * 无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
  */
 export function renderRecallText(v: {
   coldStart: boolean
@@ -702,10 +702,15 @@ export function renderRecallText(v: {
   if (v.coldStart || v.hits.length === 0) {
     return '冷启动：无相似经验（不硬迁移，走全量执行）。'
   }
-  const lines = v.hits.map(
-    (h) =>
-      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'} 理由：${h.reasons.join('; ')}`,
-  )
+  const lines = v.hits.map((h) => {
+    const field = h.reasons.filter((r) => /源=|源≠|共有\d|同（/.test(r))
+    const scoreBits = h.reasons.filter((r) => !field.includes(r))
+    return [
+      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}`,
+      `  打分：${scoreBits.join('; ') || '—'}`,
+      `  字段对照：${field.join('; ') || '—'}`,
+    ].join('\n')
+  })
   return [`命中 ${v.hits.length} 条：`, ...lines, v.advice].join('\n')
 }
 
@@ -1305,6 +1310,7 @@ export function apply(ctx: Context): void {
       name: 'recall_experience',
       description:
         '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
+        + '命中理由含字段级 signature 新旧对照（scenarioId/ruleRefs/skillRefs/dataBand 等源→新），不止 Jaccard 数字。'
         + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
         + '结果仅含结构位（runId/score/outcome/签名字段）与转人工提示，不含自由流程描述。',
       parameters: {

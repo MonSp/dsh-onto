@@ -238,13 +238,13 @@ test('只读查询投影：摘要/口径/场景清单字段齐全', () => {
   assert.match(renderScenarioList(catalog.scenarios), /SCN-AML-FIND-CLUES/)
 })
 
-test('recall_experience 渲染（N4）：只回结构位；冷启动不硬迁；差异转人工', () => {
+test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬迁；差异转人工', () => {
   // 冷启动：不硬迁移话术
   const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
   assert.match(cold, /冷启动/)
   assert.match(cold, /不硬迁移/)
 
-  // 命中：结构位行 + 低置信度转人工
+  // 命中：打分行 + 字段级对照行 + 低置信度转人工
   const hit = renderRecallText({
     coldStart: false,
     hits: [{
@@ -252,16 +252,37 @@ test('recall_experience 渲染（N4）：只回结构位；冷启动不硬迁；
       score: 0.9,
       outcome: 'success',
       counterexample: false,
-      reasons: ['同 scenarioId', 'stepShape 一致'],
+      reasons: [
+        '同 scenarioId',
+        'stepShape 一致',
+        '规则/技能 Jaccard=1.00',
+        'scenarioId 同（SCN-AML-FIND-CLUES）',
+        'dataBand 同（S）',
+        'ruleRefs 共有5/新独有0/源独有0',
+        'skillRefs 共有1/新独有0/源独有0',
+        'inputShape 同（taxpayerId:string）',
+      ],
     }],
     advice: '低置信度：结构位差异（ruleRefs）→ 转人工确认后方可复用',
   })
   assert.match(hit, /run-abc12345/)
   assert.match(hit, /score=0\.90/)
-  assert.match(hit, /同 scenarioId/)
+  assert.match(hit, /打分：/)
+  assert.match(hit, /字段对照：/)
+  assert.match(hit, /scenarioId 同（SCN-AML-FIND-CLUES）/)
+  assert.match(hit, /ruleRefs 共有5\/新独有0\/源独有0/)
+  assert.match(hit, /Jaccard=1\.00/)
   assert.match(hit, /转人工/)
   // 无自由流程描述（不出现步骤编造词）
   assert.doesNotMatch(hit, /执行流程|步骤图|自由/)
+})
+
+test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(src.includes('字段级 signature 新旧对照'), '工具描述须声明字段级对照')
+  const coreSrc = readFileSync(join(REPO, 'core', 'src', 'experience.ts'), 'utf8')
+  assert.ok(coreSrc.includes('signatureFieldReasons'), 'core 须导出 signatureFieldReasons')
+  assert.ok(coreSrc.includes('reasons.push(...signatureFieldReasons'), 'retrieveSimilar 须挂字段级理由')
 })
 
 test('知识上传回执不回显 content', () => {
