@@ -9,7 +9,7 @@
  * 「经验学到了什么」（学习层标注）。分开存（runs/ vs experiences/），互不覆盖。
  * @module @dsh-onto/core/experience
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { findConclusionPhrases } from './llm.js'
@@ -635,6 +635,84 @@ export function abstractCounterexampleDrafts(
     out.push({ clusterKey, memberRunIds: members.map((m) => m.runId), draft })
   }
   return out
+}
+
+/* ───────────────────────── 压缩/遗忘（S6，P3-3） ───────────────────────── */
+
+export interface CompressionReport {
+  total: number
+  kept: number
+  archived: number
+  /** archived / total——压缩比指标（§S7）。 */
+  compressionRatio: number
+  tiers: { counter: number; referenced: number; reuseEvidence: number; fresh: number; stale: number }
+  archivedRunIds: string[]
+}
+
+/**
+ * 记忆压缩/遗忘（S6）：按 outcome 与引用关系分层——
+ * 反例留警示｜被复用过（他人的 reusedFrom 指向）留高价值｜自身有 reusedFrom 留复用证据｜
+ * 新鲜（< retainDays）留｜其余陈旧未引用 → 归档到 experiences/archive/（不硬删）。
+ * 默认 dryRun（apply=false 只出报告）；retainDays 初始值 90，验收时校准。
+ */
+export function compressExperiences(
+  root: string,
+  opts?: { retainDays?: number; apply?: boolean },
+): CompressionReport {
+  const retainDays = opts?.retainDays ?? 90
+  const apply = opts?.apply === true
+  const notes = listExperienceNotes(root)
+  const referenced = new Set(notes.map((n) => n.reusedFrom?.runId).filter((x): x is string => !!x))
+  const now = Date.now()
+  const tiers = { counter: 0, referenced: 0, reuseEvidence: 0, fresh: 0, stale: 0 }
+  const archivedRunIds: string[] = []
+  let kept = 0
+  for (const n of notes) {
+    const ageDays = (now - Date.parse(n.savedAt)) / 86_400_000
+    if (n.counterexample) {
+      tiers.counter++
+      kept++
+      continue
+    }
+    if (referenced.has(n.runId)) {
+      tiers.referenced++
+      kept++
+      continue
+    }
+    if (n.reusedFrom) {
+      tiers.reuseEvidence++
+      kept++
+      continue
+    }
+    if (ageDays < retainDays) {
+      tiers.fresh++
+      kept++
+      continue
+    }
+    tiers.stale++
+    archivedRunIds.push(n.runId)
+  }
+  if (apply && archivedRunIds.length > 0) {
+    const dir = experiencesDir(root)
+    const archiveDir = join(dir, 'archive')
+    mkdirSync(archiveDir, { recursive: true })
+    for (const runId of archivedRunIds) {
+      const src = join(dir, `${runId}.json`)
+      if (existsSync(src)) {
+        writeFileSync(join(archiveDir, `${runId}.json`), readFileSync(src, 'utf8'), 'utf8')
+        rmSync(src)
+      }
+    }
+  }
+  const total = notes.length
+  return {
+    total,
+    kept,
+    archived: archivedRunIds.length,
+    compressionRatio: total === 0 ? 0 : archivedRunIds.length / total,
+    tiers,
+    archivedRunIds,
+  }
 }
 
 /* ───────────────────────── 人审回填（S5.4） ───────────────────────── */

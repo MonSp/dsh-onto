@@ -1,7 +1,7 @@
 /** 经验闭环验收（spec experience-loop S4.1/S4.3）：任务结构签名 + 经验记录围栏存取。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   buildTaskSignature,
@@ -19,6 +19,7 @@ import {
   reviewExperienceNote,
   abstractSkillDrafts,
   abstractCounterexampleDrafts,
+  compressExperiences,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -443,6 +444,53 @@ test('abstractCounterexampleDrafts：结论性反例 → RedLine；否则 → Ex
     assert.equal(ex[0].draft.payload.action, 'downweight')
     assert.equal(ex[0].draft.payload.condition, "tag == 'listHitCount'")
     assert.equal(ex[0].draft.confidence, 0.7)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── P3-3 压缩/遗忘 ── */
+
+test('compressExperiences：分层保留 + 陈旧未引用归档 + 压缩比', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const old = '2025-01-01T00:00:00.000Z'
+    const fresh = '2026-11-07T00:00:00.000Z'
+    // 陈旧未引用成功 → 归档候选
+    saveExperienceNote(root, makeNote({ runId: 'run-stale', savedAt: old }))
+    // 反例留警示
+    saveExperienceNote(root, makeNote({ runId: 'run-counter', counterexample: true, savedAt: old }))
+    // 被复用过 → 高价值留
+    saveExperienceNote(root, makeNote({ runId: 'run-reused', savedAt: old }))
+    saveExperienceNote(root, makeNote({ runId: 'run-child', reusedFrom: { runId: 'run-reused', diff: { reusable: [], mustChange: [], unknown: [] } }, savedAt: fresh }))
+    // 自身有 reusedFrom → 复用证据留
+    saveExperienceNote(root, makeNote({ runId: 'run-evidence', reusedFrom: { runId: 'run-x', diff: { reusable: [], mustChange: [], unknown: [] } }, savedAt: old }))
+    // 新鲜未引用 → 留
+    saveExperienceNote(root, makeNote({ runId: 'run-fresh', savedAt: fresh }))
+
+    // dryRun：只报告不移动
+    const dry = compressExperiences(root, { retainDays: 30 })
+    assert.equal(dry.total, 6)
+    assert.equal(dry.archived, 1)
+    assert.deepEqual(dry.archivedRunIds, ['run-stale'])
+    assert.equal(dry.kept, 5)
+    assert.ok(Math.abs(dry.compressionRatio - 1 / 6) < 1e-9)
+    assert.equal(dry.tiers.counter, 1)
+    assert.equal(dry.tiers.referenced, 1)
+    assert.equal(dry.tiers.reuseEvidence, 2)
+    assert.equal(dry.tiers.fresh, 1)
+    assert.equal(dry.tiers.stale, 1)
+    assert.ok(existsSync(join(root, 'experiences', 'run-stale.json')), 'dryRun 不应移动文件')
+
+    // apply：归档落位
+    const applied = compressExperiences(root, { retainDays: 30, apply: true })
+    assert.equal(applied.archived, 1)
+    assert.ok(!existsSync(join(root, 'experiences', 'run-stale.json')))
+    assert.ok(existsSync(join(root, 'experiences', 'archive', 'run-stale.json')))
+    // 归档后 list 不再返回
+    const after = listExperienceNotes(root)
+    assert.equal(after.length, 5)
+    assert.ok(!after.some((n) => n.runId === 'run-stale'))
   } finally {
     rmWorkspace(root)
   }

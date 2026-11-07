@@ -25,6 +25,7 @@
  *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
  *   dsh-onto exp list
  *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N]
+ *   dsh-onto exp compress [--retain-days N] [--apply]
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
@@ -34,6 +35,7 @@ import {
   abstractSkillDrafts,
   buildDiffTable,
   buildTaskSignature,
+  compressExperiences,
   listExperienceNotes,
   loadExperienceNote,
   retrieveSimilar,
@@ -153,7 +155,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   run <versionDir> <scenarioId> --data run.json [--out result.json]
   runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
   knowledge upload|parse|queue|review|materialize
-  exp recall|annotate|diff|list|abstract
+  exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
 `
 
@@ -509,6 +511,13 @@ function cmdExp(sub: string | undefined, args: Args): void {
         knowledgeRoot: dataDir,
         note: '草案已入队（pending），物化必经人审',
       })
+      return
+    }
+    case 'compress': {
+      const retainDays = typeof args.flags['retain-days'] === 'string' ? Number(args.flags['retain-days']) : undefined
+      const apply = args.flags['apply'] === true
+      const report = compressExperiences(root, { retainDays, apply })
+      print({ ...report, applied: apply })
       return
     }
     default:

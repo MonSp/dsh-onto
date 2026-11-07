@@ -87,7 +87,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P2-4 | P2 | med 包多域验证（换包零改引擎） | aml+med 全场景批量过装配断言 | **完成**（轮 10，P2 收官） |
 | P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | **完成**（轮 11） |
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | **完成**（轮 12） |
-| P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | 待办 |
+| P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | **完成**（轮 13，P3 收官） |
 
 （P1-1 起即开；每轮 T1 从上表取片。全片完成 = experience-loop.md 达 delivered。）
 
@@ -115,7 +115,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 12 | 2026-11-07 | P3-2 反例利用 | ✓ 142/142 + REDLINE-CHAIN PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 13 | 2026-11-07 | P3-3 压缩/遗忘 | ✓ 143/143 + COMPRESS SMOKE | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 12 | 2026-11-07 | P3-2 反例利用 | ✓ 142/142 + REDLINE-CHAIN PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 96eaabe |
 | 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | b9d87c1 |
 | 10 | 2026-11-07 | P2-4 med 多域验证 | ✓ 139/139 + MULTI-DOMAIN PASS | ✓ med 场景+六 tab | ✓ N1–N3（med 域） | 无 | 29a232a |
 | 9 | 2026-11-07 | P2-3 DraftProvenance.runId | ✓ core 139/139 + dump 2/2 | ✓ runId 可见+B2B3 | ✓ N1–N3 | 无 | 920e258 |
@@ -137,6 +138,13 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 med（run-fd0a7117，2 候选）装配断言全过；同域复用命中 score=1.0、跨域冷启动隔离、
 二域各自同域复用均成立；换包零改引擎。experience-loop.md [S7] P2 出口达成；
 **下一片起进入 P3**（自动技能抽象草案 → 反例利用 → 压缩/遗忘）。
+
+**P3 收官记录（轮 13）——backlog 13/13 全部完成，循环待命**：
+P3-1 抽象全链（聚簇→草案→人审→物化 SKL-AML-EXP-FIND-CLUES）→ P3-2 反例全链
+（结论性→RedLine 只落红线，物化 forbiddenPhrases）→ P3-3 压缩分层
+（反例留/被复用留/复用证据留/新鲜留/陈旧归档，压缩比指标可出）。
+experience-loop.md [S7] P1+P2+P3 全部分期出口达成——**「经验→技能→类比→验证→回写」
+闭环完整落地**。按协议停下，等待新指示（D1 datasetPath 相对路径仍待拍板）。
 
 **轮 1 缺陷台账**
 
