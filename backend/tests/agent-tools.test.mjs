@@ -49,12 +49,16 @@ import {
   KnowledgeStore,
   PackageWorkspace,
   buildRunRecord,
+  buildTaskSignature,
   derivePackage,
   dumpYaml,
   loadExperienceNote,
   loadPackage,
+  loadRunRecord,
   loadYaml,
+  reviewExperienceNote,
   runScenario,
+  saveExperienceNote,
   saveRunRecord,
   sha256Text,
 } from '@dsh-onto/core'
@@ -1416,4 +1420,184 @@ test('annotate_experience 渲染（N5）：结构位回执、无自由流程、h
   assert.match(text, /humanReviewRequired=true/)
   // 无自由流程描述、无服务端路径
   assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
+})
+
+/* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */
+
+test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记', () => {
+  const phrase = '确定为洗钱'
+  const raw = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`, '同 scenarioId'],
+    }],
+    advice: '结构同构可参考复用',
+  })
+  assert.ok(raw.includes(phrase), '无清单时原样（直调测试路径）')
+  const masked = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`],
+    }],
+    advice: 'x',
+  }, [phrase])
+  assert.ok(!masked.includes(phrase), `短语不得泄漏: ${masked}`)
+  assert.match(masked, /【禁语已脱敏】/)
+  // 冷启动分支同样带 humanReviewRequired
+  const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
+  assert.match(cold, /humanReviewRequired=true/)
+})
+
+test('I1 annotate 渲染拼接后兜底：misTransferBy 撞短语 → 整段退避', () => {
+  const phrase = '已构成犯罪'
+  const masked = renderAnnotateText({
+    runId: 'run-abc12345',
+    outcome: 'success',
+    counterexample: false,
+    misTransferJudged: true,
+    misTransferBy: `判定人${phrase}`,
+    reviewFocus: [],
+    created: false,
+  }, [phrase])
+  assert.ok(!masked.includes(phrase), `短语不得泄漏: ${masked}`)
+  assert.match(masked, /【禁语已脱敏】/)
+})
+
+test('I1 recall value 闸：enforceOutputPolicy 遮蔽 goalClass 撞短语', () => {
+  const phrase = '认定洗钱'
+  const value = {
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「x」`],
+    }],
+    advice: 'ok',
+    humanReviewRequired: true,
+  }
+  const gated = enforceOutputPolicy(value, [phrase])
+  const text = JSON.stringify(gated)
+  assert.ok(!text.includes(phrase), `value 闸后不得含短语: ${text}`)
+  assert.equal(gated.humanReviewRequired, true)
+})
+
+test('I1 source：recall/execute 挂 enforceOutputPolicy + render 挂 retreatRenderText', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  // recall execute 与 annotate execute 都过 value 闸
+  const recallIdx = src.indexOf("name: 'recall_experience'")
+  const annotateIdx = src.indexOf("name: 'annotate_experience'")
+  const uploadIdx = src.indexOf("name: 'upload_knowledge_source'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx && uploadIdx > annotateIdx)
+  const recallSlice = src.slice(recallIdx, annotateIdx)
+  const annotateSlice = src.slice(annotateIdx, uploadIdx)
+  assert.ok(recallSlice.includes('enforceOutputPolicy'), 'recall execute 须挂 value 闸')
+  assert.ok(recallSlice.includes("humanReviewRequired: { type: 'boolean', required: true, const: true }"), 'recall schema 须 const humanReviewRequired')
+  // render 走 renderRecallText（内部 retreatRenderText 兜底）
+  assert.ok(recallSlice.includes('renderRecallText'), 'recall render 须走 renderRecallText')
+  assert.ok(src.includes('retreatRenderText'), 'renderRecallText 须挂 retreatRenderText 兜底')
+  assert.ok(annotateSlice.includes('enforceOutputPolicy'), 'annotate execute 须挂 value 闸')
+  assert.ok(annotateSlice.includes('renderAnnotateText'), 'annotate render 须走 renderAnnotateText')
+})
+
+test('L1 annotate 回填标 success 同过审计闸（两步绕过封死）', () => {
+  const { root, ws, runId } = mkAnnotateFixture({ auditPassed: false })
+  try {
+    // 先建 failure（审计未过允许）
+    annotateExperienceForTool(ws, { runId, outcome: 'failure', humanApproved: true })
+    // 再回填 success → 拒（L1：回填与新建同闸）
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // workbench 人审面（reviewExperienceNote 直调）可覆盖——机器闸不否决人审
+    const note = reviewExperienceNote(ws.root, runId, { outcome: 'success' })
+    assert.equal(note.outcome, 'success')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('L2 annotate reusedFromRunId：新建与回填均写复用归因', () => {
+  const { root, ws, runId } = mkAnnotateFixture()
+  try {
+    // 造一条源经验
+    const srcRun = 'run-src00001'
+    const rec = loadRunRecord(ws.root, runId)
+    const srcNote = {
+      runId: srcRun,
+      signature: buildTaskSignature({
+        pkg: loadPackage(ws.versionDir(rec.package.name, rec.package.version)),
+        scenarioId: rec.scenarioId,
+        datasetSummary: rec.datasetSummary,
+      }),
+      outcome: 'success',
+      skillRefsUsed: [],
+      counterexample: false,
+      savedAt: '2026-11-01T00:00:00.000Z',
+    }
+    saveExperienceNote(ws.root, srcNote)
+    // 新建带 reusedFrom
+    const created = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'success',
+      reusedFromRunId: srcRun,
+      humanApproved: true,
+    })
+    assert.equal(created.created, true)
+    const note1 = loadExperienceNote(ws.root, runId)
+    assert.equal(note1.reusedFrom?.runId, srcRun)
+    assert.ok(note1.reusedFrom?.diff, 'diff 须机械生成')
+    // 回填写 reusedFrom
+    const patched = annotateExperienceForTool(ws, {
+      runId,
+      reviewFocus: ['listHitCount'],
+      reusedFromRunId: srcRun,
+      humanApproved: true,
+    })
+    assert.equal(patched.created, false)
+    const note2 = loadExperienceNote(ws.root, runId)
+    assert.equal(note2.reusedFrom?.runId, srcRun)
+    assert.deepEqual(note2.reviewFocus, ['listHitCount'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏', () => {
+  const text = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [
+        '同 scenarioId',
+        'stepShape 一致',
+        '规则/技能 Jaccard=1.00',
+        'stepShape 同',
+        'goalClass 同',
+        'scenarioId 同（SCN-AML-FIND-CLUES）',
+        'digest 同构',
+      ],
+    }],
+    advice: 'x',
+  })
+  const fieldLine = text.split('\n').find((l) => l.includes('字段对照')) ?? ''
+  const scoreLine = text.split('\n').find((l) => l.includes('打分')) ?? ''
+  assert.ok(fieldLine.includes('stepShape 同'), `stepShape 同 须在字段对照栏: ${text}`)
+  assert.ok(fieldLine.includes('goalClass 同'), `goalClass 同 须在字段对照栏: ${text}`)
+  assert.ok(fieldLine.includes('scenarioId 同（'), '带括号形态在字段对照栏')
+  assert.ok(scoreLine.includes('同 scenarioId'), '检索打分理由留在打分栏')
+  assert.ok(scoreLine.includes('Jaccard'), 'Jaccard 留在打分栏')
 })

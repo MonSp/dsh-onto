@@ -2,11 +2,11 @@ kind: DerivedManifest
 package: tax-risk
 version: 1.0.0
 domain: TAX
-generatedAt: 2026-11-06T13:43:43.266Z
-sourceDigest: 3535d6509900a2a82d7f9e8573c3f8b6101c8dc096f5d246fb11c92575385943
+generatedAt: 2026-11-07T11:43:47.770Z
+sourceDigest: 1837a33e1accc6650246e4acbf25b0f857a334d39c97957eacc1b0b8b8b39d8a
 sources:
   - path: package.yaml
-    sha256: 2f62693fe74aea71b78f3899ad43146b1dcfd47e24fb42ea3a5b164873adb392
+    sha256: 07154170dceb2bf6d77ad08f33adee9989447f5d19f8e6f5f0da8553b8c52ad5
   - path: o1-objects/object-types.yaml
     sha256: e6fd120c3ecfc5ca6201003e06bdaa3958ff0d711fcf6b14563fd162aaf1fd88
   - path: o1-objects/relation-types.yaml

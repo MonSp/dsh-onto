@@ -23,10 +23,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 
 ## 验证阶梯（改动后必跑）
 
-1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（117 项验收测试全绿）。
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（146 项验收测试全绿）。
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`；backend 另跑 `pnpm run test`
-   （agent 工具/技能纯函数，124 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
+   （agent 工具/技能纯函数，138 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
 3. `scripts/dump-config.ps1` — 硬断言 `@dsh-onto/backend`、`@dsh-onto/workbench` 均在组合结果中。
 4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「dsh-onto」→ 五个 tab
    （包管理/建模/知识库/校验派生/场景运行）；选中 aml-analysis@1.0.0 → 场景运行
@@ -52,9 +52,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 | `rules.ts` | 表达式求值（无 eval）+ 排除→打分 |
 | `scenario.ts` / `audit.ts` | 六槽位派发 + 三层闭合审计 + 禁语扫描 |
 | `runstore.ts` | RunRecord 运行留痕（runs/ 落盘 + phrase 持久后端）+ 两轮对比 + 审计归档 |
+| `experience.ts` | TaskSignature/ExperienceNote 结构检索 + 差异表 + 人审回填 + 抽象巩固/压缩（经验闭环） |
 | `knowledge.ts` / `llm.ts` | 六类原料解析（含 CONVERSATION 对话轮次）、人审队列、物化（含修改/接线与权重归一）、对话草案与骨架门（I6）；HeuristicLlm / DeepSeekLlm |
 | `graph.ts` | 图谱构建（画布数据源）、issue 节点定位（I3） |
-| `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge` |
+| `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge/exp` |
 
 ## 常见故障
 

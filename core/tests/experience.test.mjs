@@ -288,6 +288,10 @@ test('检索：跨包须 externalRefs 声明，命中降权', () => {
     const r = retrieveSimilar(root, { signature: q, externalRefs: ['other-pkg'] })
     assert.equal(r.coldStart, false)
     assert.ok(Math.abs(r.hits[0].score - 0.5) < 1e-9, `score=${r.hits[0].score}`)
+    // L4：name@version 全量声明形态同样命中（原 startsWith(d+'@') 死分支）
+    const r2 = retrieveSimilar(root, { signature: q, externalRefs: ['other-pkg@1.0.0'] })
+    assert.equal(r2.coldStart, false)
+    assert.ok(Math.abs(r2.hits[0].score - 0.5) < 1e-9, `score=${r2.hits[0].score}`)
   } finally {
     rmWorkspace(root)
   }

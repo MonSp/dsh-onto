@@ -258,6 +258,7 @@ window.__ModuleLoader__.load({
       tabExperience: '经验',
       expTitle: '经验记录',
       expOutcome: '结论',
+      expReason: '结论理由',
       expCounter: '反例',
       expReused: '复用自',
       expMis: '误迁移',
@@ -451,6 +452,7 @@ window.__ModuleLoader__.load({
       tabExperience: 'Experience',
       expTitle: 'Experience notes',
       expOutcome: 'Outcome',
+      expReason: 'Outcome reason',
       expCounter: 'Counterexample',
       expReused: 'Reused from',
       expMis: 'Mis-transfer',
@@ -3347,7 +3349,9 @@ window.__ModuleLoader__.load({
           const [viewNote, setViewNote] = useState<Record<string, unknown> | null>(null)
           // 回填表单
           const [formOutcome, setFormOutcome] = useState('')
-          const [formMis, setFormMis] = useState(false)
+          const [formReason, setFormReason] = useState('')
+          // 三态：'' 不改 | 'true' 判误迁移 | 'false' 判非误迁移（by 两者皆必填）
+          const [formMis, setFormMis] = useState('')
           const [formBy, setFormBy] = useState('')
           const [formNote, setFormNote] = useState('')
           const [formFocus, setFormFocus] = useState('')
@@ -3377,7 +3381,10 @@ window.__ModuleLoader__.load({
               try {
                 const patch: Record<string, unknown> = { runId }
                 if (formOutcome) patch.outcome = formOutcome
-                if (formMis) patch.misTransfer = { judged: true, by: formBy, note: formNote }
+                if (formReason.trim()) patch.outcomeReason = formReason
+                if (formMis === 'true' || formMis === 'false') {
+                  patch.misTransfer = { judged: formMis === 'true', by: formBy, note: formNote }
+                }
                 if (formFocus.trim()) patch.reviewFocus = formFocus.split(',').map((s) => s.trim()).filter(Boolean)
                 const out = unwrap<{ note: Record<string, unknown> }>(await api.reviewExperience(patch as never))
                 setViewNote(out.note)
@@ -3444,7 +3451,8 @@ window.__ModuleLoader__.load({
                                 setError('')
                                 setViewRun(r.runId)
                                 setFormOutcome('')
-                                setFormMis(false)
+                                setFormReason('')
+                                setFormMis('')
                                 setFormBy('')
                                 setFormNote('')
                                 setFormFocus(r.reviewFocus.join(', '))
@@ -3482,10 +3490,21 @@ window.__ModuleLoader__.load({
                     h('option', { value: 'partial' }, 'partial'),
                     h('option', { value: 'failure' }, 'failure'),
                     h('option', { value: 'pending-human' }, 'pending-human')),
-                  h('label', { className: 'ow-stat' },
-                    h('input', { type: 'checkbox', checked: formMis, onChange: (e: { target: { checked: boolean } }) => setFormMis(e.target.checked) }),
-                    ` ${t('expMis')}`),
-                  formMis
+                  h('input', {
+                    className: 'ow-in',
+                    placeholder: t('expReason'),
+                    value: formReason,
+                    onChange: (e: { target: { value: string } }) => setFormReason(e.target.value),
+                  }),
+                  h('select', {
+                    className: 'ow-sel',
+                    value: formMis,
+                    onChange: (e: { target: { value: string } }) => setFormMis(e.target.value),
+                  },
+                    h('option', { value: '' }, `${t('expMis')} —`),
+                    h('option', { value: 'true' }, `${t('expMis')} true`),
+                    h('option', { value: 'false' }, `${t('expMis')} false`)),
+                  formMis !== ''
                     ? h('input', {
                         className: 'ow-in',
                         placeholder: t('expMisBy'),
@@ -3493,7 +3512,7 @@ window.__ModuleLoader__.load({
                         onChange: (e: { target: { value: string } }) => setFormBy(e.target.value),
                       })
                     : null,
-                  formMis
+                  formMis !== ''
                     ? h('input', {
                         className: 'ow-in',
                         placeholder: t('expMisNote'),
@@ -3511,7 +3530,9 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       className: 'ow-btn',
-                      disabled: !!busy || (!formOutcome && !formMis && !formFocus.trim()),
+                      disabled:
+                        !!busy ||
+                        (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim()),
                       onClick: () => review(viewRun),
                     },
                     t('expReviewBtn'),

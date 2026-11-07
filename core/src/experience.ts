@@ -322,7 +322,7 @@ export function retrieveSimilar(
     (n) => !n.counterexample && n.misTransfer?.judged !== true,
   )
 
-  // digest 精确同构短路
+  // digest 精确同构短路（digest 含 packageScope，同构即同包，作用域检查隐含成立）
   const digestMatch = pool.find((n) => n.signature.digest === q.digest)
   if (digestMatch) {
     return {
@@ -343,7 +343,8 @@ export function retrieveSimilar(
     const s = note.signature
     const pkgName = s.packageScope.split('@')[0]
     const sameScope = s.packageScope === q.packageScope
-    const declaredCross = !sameScope && declared.some((d) => pkgName === d || pkgName.startsWith(`${d}@`))
+    // 声明形态：裸包名 `med-safety` 或全量 `med-safety@1.0.0`（按包名匹配，spec S5.1）
+    const declaredCross = !sameScope && declared.some((d) => d === pkgName || d === s.packageScope)
     if (!sameScope && !declaredCross) continue
 
     let score = 0
@@ -778,6 +779,7 @@ export function compressExperiences(
 /**
  * 人审回填：pending-human 改判、误迁移只由人判（by 必须非空人工身份）、reviewFocus 沉淀。
  * 禁改 signature / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome（机器闸不否决人审）。
+ * reusedFromRunId：补写复用归因（S5.4.4），diff 按当前 signature 机械生成。
  */
 export function reviewExperienceNote(
   root: string,
@@ -787,6 +789,7 @@ export function reviewExperienceNote(
     outcomeReason?: string
     misTransfer?: { judged: boolean; by: string; note?: string }
     reviewFocus?: string[]
+    reusedFromRunId?: string
   },
 ): ExperienceNote {
   const note = loadExperienceNote(root, runId)
@@ -817,6 +820,13 @@ export function reviewExperienceNote(
       throw new PackageStoreError('INVALID_ARGS', 'invalid reviewFocus')
     }
     note.reviewFocus = [...patch.reviewFocus]
+  }
+  if (patch.reusedFromRunId !== undefined) {
+    const src = loadExperienceNote(root, patch.reusedFromRunId)
+    note.reusedFrom = {
+      runId: patch.reusedFromRunId,
+      diff: buildDiffTable(note.signature, src.signature),
+    }
   }
   note.savedAt = new Date().toISOString()
   saveExperienceNote(root, note)

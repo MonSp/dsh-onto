@@ -24,7 +24,7 @@
  *                         [--reason R] [--counterexample] [--reused-from <runId>] [--review-focus a,b]
  *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
  *   dsh-onto exp list
- *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N]
+ *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--data-dir <knowledgeRoot>]
  *   dsh-onto exp compress [--retain-days N] [--apply]
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -418,15 +418,22 @@ function cmdExp(sub: string | undefined, args: Args): void {
       if (!['success', 'partial', 'failure', 'pending-human'].includes(outcome)) {
         fail('--outcome must be success|partial|failure|pending-human')
       }
-      const pkg = loadPackage(dir)
       const rec = loadRunRecord(root, runId)
       // 闸门复用：审计结果约束 outcome——审计未过不得标 success（除非 counterexample）
-      const counterexample = args.flags['counterexample'] === true
+      let existing: import('./experience.js').ExperienceNote | null = null
+      try {
+        existing = loadExperienceNote(root, runId)
+      } catch {
+        existing = null
+      }
+      const counterexample = args.flags['counterexample'] === true || existing?.counterexample === true
       if (outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
         fail('audit not passed — cannot annotate success (use failure/partial or --counterexample)')
       }
-      const signature = buildTaskSignature({
-        pkg,
+      // patch 语义（M2）：已有 note 保留人审字段（misTransfer/reusedFrom/reviewFocus），
+      // 只覆写本次显式传入的旗标——CLI 二次标注不得静默抹掉人工判定。
+      const signature = existing?.signature ?? buildTaskSignature({
+        pkg: loadPackage(dir),
         scenarioId: rec.scenarioId,
         datasetSummary: rec.datasetSummary,
       })
@@ -435,23 +442,27 @@ function cmdExp(sub: string | undefined, args: Args): void {
         const srcId = args.flags['reused-from']
         const src = loadExperienceNote(root, srcId)
         reusedFrom = { runId: srcId, diff: buildDiffTable(signature, src.signature) }
+      } else {
+        reusedFrom = existing?.reusedFrom
       }
-      const note = {
+      const note: import('./experience.js').ExperienceNote = {
         runId,
         signature,
         outcome: outcome as import('./experience.js').ExperienceOutcome,
-        outcomeReason: typeof args.flags['reason'] === 'string' ? args.flags['reason'] : undefined,
-        skillRefsUsed: signature.skillRefs,
+        outcomeReason:
+          typeof args.flags['reason'] === 'string' ? args.flags['reason'] : existing?.outcomeReason,
+        skillRefsUsed: existing?.skillRefsUsed ?? signature.skillRefs,
         reusedFrom,
         counterexample,
+        misTransfer: existing?.misTransfer,
         reviewFocus:
           typeof args.flags['review-focus'] === 'string'
             ? args.flags['review-focus'].split(',').map((s) => s.trim()).filter(Boolean)
-            : undefined,
+            : existing?.reviewFocus,
         savedAt: new Date().toISOString(),
       }
       const file = saveExperienceNote(root, note)
-      print({ ok: true, runId, outcome, counterexample, file: basename(file) })
+      print({ ok: true, runId, outcome, counterexample, patched: existing !== null, file: basename(file) })
       return
     }
     case 'diff': {
@@ -490,10 +501,11 @@ function cmdExp(sub: string | undefined, args: Args): void {
       const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
       const abs = abstractSkillDrafts(root, { pkg, minCluster })
       const counters = abstractCounterexampleDrafts(root, { pkg, minCluster })
-      // knowledge 队列在 dataDir/knowledge（backend 口径）；--root 是 workspace 根（experiences 在此）。
-      // workspace 布局下 dataDir = dirname(workspace)；否则同根。
+      // knowledge 队列根：优先 --data-dir（L3）；否则按默认布局推断（workspace 目录名约定）。
+      // workspace 布局下 dataDir = dirname(workspace)；否则同根。目录改名时请显式传 --data-dir。
+      const dataDirFlag = typeof args.flags['data-dir'] === 'string' ? resolve(args.flags['data-dir']) : undefined
       const base = basename(root)
-      const dataDir = base === 'workspace' ? dirname(root) : root
+      const dataDir = dataDirFlag ?? (base === 'workspace' ? dirname(root) : root)
       const knowledge = new KnowledgeStore(dataDir)
       const queued: Array<{ id: string; name: string; kind: string; runId: string; members: number }> = []
       for (const a of [...abs, ...counters]) {
