@@ -1744,7 +1744,8 @@ export function apply(ctx: Context): void {
         + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
         + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
         + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
-        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。',
+        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。'
+        + '物化成功后自动重派生（无需再手动 derive），包立刻过加载门禁可直接运行/列技能。',
       parameters: {
         candidateIds: { type: 'array', required: true, description: '草案 ID 数组（dc-…）；同批归一，多条权重更新务必一次传入' },
         name: { type: 'string', required: true, description: '包名' },

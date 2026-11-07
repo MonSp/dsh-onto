@@ -96,6 +96,7 @@
 | 2 | 2026-11-08 | D2 数据集发现引导（run/invoke 描述 + datasetPath 参数 + 读取失败信封指明 examples/ 位置） | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」→「这次跑完把结论记一笔，复核时重点看集中转入特征」 | ✓ backend 142/142（+D2 回归测试）+ dump 2/2；T4 裁剪（未改 workbench）；T5 重跑绿：描述引导生效（agent 思考直接点名 dsh-onto checkout examples/aml-run.json，~14 步定位 vs 轮 1 ~20 步）、自选 invoke_expert（run-39af3f64）、经验参考段在场（run-83450578 score=1.00 + 结构同构提示）、annotate 26s 自选落 reviewFocus 三项、humanReviewRequired=true 恒在、禁语 0、打分与轮 1 逐字段一致（0.906/0.0188/0.080）、D1 留痕修复复验通过（专家 run 可 export_audit） | D2a（P2，当场修）：初版描述误写「会话工作区 examples/」（实际在 dsh-onto 源码检出目录，会话工作区是 default-workspace），agent 找不到卡在提问——改为「dsh-onto 源码检出目录」后重跑通过；D3（P2，新）：agent 中途调 plugin_manager 触发 danger-full-access 审批打断（非必要调用）；D4（P2，新）：「最新那批」语义仍让 agent 花数步确认没有更新批次（读昨日报告+比对 digest 才定） | 下轮进 E1-2（recall hits 补 reviewFocus）；D3/D4 记 backlog 可选：工具面收窄 plugin_manager 暴露、run 记录/数据集「最新」只读查询入口 | 本轮提交 |
 | 3 | 2026-11-08 | E1-2 recall hits 投影补 reviewFocus（projectRecallHits 纯函数 + render 复核提示 + 工具描述） | 「上次类似的跑得怎么样？」 | ✓ backend 144/144（+2 E1-2 回归）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 绿（单轮 ~20s/8 步）：agent 自选 recall_experience（先 list_packages 定位包，思考明确「That's the designed tool for 上次类似的跑得怎么样」）、工具输出含 **复核提示[RULE-AML-SCORE-FANOUT, inboundCount, OBJ-AML-TXN.amount]**（E1-2 新路径）、score=1.00/字段对照/humanReviewRequired=true 齐、最终回答点名 reviewFocus 三项、禁语 0、无路径泄漏 | D5（P2，新）：模糊问题「上次类似的」需先 list_packages+翻报告+查 runs 目录（~6 步）才落到 recall——可加 recall 默认上下文提示或「最近经验」只读入口；无 P0/P1 | 下轮优先 E1-3（SkillTemplate 物化接线：批准后 append SKL 到 pipeline.skillRefs）；可选做 D5（recall 发现摩擦）、E2-1（abstract_experience） | 2918dcc |
 | 4 | 2026-11-08 | E1-3 SkillTemplate 物化接线（resolveSkillWireTarget + appendSkillRef；abstractSkillDrafts 带 scenarioId；materialize catch 回滚） | 「把这些成功经验里反复出现的做法，做成正式的方法论吧」→「专家现在会什么？把反洗钱专家的技能列出来」→「知识库里那条经验模板的待审草案，我批准了，把它物化进反洗钱包」→「现在专家会什么？技能列表再看一遍」 | ✓ core 149/149（+3 E1-3 回归）+ backend 144/144 + workbench node --check + dump 2/2；T4 裁剪（未改 workbench UI）；T5 四轮：批准后物化 **SKL-AML-EXP-FIND-CLUES** 落盘、场景 s5 skillRefs=NARRATIVE+EXP-FIND-CLUES（E1-3 接线 ✓）、list_experts 技能 1→2 且回答点名新 id、草案 merged/appliedAs 齐；期间 DERIVED_DRIFT 被 agent 自发现并 CLI derive 修复（gate ok） | D6（P1，新）：apply_draft 物化只写源文件不重派生 → 包立刻 DERIVED_DRIFT 不可读；agent 被迫 danger-full-access 跑 CLI derive 才恢复（审批打断 1 次）；D7（P2，新）：「做成正式的方法论」引导 agent 写工作区 methodology 文档而非走 SkillTemplate 草案链路（缺 E2-1 abstract 工具 + 草案发现入口）；D8（P2，新）：get_model_graph 摘要不回待审草案 id，agent 只能读 queue.json（绕过工具面） | 下轮优先 D6：apply_draft 成功后自动 derive（或注册 derive 工具免提权）；再进 E2-1（abstract_experience）；可选 D7/D8（草案发现面） | 本轮提交 |
+| 5 | 2026-11-08 | D6 物化后自动重派生（KnowledgeStore.materialize：savePackage 后 applied>0 即 derivePackage；apply_draft 描述告知「无需再手动 derive」） | 「知识库里新来了两条待审的红线草案，我批准了，把它们物化进反洗钱包」→「物化完了？反洗钱专家现在还能正常用吗，把它的技能列出来看看」→「用反洗钱专家跑一下最新那批数据，看看有没有问题」 | ✓ core 150/150（+1 D6 回归：物化后 verifyDerived 过闸）+ backend 145/145（+1 apply_draft 描述源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 三句全绿（04:21–04:26，3 轮 38 步，零审批打断）：同批物化 2 条 RedLine → **自动重派生**（agent 原话「已自动重新派生」；盘上 gate ok、manifest 20:22:32 重写、forbiddenPhrases 4→6）；list_experts 技能 2 个且主动试跑 run-12d85501；invoke run-bc6f9715 审计过、分数与轮 1–3 逐字段一致（0.906/0.019/0.080）、禁语 0 命中、humanReviewRequired=true、无路径泄漏；数据定位直接点名检出目录 examples/aml-run.json（D2 引导仍有效） | D9（P2，新）：新红线是整句精确匹配，短语级词（涉案账户/跨境赌博）不带整句扫不到——agent 两轮自提示建议收窄为短语级或双通道；D10（P2，新）：第 3 句 invoke 最终回答未转述经验参考段（第 2 句 run 有转述；E1-1 包络可能在工具面但用户视角弱）；无 P0/P1，D6 关闭 | 下轮优先 E2-1（abstract_experience 聚簇入队人审）；可选 D7/D8（草案发现面）、D9（红线短语级口径）、D5（recall 发现摩擦） | 本轮提交 |
 
 **轮 1 反馈细节（T5 收集）**：
 - 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具；但数据定位阶段 agent 长时间自主翻目录（用户视角等待 ~5min46s 才出结论）。
@@ -126,6 +127,15 @@
 - 输出回答真实问题：是——技能表含定位/步骤/权重/来源，并主动指出模板内容偏薄、建议是否摘出 s5（有价值的产品反馈）。
 - 禁语/打分：本轮未跑场景，禁语与打分断言 N/A（剧本裁剪）。
 - 与轮 1–3 对比：工具选择正确（get_model_graph→读 queue→apply_draft→derive→list_experts）；新摩擦集中在**物化后派生断链**与**草案发现面**。
+
+**轮 5 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**零**——三句台词全程 agent 自选工具，无任何审批打断（轮 4 的 D6 提权审批未复现，D3 也未复现）。
+- D6 断言：第 1 句 apply_draft 同批物化 2 条 RedLine 后，agent 原话「已自动重新派生，derived/scenario-orchestration.yaml 的 forbiddenPhrases 同步含新两条」；盘上 `gate` ok（manifest generatedAt 与物化时刻一致）、队列两条均 merged；后续 list_experts / invoke 全程无 DERIVED_DRIFT。
+- 定位与工具路径：第 1 句直接读知识库队列找到两条 dc-…；第 3 句「最新那批数据」仍需确认无更新批次（D4 未消除但有明确目的地），最终点名 dsh-onto 检出目录 examples/aml-run.json（digest a7977766），用时 2分58秒。
+- agent 漏做：无最终漏。第 2 句主动试跑 run-12d85501 做可用性验证（超出最小要求）；第 3 句 invoke run-bc6f9715 留痕。第 3 句最终回答未转述经验参考段（第 2 句有转述「低置信度：结构位差异→转人工」）——记 D10 观察。
+- 输出回答真实问题：是——除跑分外给出 6 条分级数据质量问题（listHitCount 无源占 44% 分、特征不可复算、同账户矛盾候选等），并确认新红线 0 误伤。
+- 禁语/打分：forbiddenPhraseHits=0（6 条短语在场）；分数 0.906/0.019/0.080 与轮 1–3 逐字段一致（RedLine 物化不改分）；humanReviewRequired=true 两跑均在。
+- 新观察（D9）：agent 主动指出新红线整句匹配的口径盲区（「涉案账户」不带整句扫不到），两轮重复建议收窄为短语级——有价值的产品反馈，非断链。
 
 ## 六、拍板记录
 

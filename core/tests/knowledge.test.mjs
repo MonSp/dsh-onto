@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, draftCandidateId, knowledgeSourceId, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
+import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, draftCandidateId, knowledgeSourceId, loadPackage, savePackage, readPackageMeta, validateDraftItem, derivePackage, verifyDerived, readManifest } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, mkWorkspace } from './helpers.mjs'
 
 const llm = new HeuristicLlm()
@@ -971,4 +971,41 @@ test('D5：CONCLUSION_BLOCKED 出口内联 RedLine 正确路径（targetKind + p
     check,
     'update 物化拒绝须内联 RedLine 正确路径',
   )
+})
+
+/* ── D6 物化后自动重派生（闭环轮 5） ── */
+
+test('D6：物化成功即自动重派生，loadgate 不再 DERIVED_DRIFT；未物化不重派生', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    derivePackage(dir)
+    assert.equal(verifyDerived(dir).ok, true)
+    const store = new KnowledgeStore(ws.root)
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '夜间交易权重 0.2。',
+    })
+    const { added } = await store.parseSource(src.id, llm)
+    const scoreDraft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(scoreDraft)
+    // pending 物化：无写入 → 不重派生，既有 manifest 仍绿
+    store.materialize(dir, [scoreDraft.id])
+    assert.equal(verifyDerived(dir).ok, true)
+    // approve → 物化改写源 → 自动重派生（修复前此处 DERIVED_DRIFT）
+    store.reviewCandidate(scoreDraft.id, 'approve')
+    const res = store.materialize(dir, [scoreDraft.id])
+    assert.deepEqual(res.applied, [scoreDraft.id])
+    const gate = verifyDerived(dir)
+    assert.equal(gate.ok, true, `物化后须自动重派生过闸: ${JSON.stringify(gate)}`)
+    const manifest = readManifest(dir)
+    assert.ok(manifest, '重派生须落 manifest')
+    assert.ok(
+      manifest.sources.some((e) => e.path.includes('scoreRules') || e.path.includes('rules/')),
+      '新源文件须进 manifest 指纹',
+    )
+  } finally {
+    rmWorkspace(root)
+  }
 })

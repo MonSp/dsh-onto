@@ -522,6 +522,17 @@ test('人审契约：apply_draft/reject_draft 的 humanApproved 必须显式为 
   }
 })
 
+test('D6：apply_draft 描述明示物化后自动重派生（防回退到手动 derive 提权）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const at = src.indexOf("name: 'apply_draft'")
+  assert.ok(at >= 0, 'apply_draft 工具须在源中登记')
+  const window = src.slice(at, at + 900)
+  assert.ok(
+    window.includes('物化成功后自动重派生'),
+    'apply_draft 描述须告知物化后自动重派生（D6）',
+  )
+})
+
 test('list_packages 输出投影：不回显 dir 等服务端路径', () => {
   const projected = projectPackageList([
     {

@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { derivePackage } from './derive.js'
 import { draftCandidateId, knowledgeSourceId, isValidId } from './ids.js'
 import { isConclusionLike, parseWithFallback } from './llm.js'
 import { assertWritable, loadPackage, readPackageMeta, savePackage } from './store.js'
@@ -505,6 +506,8 @@ export class KnowledgeStore {
    * - 只物化 status=approved 的候选（pending/forcedReview 未过人审的拒绝）
    * - ISSUED 包拒绝写入（§3.4）
    * - 结论性表述只落 forbiddenPhrases 红线，绝不进输出契约（§5.3.2）
+   * - 物化改写源文件后自动重派生（D6）：否则包立刻 DERIVED_DRIFT 不可读，
+   *   逼 agent 走提权 CLI derive 才能恢复。
    */
   materialize(versionDir: string, candidateIds: string[]): { applied: string[]; skipped: Array<{ id: string; reason: string }> } {
     const meta = readPackageMeta(versionDir)
@@ -586,6 +589,8 @@ export class KnowledgeStore {
     // 权重联动归一（P3）：显式权重为准，未动规则吸收残差并同步技能模板——批量一次，避免互相打架。
     if (weightTouched.size > 0) renormalizeWeights(pkg, weightTouched)
     savePackage(versionDir, pkg)
+    // D6：源文件已变，同事务重派生，保持 loadgate 绿（未物化则源未变，不重派生）。
+    if (applied.length > 0) derivePackage(versionDir)
 
     for (const c of queue) {
       if (applied.includes(c.id)) c.status = 'merged'
