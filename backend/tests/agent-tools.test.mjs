@@ -662,6 +662,35 @@ test('D1 方案 B：相对路径读取失败给出可复制 dataset 内联示例
   assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
 })
 
+test('D2 数据集发现引导：run/invoke 工具描述与读取失败信封均指明 examples/ 样例位置', () => {
+  // 1) 源断言：三个执行工具的描述/参数描述含样例目录引导（防文案回退）
+  const toolsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const expertsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  for (const [label, src] of [['agent-tools', toolsSrc], ['agent-experts', expertsSrc]]) {
+    const hits = src.split('examples/').length - 1
+    assert.ok(hits >= 2, `${label} 至少两处 examples/ 样例引导（描述 + 参数/信封），实际 ${hits}`)
+    assert.ok(src.includes('aml-run.json'), `${label} 须点名 aml-run.json 样例`)
+    assert.ok(src.includes('dataset 内联'), `${label} 须给出 dataset 内联恢复路径`)
+  }
+  // run_scenario / run_scenarios / invoke_expert 三工具均被覆盖
+  assert.ok(toolsSrc.includes("name: 'run_scenario'") && toolsSrc.includes("name: 'run_scenarios'"))
+  assert.ok(expertsSrc.includes("name: 'invoke_expert'"))
+
+  // 2) 错误信封在场：读取失败时引导至 examples/ 样例 + 内联
+  let caught
+  try {
+    loadDatasetFromArgs({ datasetPath: 'no-such-d2-relative-dataset.json' })
+    assert.fail('期望 INVALID_ARGS')
+  } catch (e) {
+    caught = e
+  }
+  assert.ok(caught instanceof AgentToolError, `期望 AgentToolError，得到 ${caught}`)
+  assert.ok(caught.message.includes('examples/'), `读取失败信封须指明样例目录: ${caught.message}`)
+  assert.ok(caught.message.includes('aml-run.json'), `读取失败信封须点名样例文件: ${caught.message}`)
+  // 信封仍不泄漏绝对路径（D1 不变量不回退）
+  assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
+})
+
 test('知识上传全链路：name@version 入参 → 裸名入库 → 解析 → 物化不被 package mismatch 拒绝', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'onto-chain-'))
   try {

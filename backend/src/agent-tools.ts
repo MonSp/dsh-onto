@@ -198,6 +198,7 @@ export function loadDatasetFromArgs(
       throw new AgentToolError(
         'INVALID_ARGS',
         `无法读取 dataset 文件: ${raw} ——相对路径按平台进程工作目录解析，会话工作区或外部夹具请改用 dataset 内联，`
+          + '样例数据在 dsh-onto 源码检出目录的 examples/ 下（aml-run.json / med-run.json / tax-run.json），'
           + '可复制示例: {"objects":[],"relations":[],"candidates":[]}',
       )
     }
@@ -1131,7 +1132,11 @@ export function apply(ctx: Context): void {
       description:
         '执行一个业务本体场景（规则引擎判定，认定出口只在人工）。数据输入二选一：datasetPath（JSON 文件，'
         + '仅限平台进程工作目录内，外部/会话工作区夹具用 dataset 内联）'
-        + '或 dataset（内联 RuntimeDataset）。返回候选风险分、命中规则 ID、证据链、待核实点、'
+        + '或 dataset（内联 RuntimeDataset）。样例数据在 dsh-onto 源码检出目录的 examples/ 下'
+        + '（aml-run.json / med-run.json / tax-run.json）——不在会话工作区、也不在平台进程工作目录，'
+        + '相对 datasetPath 按平台进程工作目录解析会读不到；请先定位 dsh-onto 检出目录并读取文件内容，'
+        + '再用 dataset 内联传入。'
+        + '返回候选风险分、命中规则 ID、证据链、待核实点、'
         + 'humanReviewRequired=true 与禁语扫描结果。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
@@ -1139,7 +1144,8 @@ export function apply(ctx: Context): void {
         scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
         datasetPath: {
           type: 'string',
-          description: 'RuntimeDataset JSON 文件路径——仅限平台进程工作目录内的路径（围栏防穿越，越界拒绝）；会话工作区或外部夹具请改用 dataset 内联',
+          description: 'RuntimeDataset JSON 文件路径——仅限平台进程工作目录内的路径（围栏防穿越，越界拒绝）；'
+            + '样例在 dsh-onto 检出目录 examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: { type: 'json', description: '内联 RuntimeDataset（objects/relations/candidates）' },
       },
@@ -1261,7 +1267,8 @@ export function apply(ctx: Context): void {
         },
         datasetPath: {
           type: 'string',
-          description: '数据集 JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内的路径，外部夹具请用 dataset 内联）',
+          description: '数据集 JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内的路径，外部夹具请用 dataset 内联）。'
+            + '样例在 dsh-onto 检出目录 examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: {
           type: 'json',

@@ -303,12 +303,18 @@ export function registerExpertTools(
         + 'toolRefs 白名单越权即拒），再走与 run_scenario 相同的规则引擎契约。执行前自动按任务结构签名'
         + '召回相似经验，输出附 expert 包络（职责步/技能/工具白名单）与 experience 只读提示段'
         + '（coldStart/hits 含 reviewFocus/advice——经验只提示不改分）；打分只在引擎，humanReviewRequired 恒 true。'
-        + '数据 datasetPath/dataset 二选一。',
+        + '数据 datasetPath/dataset 二选一：样例数据在 dsh-onto 源码检出目录的 examples/ 下'
+        + '（aml-run.json / med-run.json / tax-run.json）——不在会话工作区、也不在平台进程工作目录，'
+        + '相对 datasetPath 会读不到；请先定位 dsh-onto 检出目录并读取文件内容，再用 dataset 内联传入。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
         scenarioId: { type: 'string', required: true, description: '专家/场景 ID（如 SCN-AML-FIND-CLUES）' },
-        datasetPath: { type: 'string', description: 'RuntimeDataset JSON 文件路径（与 dataset 二选一）' },
+        datasetPath: {
+          type: 'string',
+          description: 'RuntimeDataset JSON 文件路径（与 dataset 二选一）。样例在 dsh-onto 检出目录'
+            + ' examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
+        },
         dataset: { type: 'json', description: '内联 RuntimeDataset（与 datasetPath 二选一）' },
       },
       output: {

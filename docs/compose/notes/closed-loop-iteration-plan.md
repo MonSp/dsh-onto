@@ -66,7 +66,8 @@
 | # | 切片 | 出口判据 | 状态 |
 |---|---|---|---|
 | E1-1 | `invoke_expert` 执行前自动 `retrieveSimilar`，expert 包络附 experience 只读提示段（coldStart/hits 含 reviewFocus/advice） | NL：用户只说「跑一下反洗钱专家」，输出自带经验参考段；打分与不召回逐字段一致 | **完成**（轮 1，含 D1 当场修） |
-| E1-2 | `recall_experience` hits 投影补 `reviewFocus`（过 value/render 闸） | NL：用户问「上次类似的跑得怎么样」，回答含下轮复核提示 | 待做 |
+| D2 | run/invoke 工具描述 + `datasetPath` 参数描述 + 读取失败信封指明样例数据位置（dsh-onto 检出目录 examples/，读取后 dataset 内联） | NL：「最新那批数据」定位不再盲目翻目录，agent 从描述直接得知检出目录位置 | **完成**（轮 2，含 D2a 当场修） |
+| E1-2 | `recall_experience` hits 投影补 `reviewFocus`（过 value/render 闸） | NL：用户问「上次类似的跑得怎么样」，回答含下轮复核提示 | 待做（轮 3 优先） |
 | E1-3 | SkillTemplate 物化接线：append 新 SKL id 到对应场景 `pipeline.skillRefs` | NL：用户批准经验模板草案后问「专家现在会什么」，skills 含新 id | 待做 |
 | E2-1 | `abstract_experience` 工具（humanApproved，聚簇草案入队，结构位回执） | NL：用户说「最近这些成功经验总结一下」，agent 聚簇入队并让人审 | 待做 |
 | E2-2 | reviseDiff 接生产（可选）：recall top-1 走双路修正 + 转人工闸 | NL：差异大时 advice 明确「转人工」而非硬复用 | 待做 |
@@ -91,13 +92,22 @@
 
 | 轮 | 日期 | 切片 | NL 剧本 | 结果 | 新缺陷 | 反馈→下轮方案 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 1 | 2026-11-08 | E1-1 invoke 自动召回经验入包络 | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」（两轮） | ✓ backend 141/141 + dump 2/2；T4 裁剪（未改 workbench）；T5 首轮：agent 自选 invoke_expert、经验参考段在场（run-83450578 命中 score=1.00 + advice + humanReviewRequired）、ruleId/证据链齐、禁语 0；修复后重跑全绿且 RunRecord 落盘 | D1（P1，当场修）：invoke_expert 不落 RunRecord → export_audit not found（agent 自己发现并绕过 run_scenario 重跑留痕）；D2（P2）：「最新那批数据」定位摩擦——agent 花 ~20 步翻目录才找到 examples/aml-run.json | 下轮优先 D2：数据集发现引导（invoke/run 工具描述或技能提示样例数据位置，或列平台数据目录的只读入口）；再进 E1-2 | 本轮提交 |
+| 1 | 2026-11-08 | E1-1 invoke 自动召回经验入包络 | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」（两轮） | ✓ backend 141/141 + dump 2/2；T4 裁剪（未改 workbench）；T5 首轮：agent 自选 invoke_expert、经验参考段在场（run-83450578 命中 score=1.00 + advice + humanReviewRequired）、ruleId/证据链齐、禁语 0；修复后重跑全绿且 RunRecord 落盘 | D1（P1，当场修）：invoke_expert 不落 RunRecord → export_audit not found（agent 自己发现并绕过 run_scenario 重跑留痕）；D2（P2）：「最新那批数据」定位摩擦——agent 花 ~20 步翻目录才找到 examples/aml-run.json | 下轮优先 D2：数据集发现引导（invoke/run 工具描述或技能提示样例数据位置，或列平台数据目录的只读入口）；再进 E1-2 | 3263373 |
+| 2 | 2026-11-08 | D2 数据集发现引导（run/invoke 描述 + datasetPath 参数 + 读取失败信封指明 examples/ 位置） | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」→「这次跑完把结论记一笔，复核时重点看集中转入特征」 | ✓ backend 142/142（+D2 回归测试）+ dump 2/2；T4 裁剪（未改 workbench）；T5 重跑绿：描述引导生效（agent 思考直接点名 dsh-onto checkout examples/aml-run.json，~14 步定位 vs 轮 1 ~20 步）、自选 invoke_expert（run-39af3f64）、经验参考段在场（run-83450578 score=1.00 + 结构同构提示）、annotate 26s 自选落 reviewFocus 三项、humanReviewRequired=true 恒在、禁语 0、打分与轮 1 逐字段一致（0.906/0.0188/0.080）、D1 留痕修复复验通过（专家 run 可 export_audit） | D2a（P2，当场修）：初版描述误写「会话工作区 examples/」（实际在 dsh-onto 源码检出目录，会话工作区是 default-workspace），agent 找不到卡在提问——改为「dsh-onto 源码检出目录」后重跑通过；D3（P2，新）：agent 中途调 plugin_manager 触发 danger-full-access 审批打断（非必要调用）；D4（P2，新）：「最新那批」语义仍让 agent 花数步确认没有更新批次（读昨日报告+比对 digest 才定） | 下轮进 E1-2（recall hits 补 reviewFocus）；D3/D4 记 backlog 可选：工具面收窄 plugin_manager 暴露、run 记录/数据集「最新」只读查询入口 | 本轮提交 |
 
 **轮 1 反馈细节（T5 收集）**：
 - 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具；但数据定位阶段 agent 长时间自主翻目录（用户视角等待 ~5min46s 才出结论）。
 - agent 漏做：首轮漏留痕（D1，已修）；其余未漏（自动 invoke + 自动召回经验段都在场）。
 - 输出回答真实问题：是——除跑分外主动给出数据质量矛盾清单（同账户冲突/特征不可复算/listHitCount 无源），并产出报告文件。
 - 打分一致性：两轮同数据打分完全一致（0.906/0.019/0.080），经验段只提示未改分。
+
+**轮 2 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：一次——中途 `plugin_manager` 触发 danger-full-access 审批（D3，agent 非必要调用），点了「允许一次」；其余两句台词全程 agent 自选工具。
+- 定位摩擦对比：轮 1 ~20 步盲目翻目录；轮 2 描述引导下 ~14 步且**有明确目的地**（思考直接引用「dsh-onto checkout examples/aml-run.json」），首步即调 working_directory/list_packages 而非乱搜。但「最新那批」语义仍需读昨日报告 + 比对 digest 才能确认没有更新批次（D4）。
+- agent 漏做：无——invoke 自动经验段、RunRecord 留痕（D1 修复复验 ✓）、annotate 自选 reviewFocus 均在场。
+- 输出回答真实问题：是——除跑分外主动给出三处严重数据问题（同账户矛盾候选/特征不可复算/listHitCount 无源），并发现「集中转入」在现有规则口径中被 FANOUT 乘法项漏掉（有价值的规则缺口反馈）。
+- 打分一致性：与轮 1 逐字段一致（0.906/0.0188/0.080），经验只提示未改分。
+- 首跑失败教训（D2a）：描述文案必须区分「会话工作区」与「dsh-onto 源码检出目录」——平台三 cwd（会话 workspace / 进程 cwd=harness / 检出目录）不同，写错一个词 agent 就按错位置找。
 
 ## 六、拍板记录
 
