@@ -1,0 +1,8 @@
+kind: O1Dictionary
+id: dict-tax-return-type
+name: 申报类型
+values:
+  - 增值税申报
+  - 企业所得税申报
+  - 出口退税申报
+  - 附加税费申报

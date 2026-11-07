@@ -62,6 +62,35 @@ test('addDraft：草案只入队列不写包，带 provenance，幂等（I1）',
   }
 })
 
+test('addDraft 溯源 runId（experience-loop S4.4）：透传保留；非法 runId 拒绝', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(root)
+    const item = {
+      layer: 'O2',
+      targetKind: 'SkillTemplate',
+      name: '经验技能',
+      payload: { id: 'SKL-TST-EXP', weights: { 'RULE-TST-S1': 1 } },
+      confidence: 0.9,
+    }
+    const c = store.addDraft({ packageId: 'test-pkg', item, provenance: { runId: 'run-abc12345' } })
+    assert.equal(c.provenance.runId, 'run-abc12345')
+    assert.equal(c.sourceId, '')
+    const again = store.addDraft({ packageId: 'test-pkg', item, provenance: { runId: 'run-abc12345' } })
+    assert.equal(again.id, c.id)
+    assert.throws(
+      () => store.addDraft({ packageId: 'test-pkg', item: { ...item, name: '坏溯源' }, provenance: { runId: 123 } }),
+      /runId must be a non-empty string/,
+    )
+    assert.throws(
+      () => store.addDraft({ packageId: 'test-pkg', item: { ...item, name: '空溯源' }, provenance: { runId: '' } }),
+      /runId must be a non-empty string/,
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('批准物化：appliedAs 落盘 + 画布溯源回连（I2）', () => {
   const { dir, root } = mkWorkspaceWithPkg()
   try {

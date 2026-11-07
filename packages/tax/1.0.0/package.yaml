@@ -1,0 +1,8 @@
+kind: BusinessOntologyPackage
+name: tax-risk
+version: 1.0.0
+domain: TAX
+metaFrameworkVersion: "1.0"
+status: DRAFT
+issueRecord: []
+externalRefs: []

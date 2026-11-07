@@ -1,0 +1,9 @@
+kind: O1Dictionary
+id: dict-tax-match-type
+name: 匹配类型
+values:
+  - 正常匹配
+  - 金额差异
+  - 时间差异
+  - 无对应
+  - 资金回流

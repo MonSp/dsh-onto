@@ -19,10 +19,28 @@
  *   dsh-onto knowledge queue [--package P] [--root <ws>]
  *   dsh-onto knowledge review --id <cid> --action approve|reject|merge [--merge-into NAME]
  *   dsh-onto knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
+ *   dsh-onto exp recall --dir <versionDir> --scenario <SCN> --data run.json [--top-k N] [--threshold T]
+ *   dsh-onto exp annotate --dir <versionDir> --run <runId> --outcome success|partial|failure|pending-human
+ *                         [--reason R] [--counterexample] [--reused-from <runId>] [--review-focus a,b]
+ *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
+ *   dsh-onto exp list
+ *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--data-dir <knowledgeRoot>]
+ *   dsh-onto exp compress [--retain-days N] [--apply]
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
+import {
+  abstractCounterexampleDrafts,
+  abstractSkillDrafts,
+  buildDiffTable,
+  buildTaskSignature,
+  compressExperiences,
+  listExperienceNotes,
+  loadExperienceNote,
+  retrieveSimilar,
+  saveExperienceNote,
+} from './experience.js'
 import { KnowledgeStore } from './knowledge.js'
 import { DeepSeekLlm, HeuristicLlm } from './llm.js'
 import { verifyDerived } from './loadgate.js'
@@ -115,6 +133,8 @@ function main(): void {
       return cmdRuns(sub, args)
     case 'knowledge':
       return cmdKnowledge(sub, args)
+    case 'exp':
+      return cmdExp(sub, args)
     case 'help':
     case undefined:
       return help()
@@ -135,6 +155,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   run <versionDir> <scenarioId> --data run.json [--out result.json]
   runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
   knowledge upload|parse|queue|review|materialize
+  exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
 `
 
@@ -326,6 +347,193 @@ function cmdRuns(sub: string | undefined, args: Args): void {
     }
     default:
       fail(`unknown runs subcommand ${String(sub)}`)
+  }
+}
+
+function summaryOf(dataset: RuntimeDataset): {
+  objects: number
+  relations: number
+  behaviors: number
+  candidates: number
+} {
+  return {
+    objects: dataset.objects.length,
+    relations: dataset.relations.length,
+    behaviors: dataset.behaviors?.length ?? 0,
+    candidates: dataset.candidates.length,
+  }
+}
+
+function loadDatasetFile(path: string): RuntimeDataset {
+  const file = resolve(path)
+  if (!existsSync(file)) fail(`dataset file not found: ${path}`)
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as RuntimeDataset
+  } catch {
+    fail(`dataset file is not valid JSON: ${path}`)
+  }
+}
+
+/** 经验闭环组（experience-loop S5）：recall / annotate / diff / list —— CLI 验收面。 */
+function cmdExp(sub: string | undefined, args: Args): void {
+  const root = workspaceOf(args).root
+  switch (sub) {
+    case 'recall': {
+      const dir = flagStr(args, 'dir')
+      const scenarioId = flagStr(args, 'scenario')
+      const dataset = loadDatasetFile(flagStr(args, 'data'))
+      const pkg = loadPackage(dir)
+      const signature = buildTaskSignature({ pkg, scenarioId, datasetSummary: summaryOf(dataset) })
+      const topK = typeof args.flags['top-k'] === 'string' ? Number(args.flags['top-k']) : undefined
+      const threshold = typeof args.flags['threshold'] === 'string' ? Number(args.flags['threshold']) : undefined
+      const result = retrieveSimilar(
+        root,
+        { signature, externalRefs: pkg.meta.externalRefs },
+        { topK, threshold },
+      )
+      print({
+        signature: {
+          scenarioId: signature.scenarioId,
+          packageScope: signature.packageScope,
+          stepShape: signature.stepShape,
+          dataBand: signature.dataBand,
+          digest: signature.digest.slice(0, 12),
+        },
+        coldStart: result.coldStart,
+        digestMatch: result.digestMatch?.runId ?? null,
+        hits: result.hits.map((h) => ({
+          runId: h.note.runId,
+          score: Number(h.score.toFixed(3)),
+          outcome: h.note.outcome,
+          counterexample: h.note.counterexample,
+          reasons: h.reasons,
+        })),
+      })
+      return
+    }
+    case 'annotate': {
+      const dir = flagStr(args, 'dir')
+      const runId = flagStr(args, 'run')
+      const outcome = flagStr(args, 'outcome')
+      if (!['success', 'partial', 'failure', 'pending-human'].includes(outcome)) {
+        fail('--outcome must be success|partial|failure|pending-human')
+      }
+      const rec = loadRunRecord(root, runId)
+      // 闸门复用：审计结果约束 outcome——审计未过不得标 success（除非 counterexample）
+      let existing: import('./experience.js').ExperienceNote | null = null
+      try {
+        existing = loadExperienceNote(root, runId)
+      } catch {
+        existing = null
+      }
+      const counterexample = args.flags['counterexample'] === true || existing?.counterexample === true
+      if (outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
+        fail('audit not passed — cannot annotate success (use failure/partial or --counterexample)')
+      }
+      // patch 语义（M2）：已有 note 保留人审字段（misTransfer/reusedFrom/reviewFocus），
+      // 只覆写本次显式传入的旗标——CLI 二次标注不得静默抹掉人工判定。
+      const signature = existing?.signature ?? buildTaskSignature({
+        pkg: loadPackage(dir),
+        scenarioId: rec.scenarioId,
+        datasetSummary: rec.datasetSummary,
+      })
+      let reusedFrom: { runId: string; diff: ReturnType<typeof buildDiffTable> } | undefined
+      if (typeof args.flags['reused-from'] === 'string') {
+        const srcId = args.flags['reused-from']
+        const src = loadExperienceNote(root, srcId)
+        reusedFrom = { runId: srcId, diff: buildDiffTable(signature, src.signature) }
+      } else {
+        reusedFrom = existing?.reusedFrom
+      }
+      const note: import('./experience.js').ExperienceNote = {
+        runId,
+        signature,
+        outcome: outcome as import('./experience.js').ExperienceOutcome,
+        outcomeReason:
+          typeof args.flags['reason'] === 'string' ? args.flags['reason'] : existing?.outcomeReason,
+        skillRefsUsed: existing?.skillRefsUsed ?? signature.skillRefs,
+        reusedFrom,
+        counterexample,
+        misTransfer: existing?.misTransfer,
+        reviewFocus:
+          typeof args.flags['review-focus'] === 'string'
+            ? args.flags['review-focus'].split(',').map((s) => s.trim()).filter(Boolean)
+            : existing?.reviewFocus,
+        savedAt: new Date().toISOString(),
+      }
+      const file = saveExperienceNote(root, note)
+      print({ ok: true, runId, outcome, counterexample, patched: existing !== null, file: basename(file) })
+      return
+    }
+    case 'diff': {
+      const dir = flagStr(args, 'dir')
+      const scenarioId = flagStr(args, 'scenario')
+      const sourceId = flagStr(args, 'source')
+      const dataset = loadDatasetFile(flagStr(args, 'data'))
+      const pkg = loadPackage(dir)
+      const query = buildTaskSignature({ pkg, scenarioId, datasetSummary: summaryOf(dataset) })
+      const source = loadExperienceNote(root, sourceId)
+      const draft = buildDiffTable(query, source.signature)
+      print({
+        query: { scenarioId: query.scenarioId, digest: query.digest.slice(0, 12) },
+        source: { runId: source.runId, digest: source.signature.digest.slice(0, 12) },
+        draft,
+      })
+      return
+    }
+    case 'list': {
+      print({
+        experiences: listExperienceNotes(root).map((n) => ({
+          runId: n.runId,
+          scenarioId: n.signature.scenarioId,
+          outcome: n.outcome,
+          counterexample: n.counterexample,
+          reusedFrom: n.reusedFrom?.runId ?? null,
+          misTransfer: n.misTransfer?.judged ?? false,
+          savedAt: n.savedAt,
+        })),
+      })
+      return
+    }
+    case 'abstract': {
+      const dir = flagStr(args, 'dir')
+      const pkg = loadPackage(dir)
+      const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
+      const abs = abstractSkillDrafts(root, { pkg, minCluster })
+      const counters = abstractCounterexampleDrafts(root, { pkg, minCluster })
+      // knowledge 队列根：优先 --data-dir（L3）；否则按默认布局推断（workspace 目录名约定）。
+      // workspace 布局下 dataDir = dirname(workspace)；否则同根。目录改名时请显式传 --data-dir。
+      const dataDirFlag = typeof args.flags['data-dir'] === 'string' ? resolve(args.flags['data-dir']) : undefined
+      const base = basename(root)
+      const dataDir = dataDirFlag ?? (base === 'workspace' ? dirname(root) : root)
+      const knowledge = new KnowledgeStore(dataDir)
+      const queued: Array<{ id: string; name: string; kind: string; runId: string; members: number }> = []
+      for (const a of [...abs, ...counters]) {
+        const c = knowledge.addDraft({
+          packageId: `${pkg.meta.name}@${pkg.meta.version}`,
+          item: a.draft,
+          provenance: { runId: a.memberRunIds[0] },
+        })
+        queued.push({ id: c.id, name: c.name, kind: a.draft.targetKind, runId: a.memberRunIds[0], members: a.memberRunIds.length })
+      }
+      print({
+        queued,
+        skills: abs.length,
+        counters: counters.length,
+        knowledgeRoot: dataDir,
+        note: '草案已入队（pending），物化必经人审',
+      })
+      return
+    }
+    case 'compress': {
+      const retainDays = typeof args.flags['retain-days'] === 'string' ? Number(args.flags['retain-days']) : undefined
+      const apply = args.flags['apply'] === true
+      const report = compressExperiences(root, { retainDays, apply })
+      print({ ...report, applied: apply })
+      return
+    }
+    default:
+      fail(`unknown exp subcommand ${String(sub)}`)
   }
 }
 

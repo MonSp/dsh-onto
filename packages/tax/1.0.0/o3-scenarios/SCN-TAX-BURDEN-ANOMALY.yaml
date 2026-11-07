@@ -1,0 +1,91 @@
+kind: O3ScenarioCard
+scenario:
+  id: SCN-TAX-BURDEN-ANOMALY
+  name: 税负异常识别
+  goal: 从纳税人申报表与行业税负基准出发，识别税负率偏离、进项结构异常、收入申报背离等候选风险线索，输出风险分与待核实点；不作定性。
+  boundary: 仅输出候选线索、风险分与待核实点；不作定性，不替代人工复核与处理决定。
+  inputs:
+    - description: 纳税人识别号
+      name: taxpayerId
+      required: true
+      type: string
+    - description: 税种（增值税/企业所得税，缺省覆盖两类）
+      name: taxType
+      required: false
+      type: string
+    - description: 观察期，YYYY-MM 或 YYYY
+      name: period
+      required: false
+      type: string
+  outputs:
+    fields:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+      - excluded
+  pipeline:
+    - label: 归一纳税人、申报表、发票、流水与行业基准
+      stepId: s1
+      stepType: DATA_INGEST
+    - label: 装载登记、开票、受票、申报、缴税、转账、购销行为
+      stepId: s2
+      stepType: BEHAVIOR_CALL
+    - label: 排除段：小微/新办季节/政策性收入
+      order: before-scoring
+      stepId: s3
+      stepType: RULE_EVALUATE
+    - label: 打分段：公共 4 条 + 税负带 3 条
+      stepId: s4
+      stepType: RULE_EVALUATE
+    - label: 税负偏离叙述
+      skillRefs:
+        - SKL-TAX-BURDEN-NARRATIVE
+      stepId: s5
+      stepType: SKILL_RUN
+    - label: 三层闭合审计
+      stepId: s6
+      stepType: AUDIT_CHECK
+    - label: 人工复核
+      stepId: s7
+      stepType: HUMAN_REVIEW
+  behaviorRefs:
+    - BHV-TAX-REGISTER-TAXPAYER
+    - BHV-TAX-ISSUE-INVOICE
+    - BHV-TAX-RECEIVE-INVOICE
+    - BHV-TAX-FILE-RETURN
+    - BHV-TAX-PAY-TAX
+    - BHV-TAX-TRANSFER-FUND
+    - BHV-TAX-BUILD-SUPPLY
+  exclusionRefs:
+    - RULE-TAX-EXCL-MICRO
+    - RULE-TAX-EXCL-NEW-SEASONAL
+    - RULE-TAX-EXCL-POLICY-INCOME
+  scoreRefs:
+    - RULE-TAX-SCORE-REGISTRATION
+    - RULE-TAX-SCORE-RELATED-CONCENTRATION
+    - RULE-TAX-SCORE-FUND-ANOMALY
+    - RULE-TAX-SCORE-DECLARATION-CONSISTENCY
+    - RULE-TAX-SCORE-BURDEN-DEVIATION
+    - RULE-TAX-SCORE-INPUT-STRUCTURE
+    - RULE-TAX-SCORE-REVENUE-MISMATCH
+  output_contract:
+    mustInclude:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+    forbiddenPhrases:
+      - 认定偷税
+      - 确定为偷税
+      - 已构成逃税罪
+      - 该纳税人系偷税企业
+  review_gate:
+    required: true
+    threshold: 0.45
+  auditChecks:
+    - O1_CLOSED
+    - O2_CLOSED
+    - O3_CLOSED

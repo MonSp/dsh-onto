@@ -44,6 +44,8 @@ const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.ur
 const AML_RUN = fileURLToPath(new URL('../../examples/aml-run.json', import.meta.url))
 const MED_DIR = fileURLToPath(new URL('../../packages/med/1.0.0', import.meta.url))
 const MED_RUN = fileURLToPath(new URL('../../examples/med-run.json', import.meta.url))
+const TAX_DIR = fileURLToPath(new URL('../../packages/tax/1.0.0', import.meta.url))
+const TAX_RUN = fileURLToPath(new URL('../../examples/tax-run.json', import.meta.url))
 
 function fakeResult(runId = 'run-abc12345') {
   return {
@@ -427,6 +429,41 @@ test('runScenarioBatch：med 域全场景批量过装配断言（多域同口径
       assert.equal(item.summary.humanReviewRequired, true)
       loadRunRecord(root, item.runId)
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    configurePhraseStore(null)
+  }
+})
+
+test('runScenarioBatch：tax 第三域全场景批量过装配断言（三域 MULTI-DOMAIN）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-onto-batch-tax-'))
+  try {
+    const ws = new PackageWorkspace(root)
+    const dir = ws.versionDir('tax-risk', '1.0.0')
+    cpSync(TAX_DIR, dir, { recursive: true })
+    derivePackage(dir)
+    const pkg = loadPackage(dir)
+    assert.equal(pkg.meta.domain, 'TAX')
+    const dataset = loadDatasetFromArgs({ dataset: JSON.parse(readFileSync(TAX_RUN, 'utf8')) }, { baseDir: REPO })
+    const ids = pkg.scenarios.map((s) => s.id)
+    assert.equal(ids.length, 3, `tax 应有三场景: ${ids}`)
+    const out = runScenarioBatch({ ws, pkg, versionDir: dir, dataset, ids })
+    assertBatchContract(out)
+    assert.equal(out.results.length, 3)
+    for (const item of out.results) {
+      assert.equal(item.status, 'ok', `${item.scenarioId} 应成功: ${JSON.stringify(item.error ?? null)}`)
+      assert.equal(item.summary.humanReviewRequired, true)
+      assert.equal(item.summary.auditPassed, true, `${item.scenarioId} audit 应过`)
+      loadRunRecord(root, item.runId)
+    }
+    // 虚开场景：高风险候选命中 + 白名单排除（单场景深断言）
+    const fake = out.results.find((r) => r.scenarioId === 'SCN-TAX-FAKE-INVOICE')
+    assert.ok(fake && fake.status === 'ok')
+    assert.ok(fake.summary.candidateCount >= 1)
+    assert.ok(fake.summary.excludedCount >= 1, '白名单排除件应在场')
+    console.log(
+      `MULTI-DOMAIN PASS (tax ${ids.length} scenarios: ${out.results.map((r) => `${r.scenarioId}=${r.summary.hitRuleCount}hits`).join(', ')})`,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
     configurePhraseStore(null)

@@ -1,0 +1,24 @@
+kind: O2SkillTemplate
+template:
+  id: SKL-TAX-BURDEN-NARRATIVE
+  name: 税负偏离叙述
+  weights:
+    RULE-TAX-SCORE-BURDEN-DEVIATION: 0.08
+    RULE-TAX-SCORE-DECLARATION-CONSISTENCY: 0.1
+    RULE-TAX-SCORE-DOC-COMPLETENESS: 0.08
+    RULE-TAX-SCORE-EXPORT-GOODS: 0.06
+    RULE-TAX-SCORE-FUND-ANOMALY: 0.1
+    RULE-TAX-SCORE-FUND-LOOP: 0.08
+    RULE-TAX-SCORE-FX-MATCH: 0.06
+    RULE-TAX-SCORE-INPUT-STRUCTURE: 0.06
+    RULE-TAX-SCORE-INVOICE-GOODS: 0.06
+    RULE-TAX-SCORE-REGISTRATION: 0.1
+    RULE-TAX-SCORE-RELATED-CONCENTRATION: 0.1
+    RULE-TAX-SCORE-RELATED-LOOP: 0.06
+    RULE-TAX-SCORE-REVENUE-MISMATCH: 0.06
+  steps:
+    - 对齐行业/期/地区税负基准
+    - 拆解进项结构与敏感品目
+    - 核对开票、流水与申报销售额
+  outputTemplate: 候选 {candidateId}：风险分 {riskScore}，命中 {hitCount} 条规则（{ruleIds}）；税负偏离度
+    {burdenDeviation}，进项突增比例 {inputSpikeRatio}，开票与申报差异度 {invoiceSalesGap}。请核实行业基准、进项构成与收入口径。

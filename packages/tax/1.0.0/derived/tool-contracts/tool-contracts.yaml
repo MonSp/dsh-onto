@@ -1,0 +1,415 @@
+kind: DerivedToolContracts
+llmForbidden: true
+idRules:
+  - objectId: OBJ-TAX-TAXPAYER
+    idRule: <tin>
+  - objectId: OBJ-TAX-INVOICE
+    idRule: <invoice_code>:<invoice_no>
+  - objectId: OBJ-TAX-INVOICE-LINE
+    idRule: <invoice_code>:<invoice_no>:<line_no>
+  - objectId: OBJ-TAX-GOODS
+    idRule: <goods_code>
+  - objectId: OBJ-TAX-TAX-RETURN
+    idRule: <taxpayer_tin>:<return_type>:<period>
+  - objectId: OBJ-TAX-BANK-ACCOUNT
+    idRule: <bank_code>:<acct_no>
+  - objectId: OBJ-TAX-BANK-FLOW
+    idRule: <bank_code>:<flow_no>
+  - objectId: OBJ-TAX-EXPORT-DOC
+    idRule: <doc_type>:<doc_no>
+  - objectId: OBJ-TAX-FX-RECEIPT
+    idRule: <receipt_no>
+  - objectId: OBJ-TAX-INDUSTRY-BENCHMARK
+    idRule: <industry_code>:<tax_type>:<period>:<region_code>
+tools:
+  - id: TOOL-TAX-TAXPAYER
+    name: 读取纳税人
+    kind: object-read
+    objectId: OBJ-TAX-TAXPAYER
+    grantScope: OBJ-TAX-TAXPAYER
+    inputs:
+      - OBJ-TAX-TAXPAYER.tin
+      - OBJ-TAX-TAXPAYER.name
+    outputs:
+      - OBJ-TAX-TAXPAYER.tin
+      - OBJ-TAX-TAXPAYER.name
+      - OBJ-TAX-TAXPAYER.taxpayerType
+      - OBJ-TAX-TAXPAYER.industryCode
+      - OBJ-TAX-TAXPAYER.regionCode
+      - OBJ-TAX-TAXPAYER.registrationDate
+      - OBJ-TAX-TAXPAYER.status
+      - OBJ-TAX-TAXPAYER.creditLevel
+      - OBJ-TAX-TAXPAYER.legalPerson
+      - OBJ-TAX-TAXPAYER.registeredAddress
+      - OBJ-TAX-TAXPAYER.phone
+  - id: TOOL-TAX-INVOICE
+    name: 读取发票
+    kind: object-read
+    objectId: OBJ-TAX-INVOICE
+    grantScope: OBJ-TAX-INVOICE
+    inputs:
+      - OBJ-TAX-INVOICE.invoiceCode
+      - OBJ-TAX-INVOICE.invoiceNo
+      - OBJ-TAX-INVOICE.issueDate
+      - OBJ-TAX-INVOICE.sellerTin
+      - OBJ-TAX-INVOICE.buyerTin
+    outputs:
+      - OBJ-TAX-INVOICE.invoiceCode
+      - OBJ-TAX-INVOICE.invoiceNo
+      - OBJ-TAX-INVOICE.invoiceType
+      - OBJ-TAX-INVOICE.issueDate
+      - OBJ-TAX-INVOICE.sellerTin
+      - OBJ-TAX-INVOICE.buyerTin
+      - OBJ-TAX-INVOICE.amountExTax
+      - OBJ-TAX-INVOICE.taxAmount
+      - OBJ-TAX-INVOICE.totalAmount
+      - OBJ-TAX-INVOICE.goodsSummary
+      - OBJ-TAX-INVOICE.status
+  - id: TOOL-TAX-INVOICE-LINE
+    name: 读取发票明细
+    kind: object-read
+    objectId: OBJ-TAX-INVOICE-LINE
+    grantScope: OBJ-TAX-INVOICE-LINE
+    inputs:
+      - OBJ-TAX-INVOICE-LINE.invoiceCode
+      - OBJ-TAX-INVOICE-LINE.invoiceNo
+      - OBJ-TAX-INVOICE-LINE.lineNo
+    outputs:
+      - OBJ-TAX-INVOICE-LINE.invoiceCode
+      - OBJ-TAX-INVOICE-LINE.invoiceNo
+      - OBJ-TAX-INVOICE-LINE.lineNo
+      - OBJ-TAX-INVOICE-LINE.goodsCode
+      - OBJ-TAX-INVOICE-LINE.goodsName
+      - OBJ-TAX-INVOICE-LINE.spec
+      - OBJ-TAX-INVOICE-LINE.quantity
+      - OBJ-TAX-INVOICE-LINE.unitPrice
+      - OBJ-TAX-INVOICE-LINE.amount
+      - OBJ-TAX-INVOICE-LINE.taxRate
+  - id: TOOL-TAX-GOODS
+    name: 读取货物
+    kind: object-read
+    objectId: OBJ-TAX-GOODS
+    grantScope: OBJ-TAX-GOODS
+    inputs:
+      - OBJ-TAX-GOODS.goodsCode
+      - OBJ-TAX-GOODS.goodsName
+    outputs:
+      - OBJ-TAX-GOODS.goodsCode
+      - OBJ-TAX-GOODS.goodsName
+      - OBJ-TAX-GOODS.category
+      - OBJ-TAX-GOODS.unit
+      - OBJ-TAX-GOODS.isSensitive
+      - OBJ-TAX-GOODS.exportRebateRate
+  - id: TOOL-TAX-TAX-RETURN
+    name: 读取申报表
+    kind: object-read
+    objectId: OBJ-TAX-TAX-RETURN
+    grantScope: OBJ-TAX-TAX-RETURN
+    inputs:
+      - OBJ-TAX-TAX-RETURN.returnType
+      - OBJ-TAX-TAX-RETURN.period
+      - OBJ-TAX-TAX-RETURN.taxpayerTin
+    outputs:
+      - OBJ-TAX-TAX-RETURN.returnType
+      - OBJ-TAX-TAX-RETURN.period
+      - OBJ-TAX-TAX-RETURN.taxpayerTin
+      - OBJ-TAX-TAX-RETURN.salesAmount
+      - OBJ-TAX-TAX-RETURN.outputTax
+      - OBJ-TAX-TAX-RETURN.inputTax
+      - OBJ-TAX-TAX-RETURN.taxPayable
+      - OBJ-TAX-TAX-RETURN.taxPaid
+      - OBJ-TAX-TAX-RETURN.creditCarryforward
+      - OBJ-TAX-TAX-RETURN.refundAmount
+      - OBJ-TAX-TAX-RETURN.filingDate
+      - OBJ-TAX-TAX-RETURN.status
+  - id: TOOL-TAX-BANK-ACCOUNT
+    name: 读取银行账户
+    kind: object-read
+    objectId: OBJ-TAX-BANK-ACCOUNT
+    grantScope: OBJ-TAX-BANK-ACCOUNT
+    inputs:
+      - OBJ-TAX-BANK-ACCOUNT.bankCode
+      - OBJ-TAX-BANK-ACCOUNT.acctNo
+      - OBJ-TAX-BANK-ACCOUNT.ownerTin
+    outputs:
+      - OBJ-TAX-BANK-ACCOUNT.bankCode
+      - OBJ-TAX-BANK-ACCOUNT.acctNo
+      - OBJ-TAX-BANK-ACCOUNT.bankName
+      - OBJ-TAX-BANK-ACCOUNT.acctName
+      - OBJ-TAX-BANK-ACCOUNT.openDate
+      - OBJ-TAX-BANK-ACCOUNT.status
+      - OBJ-TAX-BANK-ACCOUNT.ownerTin
+  - id: TOOL-TAX-BANK-FLOW
+    name: 读取银行流水
+    kind: object-read
+    objectId: OBJ-TAX-BANK-FLOW
+    grantScope: OBJ-TAX-BANK-FLOW
+    inputs:
+      - OBJ-TAX-BANK-FLOW.bankCode
+      - OBJ-TAX-BANK-FLOW.flowNo
+      - OBJ-TAX-BANK-FLOW.acctNo
+      - OBJ-TAX-BANK-FLOW.amount
+      - OBJ-TAX-BANK-FLOW.occurredAt
+    outputs:
+      - OBJ-TAX-BANK-FLOW.bankCode
+      - OBJ-TAX-BANK-FLOW.flowNo
+      - OBJ-TAX-BANK-FLOW.acctNo
+      - OBJ-TAX-BANK-FLOW.counterpartyAcctNo
+      - OBJ-TAX-BANK-FLOW.counterpartyName
+      - OBJ-TAX-BANK-FLOW.direction
+      - OBJ-TAX-BANK-FLOW.amount
+      - OBJ-TAX-BANK-FLOW.currency
+      - OBJ-TAX-BANK-FLOW.occurredAt
+      - OBJ-TAX-BANK-FLOW.summary
+      - OBJ-TAX-BANK-FLOW.purpose
+  - id: TOOL-TAX-EXPORT-DOC
+    name: 读取出口单证
+    kind: object-read
+    objectId: OBJ-TAX-EXPORT-DOC
+    grantScope: OBJ-TAX-EXPORT-DOC
+    inputs:
+      - OBJ-TAX-EXPORT-DOC.docType
+      - OBJ-TAX-EXPORT-DOC.docNo
+    outputs:
+      - OBJ-TAX-EXPORT-DOC.docType
+      - OBJ-TAX-EXPORT-DOC.docNo
+      - OBJ-TAX-EXPORT-DOC.issueDate
+      - OBJ-TAX-EXPORT-DOC.exporterTin
+      - OBJ-TAX-EXPORT-DOC.foreignBuyer
+      - OBJ-TAX-EXPORT-DOC.amount
+      - OBJ-TAX-EXPORT-DOC.currency
+      - OBJ-TAX-EXPORT-DOC.goodsCode
+      - OBJ-TAX-EXPORT-DOC.quantity
+      - OBJ-TAX-EXPORT-DOC.customsCode
+      - OBJ-TAX-EXPORT-DOC.tradeMode
+      - OBJ-TAX-EXPORT-DOC.destinationCountry
+      - OBJ-TAX-EXPORT-DOC.status
+  - id: TOOL-TAX-FX-RECEIPT
+    name: 读取收汇凭证
+    kind: object-read
+    objectId: OBJ-TAX-FX-RECEIPT
+    grantScope: OBJ-TAX-FX-RECEIPT
+    inputs:
+      - OBJ-TAX-FX-RECEIPT.receiptNo
+    outputs:
+      - OBJ-TAX-FX-RECEIPT.receiptNo
+      - OBJ-TAX-FX-RECEIPT.receiptDate
+      - OBJ-TAX-FX-RECEIPT.amount
+      - OBJ-TAX-FX-RECEIPT.currency
+      - OBJ-TAX-FX-RECEIPT.payerName
+      - OBJ-TAX-FX-RECEIPT.payerCountry
+      - OBJ-TAX-FX-RECEIPT.payeeAcctNo
+      - OBJ-TAX-FX-RECEIPT.customsDocNo
+      - OBJ-TAX-FX-RECEIPT.verifiedStatus
+  - id: TOOL-TAX-INDUSTRY-BENCHMARK
+    name: 读取行业税负基准
+    kind: object-read
+    objectId: OBJ-TAX-INDUSTRY-BENCHMARK
+    grantScope: OBJ-TAX-INDUSTRY-BENCHMARK
+    inputs:
+      - OBJ-TAX-INDUSTRY-BENCHMARK.industryCode
+      - OBJ-TAX-INDUSTRY-BENCHMARK.period
+      - OBJ-TAX-INDUSTRY-BENCHMARK.taxType
+    outputs:
+      - OBJ-TAX-INDUSTRY-BENCHMARK.industryCode
+      - OBJ-TAX-INDUSTRY-BENCHMARK.period
+      - OBJ-TAX-INDUSTRY-BENCHMARK.regionCode
+      - OBJ-TAX-INDUSTRY-BENCHMARK.taxType
+      - OBJ-TAX-INDUSTRY-BENCHMARK.avgBurdenRate
+      - OBJ-TAX-INDUSTRY-BENCHMARK.p25
+      - OBJ-TAX-INDUSTRY-BENCHMARK.p50
+      - OBJ-TAX-INDUSTRY-BENCHMARK.p75
+      - OBJ-TAX-INDUSTRY-BENCHMARK.sampleSize
+  - id: TOOL-TAX-OWNS-ACCOUNT
+    name: 读取纳税人持有账户
+    kind: relation-read
+    relationId: REL-TAX-OWNS-ACCOUNT
+    grantScope: REL-TAX-OWNS-ACCOUNT
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-BANK-ACCOUNT
+    outputs:
+      - REL-TAX-OWNS-ACCOUNT.since
+      - REL-TAX-OWNS-ACCOUNT.role
+  - id: TOOL-TAX-FLOW-FROM
+    name: 读取流水付款账户
+    kind: relation-read
+    relationId: REL-TAX-FLOW-FROM
+    grantScope: REL-TAX-FLOW-FROM
+    inputs:
+      - OBJ-TAX-BANK-FLOW
+      - OBJ-TAX-BANK-ACCOUNT
+    outputs:
+      - REL-TAX-FLOW-FROM.role
+  - id: TOOL-TAX-FLOW-TO
+    name: 读取流水收款账户
+    kind: relation-read
+    relationId: REL-TAX-FLOW-TO
+    grantScope: REL-TAX-FLOW-TO
+    inputs:
+      - OBJ-TAX-BANK-FLOW
+      - OBJ-TAX-BANK-ACCOUNT
+    outputs:
+      - REL-TAX-FLOW-TO.role
+  - id: TOOL-TAX-ISSUES-INVOICE
+    name: 读取销方开票
+    kind: relation-read
+    relationId: REL-TAX-ISSUES-INVOICE
+    grantScope: REL-TAX-ISSUES-INVOICE
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-INVOICE
+    outputs:
+      - REL-TAX-ISSUES-INVOICE.role
+  - id: TOOL-TAX-RECEIVES-INVOICE
+    name: 读取购方受票
+    kind: relation-read
+    relationId: REL-TAX-RECEIVES-INVOICE
+    grantScope: REL-TAX-RECEIVES-INVOICE
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-INVOICE
+    outputs:
+      - REL-TAX-RECEIVES-INVOICE.role
+  - id: TOOL-TAX-INVOICE-HAS-LINE
+    name: 读取发票含明细
+    kind: relation-read
+    relationId: REL-TAX-INVOICE-HAS-LINE
+    grantScope: REL-TAX-INVOICE-HAS-LINE
+    inputs:
+      - OBJ-TAX-INVOICE
+      - OBJ-TAX-INVOICE-LINE
+    outputs: []
+  - id: TOOL-TAX-LINE-GOODS
+    name: 读取明细对应货物
+    kind: relation-read
+    relationId: REL-TAX-LINE-GOODS
+    grantScope: REL-TAX-LINE-GOODS
+    inputs:
+      - OBJ-TAX-INVOICE-LINE
+      - OBJ-TAX-GOODS
+    outputs:
+      - REL-TAX-LINE-GOODS.matchType
+  - id: TOOL-TAX-SUPPLY
+    name: 读取上下游购销关系
+    kind: relation-read
+    relationId: REL-TAX-SUPPLY
+    grantScope: REL-TAX-SUPPLY
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-TAXPAYER
+    outputs:
+      - REL-TAX-SUPPLY.direction
+      - REL-TAX-SUPPLY.amount
+      - REL-TAX-SUPPLY.goodsCode
+      - REL-TAX-SUPPLY.period
+      - REL-TAX-SUPPLY.source
+  - id: TOOL-TAX-RELATED-PARTY
+    name: 读取关联关系
+    kind: relation-read
+    relationId: REL-TAX-RELATED-PARTY
+    grantScope: REL-TAX-RELATED-PARTY
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-TAXPAYER
+    outputs:
+      - REL-TAX-RELATED-PARTY.relationType
+      - REL-TAX-RELATED-PARTY.shareRatio
+      - REL-TAX-RELATED-PARTY.controlFlag
+      - REL-TAX-RELATED-PARTY.since
+  - id: TOOL-TAX-FILES-RETURN
+    name: 读取纳税人申报
+    kind: relation-read
+    relationId: REL-TAX-FILES-RETURN
+    grantScope: REL-TAX-FILES-RETURN
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-TAX-RETURN
+    outputs:
+      - REL-TAX-FILES-RETURN.role
+  - id: TOOL-TAX-RETURN-INVOICE
+    name: 读取票表比对
+    kind: relation-read
+    relationId: REL-TAX-RETURN-INVOICE
+    grantScope: REL-TAX-RETURN-INVOICE
+    inputs:
+      - OBJ-TAX-TAX-RETURN
+      - OBJ-TAX-INVOICE
+    outputs:
+      - REL-TAX-RETURN-INVOICE.matchType
+      - REL-TAX-RETURN-INVOICE.diffAmount
+  - id: TOOL-TAX-FLOW-INVOICE
+    name: 读取票款对应
+    kind: relation-read
+    relationId: REL-TAX-FLOW-INVOICE
+    grantScope: REL-TAX-FLOW-INVOICE
+    inputs:
+      - OBJ-TAX-BANK-FLOW
+      - OBJ-TAX-INVOICE
+    outputs:
+      - REL-TAX-FLOW-INVOICE.matchType
+      - REL-TAX-FLOW-INVOICE.amount
+      - REL-TAX-FLOW-INVOICE.lagDays
+  - id: TOOL-TAX-FLOW-TAXPAY
+    name: 读取缴税流水
+    kind: relation-read
+    relationId: REL-TAX-FLOW-TAXPAY
+    grantScope: REL-TAX-FLOW-TAXPAY
+    inputs:
+      - OBJ-TAX-BANK-FLOW
+      - OBJ-TAX-TAX-RETURN
+    outputs:
+      - REL-TAX-FLOW-TAXPAY.taxType
+      - REL-TAX-FLOW-TAXPAY.amount
+  - id: TOOL-TAX-EXPORT-DOC-OWNER
+    name: 读取单证出口方
+    kind: relation-read
+    relationId: REL-TAX-EXPORT-DOC-OWNER
+    grantScope: REL-TAX-EXPORT-DOC-OWNER
+    inputs:
+      - OBJ-TAX-EXPORT-DOC
+      - OBJ-TAX-TAXPAYER
+    outputs:
+      - REL-TAX-EXPORT-DOC-OWNER.role
+  - id: TOOL-TAX-EXPORT-DOC-GOODS
+    name: 读取单证对应货物
+    kind: relation-read
+    relationId: REL-TAX-EXPORT-DOC-GOODS
+    grantScope: REL-TAX-EXPORT-DOC-GOODS
+    inputs:
+      - OBJ-TAX-EXPORT-DOC
+      - OBJ-TAX-GOODS
+    outputs:
+      - REL-TAX-EXPORT-DOC-GOODS.matchType
+  - id: TOOL-TAX-FX-RECEIPT-DOC
+    name: 读取收汇对应报关单
+    kind: relation-read
+    relationId: REL-TAX-FX-RECEIPT-DOC
+    grantScope: REL-TAX-FX-RECEIPT-DOC
+    inputs:
+      - OBJ-TAX-FX-RECEIPT
+      - OBJ-TAX-EXPORT-DOC
+    outputs:
+      - REL-TAX-FX-RECEIPT-DOC.matchType
+      - REL-TAX-FX-RECEIPT-DOC.diffAmount
+  - id: TOOL-TAX-FX-RECEIPT-ACCOUNT
+    name: 读取收汇入账
+    kind: relation-read
+    relationId: REL-TAX-FX-RECEIPT-ACCOUNT
+    grantScope: REL-TAX-FX-RECEIPT-ACCOUNT
+    inputs:
+      - OBJ-TAX-FX-RECEIPT
+      - OBJ-TAX-BANK-ACCOUNT
+    outputs:
+      - REL-TAX-FX-RECEIPT-ACCOUNT.role
+  - id: TOOL-TAX-BENCHMARK-MATCH
+    name: 读取行业基准匹配
+    kind: relation-read
+    relationId: REL-TAX-BENCHMARK-MATCH
+    grantScope: REL-TAX-BENCHMARK-MATCH
+    inputs:
+      - OBJ-TAX-TAXPAYER
+      - OBJ-TAX-INDUSTRY-BENCHMARK
+    outputs:
+      - REL-TAX-BENCHMARK-MATCH.period
+      - REL-TAX-BENCHMARK-MATCH.deviation

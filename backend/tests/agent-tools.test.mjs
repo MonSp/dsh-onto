@@ -29,6 +29,9 @@ import {
   loadDatasetFromArgs,
   loadToolPackage,
   projectPackageList,
+  renderRecallText,
+  renderAnnotateText,
+  annotateExperienceForTool,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -45,10 +48,18 @@ import {
   HeuristicLlm,
   KnowledgeStore,
   PackageWorkspace,
+  buildRunRecord,
+  buildTaskSignature,
+  derivePackage,
   dumpYaml,
+  loadExperienceNote,
   loadPackage,
+  loadRunRecord,
   loadYaml,
+  reviewExperienceNote,
   runScenario,
+  saveExperienceNote,
+  saveRunRecord,
   sha256Text,
 } from '@dsh-onto/core'
 
@@ -229,6 +240,53 @@ test('只读查询投影：摘要/口径/场景清单字段齐全', () => {
   assert.ok(catalog.scenarios.length > 0)
   assert.ok(Array.isArray(catalog.scenarios[0].outputFields))
   assert.match(renderScenarioList(catalog.scenarios), /SCN-AML-FIND-CLUES/)
+})
+
+test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬迁；差异转人工', () => {
+  // 冷启动：不硬迁移话术
+  const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
+  assert.match(cold, /冷启动/)
+  assert.match(cold, /不硬迁移/)
+
+  // 命中：打分行 + 字段级对照行 + 低置信度转人工
+  const hit = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [
+        '同 scenarioId',
+        'stepShape 一致',
+        '规则/技能 Jaccard=1.00',
+        'scenarioId 同（SCN-AML-FIND-CLUES）',
+        'dataBand 同（S）',
+        'ruleRefs 共有5/新独有0/源独有0',
+        'skillRefs 共有1/新独有0/源独有0',
+        'inputShape 同（taxpayerId:string）',
+      ],
+    }],
+    advice: '低置信度：结构位差异（ruleRefs）→ 转人工确认后方可复用',
+  })
+  assert.match(hit, /run-abc12345/)
+  assert.match(hit, /score=0\.90/)
+  assert.match(hit, /打分：/)
+  assert.match(hit, /字段对照：/)
+  assert.match(hit, /scenarioId 同（SCN-AML-FIND-CLUES）/)
+  assert.match(hit, /ruleRefs 共有5\/新独有0\/源独有0/)
+  assert.match(hit, /Jaccard=1\.00/)
+  assert.match(hit, /转人工/)
+  // 无自由流程描述（不出现步骤编造词）
+  assert.doesNotMatch(hit, /执行流程|步骤图|自由/)
+})
+
+test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(src.includes('字段级 signature 新旧对照'), '工具描述须声明字段级对照')
+  const coreSrc = readFileSync(join(REPO, 'core', 'src', 'experience.ts'), 'utf8')
+  assert.ok(coreSrc.includes('signatureFieldReasons'), 'core 须导出 signatureFieldReasons')
+  assert.ok(coreSrc.includes('reasons.push(...signatureFieldReasons'), 'retrieveSimilar 须挂字段级理由')
 })
 
 test('知识上传回执不回显 content', () => {
@@ -575,6 +633,33 @@ test('dataset 错误回显调用方原文，不回显 resolve 后绝对路径', 
     assert.ok(e.message.includes(rel), `应回显调用方原文: ${e.message}`)
     assert.ok(!/^[A-Za-z]:\\/.test(e.message.split(': ').pop()), `不应含盘符绝对路径: ${e.message}`)
   }
+})
+
+test('D1 方案 B：相对路径读取失败给出可复制 dataset 内联示例（不再只报「无法读取」）', () => {
+  // 相对路径按 process.cwd() 解析且落在默认围栏内，但文件不存在 → 走读取失败分支
+  // （模拟会话 cwd 与仓库不一致时 examples/aml-run.json 读不到的 D1 场景）。
+  const rel = 'no-such-d1-relative-dataset.json'
+  let caught
+  try {
+    loadDatasetFromArgs({ datasetPath: rel })
+    assert.fail('期望 INVALID_ARGS')
+  } catch (e) {
+    caught = e
+  }
+  assert.ok(caught instanceof AgentToolError, `期望 AgentToolError，得到 ${caught}`)
+  assert.equal(caught.code, 'INVALID_ARGS')
+  assert.ok(caught.message.includes(rel), `应回显调用方原文: ${caught.message}`)
+  assert.ok(caught.message.includes('无法读取'), `应保留读取失败语义: ${caught.message}`)
+  assert.ok(caught.message.includes('dataset 内联'), `须指引内联恢复: ${caught.message}`)
+  assert.ok(
+    caught.message.includes('{"objects":[],"relations":[],"candidates":[]}'),
+    `须附可复制内联示例: ${caught.message}`,
+  )
+  // 内联示例本身必须过形状校验（调用方可原样粘贴恢复）
+  const example = JSON.parse(caught.message.slice(caught.message.indexOf('{"objects"')))
+  assert.doesNotThrow(() => validateDatasetShape(example))
+  // 错误面不回显 resolve 后绝对路径（含 cwd 盘符路径）
+  assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
 })
 
 test('知识上传全链路：name@version 入参 → 裸名入库 → 解析 → 物化不被 package mismatch 拒绝', async () => {
@@ -1193,4 +1278,326 @@ test('D12：datasetPath 围栏可发现性——越界报错指引内联，参�
   assert.ok(src.includes('会话工作区或外部夹具请改用 dataset 内联') || src.includes('会话工作区或外部夹具请改用 dataset 内联')
     || src.includes('外部夹具请用 dataset 内联') || src.includes('会话工作区、外部夹具请改用 dataset 内联'),
     '描述须给出内联恢复路径')
+})
+
+/* ── P4-3 annotate_experience（N5） ── */
+
+function mkAnnotateFixture({ auditPassed = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'onto-ann-'))
+  const ws = new PackageWorkspace(join(root, 'workspace'))
+  const dir = ws.versionDir('aml-analysis', '1.0.0')
+  cpSync(AML_DIR, dir, { recursive: true })
+  derivePackage(dir)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, { baseDir: REPO })
+  const result = runScenario(dir, 'SCN-AML-FIND-CLUES', dataset)
+  if (!auditPassed) {
+    result.audit = { ...result.audit, passed: false }
+  }
+  const rec = buildRunRecord({
+    package: { name: 'aml-analysis', version: '1.0.0' },
+    dataset,
+    result,
+    redlines: [],
+  })
+  saveRunRecord(ws.root, rec)
+  return { root, ws, runId: rec.runId }
+}
+
+test('annotate_experience：humanApproved 契约 + 新建/回填 + 误迁移 by 非空（N5）', () => {
+  const { root, ws, runId } = mkAnnotateFixture()
+  try {
+    // 未点头 → 人审契约拒绝
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success' }),
+      'INVALID_ARGS',
+    )
+    // 无任何 patch 字段
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // 新建：outcome=success（审计已过）
+    const created = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'success',
+      outcomeReason: '三层闭合',
+      reviewFocus: ['listHitCount'],
+      humanApproved: true,
+    })
+    assert.equal(created.created, true)
+    assert.equal(created.outcome, 'success')
+    assert.equal(created.humanReviewRequired, true)
+    assert.deepEqual(created.reviewFocus, ['listHitCount'])
+    assert.equal(created.misTransferJudged, false)
+    // 落盘可回读
+    const note = loadExperienceNote(ws.root, runId)
+    assert.equal(note.outcome, 'success')
+    assert.equal(note.signature.scenarioId, 'SCN-AML-FIND-CLUES')
+
+    // 回填：误迁移（by 非空人工身份）
+    const patched = annotateExperienceForTool(ws, {
+      runId,
+      misTransfer: { judged: true, by: '张三', note: '复用到异域' },
+      humanApproved: true,
+    })
+    assert.equal(patched.created, false)
+    assert.equal(patched.misTransferJudged, true)
+    assert.equal(patched.misTransferBy, '张三')
+
+    // 误迁移 by 空白 → 拒（模型不自评 / 必须人工身份）
+    expectCode(
+      () =>
+        annotateExperienceForTool(ws, {
+          runId,
+          misTransfer: { judged: true, by: '  ' },
+          humanApproved: true,
+        }),
+      'INVALID_ARGS',
+    )
+
+    // 新建缺 outcome → 拒
+    const second = mkAnnotateFixture()
+    try {
+      expectCode(
+        () => annotateExperienceForTool(second.ws, { runId: second.runId, humanApproved: true }),
+        'INVALID_ARGS',
+      )
+    } finally {
+      rmSync(second.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('annotate_experience：审计未过不得标 success（除非 counterexample）', () => {
+  const { root, ws, runId } = mkAnnotateFixture({ auditPassed: false })
+  try {
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // failure 可过
+    const failed = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'failure',
+      humanApproved: true,
+    })
+    assert.equal(failed.outcome, 'failure')
+    // counterexample 可过 success
+    const second = mkAnnotateFixture({ auditPassed: false })
+    try {
+      const counter = annotateExperienceForTool(second.ws, {
+        runId: second.runId,
+        outcome: 'success',
+        counterexample: true,
+        humanApproved: true,
+      })
+      assert.equal(counter.counterexample, true)
+    } finally {
+      rmSync(second.root, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('annotate_experience 渲染（N5）：结构位回执、无自由流程、humanReviewRequired 在场', () => {
+  const text = renderAnnotateText({
+    runId: 'run-abc12345',
+    outcome: 'success',
+    counterexample: false,
+    misTransferJudged: true,
+    misTransferBy: '张三',
+    reviewFocus: ['listHitCount'],
+    created: false,
+  })
+  assert.match(text, /run-abc12345/)
+  assert.match(text, /outcome=success/)
+  assert.match(text, /回填/)
+  assert.match(text, /误迁移 judged=true by=张三/)
+  assert.match(text, /reviewFocus: listHitCount/)
+  assert.match(text, /humanReviewRequired=true/)
+  // 无自由流程描述、无服务端路径
+  assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
+})
+
+/* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */
+
+test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记', () => {
+  const phrase = '确定为洗钱'
+  const raw = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`, '同 scenarioId'],
+    }],
+    advice: '结构同构可参考复用',
+  })
+  assert.ok(raw.includes(phrase), '无清单时原样（直调测试路径）')
+  const masked = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`],
+    }],
+    advice: 'x',
+  }, [phrase])
+  assert.ok(!masked.includes(phrase), `短语不得泄漏: ${masked}`)
+  assert.match(masked, /【禁语已脱敏】/)
+  // 冷启动分支同样带 humanReviewRequired
+  const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
+  assert.match(cold, /humanReviewRequired=true/)
+})
+
+test('I1 annotate 渲染拼接后兜底：misTransferBy 撞短语 → 整段退避', () => {
+  const phrase = '已构成犯罪'
+  const masked = renderAnnotateText({
+    runId: 'run-abc12345',
+    outcome: 'success',
+    counterexample: false,
+    misTransferJudged: true,
+    misTransferBy: `判定人${phrase}`,
+    reviewFocus: [],
+    created: false,
+  }, [phrase])
+  assert.ok(!masked.includes(phrase), `短语不得泄漏: ${masked}`)
+  assert.match(masked, /【禁语已脱敏】/)
+})
+
+test('I1 recall value 闸：enforceOutputPolicy 遮蔽 goalClass 撞短语', () => {
+  const phrase = '认定洗钱'
+  const value = {
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [`goalClass 源=「${phrase}」→ 新=「x」`],
+    }],
+    advice: 'ok',
+    humanReviewRequired: true,
+  }
+  const gated = enforceOutputPolicy(value, [phrase])
+  const text = JSON.stringify(gated)
+  assert.ok(!text.includes(phrase), `value 闸后不得含短语: ${text}`)
+  assert.equal(gated.humanReviewRequired, true)
+})
+
+test('I1 source：recall/execute 挂 enforceOutputPolicy + render 挂 retreatRenderText', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  // recall execute 与 annotate execute 都过 value 闸
+  const recallIdx = src.indexOf("name: 'recall_experience'")
+  const annotateIdx = src.indexOf("name: 'annotate_experience'")
+  const uploadIdx = src.indexOf("name: 'upload_knowledge_source'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx && uploadIdx > annotateIdx)
+  const recallSlice = src.slice(recallIdx, annotateIdx)
+  const annotateSlice = src.slice(annotateIdx, uploadIdx)
+  assert.ok(recallSlice.includes('enforceOutputPolicy'), 'recall execute 须挂 value 闸')
+  assert.ok(recallSlice.includes("humanReviewRequired: { type: 'boolean', required: true, const: true }"), 'recall schema 须 const humanReviewRequired')
+  // render 走 renderRecallText（内部 retreatRenderText 兜底）
+  assert.ok(recallSlice.includes('renderRecallText'), 'recall render 须走 renderRecallText')
+  assert.ok(src.includes('retreatRenderText'), 'renderRecallText 须挂 retreatRenderText 兜底')
+  assert.ok(annotateSlice.includes('enforceOutputPolicy'), 'annotate execute 须挂 value 闸')
+  assert.ok(annotateSlice.includes('renderAnnotateText'), 'annotate render 须走 renderAnnotateText')
+})
+
+test('L1 annotate 回填标 success 同过审计闸（两步绕过封死）', () => {
+  const { root, ws, runId } = mkAnnotateFixture({ auditPassed: false })
+  try {
+    // 先建 failure（审计未过允许）
+    annotateExperienceForTool(ws, { runId, outcome: 'failure', humanApproved: true })
+    // 再回填 success → 拒（L1：回填与新建同闸）
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // workbench 人审面（reviewExperienceNote 直调）可覆盖——机器闸不否决人审
+    const note = reviewExperienceNote(ws.root, runId, { outcome: 'success' })
+    assert.equal(note.outcome, 'success')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('L2 annotate reusedFromRunId：新建与回填均写复用归因', () => {
+  const { root, ws, runId } = mkAnnotateFixture()
+  try {
+    // 造一条源经验
+    const srcRun = 'run-src00001'
+    const rec = loadRunRecord(ws.root, runId)
+    const srcNote = {
+      runId: srcRun,
+      signature: buildTaskSignature({
+        pkg: loadPackage(ws.versionDir(rec.package.name, rec.package.version)),
+        scenarioId: rec.scenarioId,
+        datasetSummary: rec.datasetSummary,
+      }),
+      outcome: 'success',
+      skillRefsUsed: [],
+      counterexample: false,
+      savedAt: '2026-11-01T00:00:00.000Z',
+    }
+    saveExperienceNote(ws.root, srcNote)
+    // 新建带 reusedFrom
+    const created = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'success',
+      reusedFromRunId: srcRun,
+      humanApproved: true,
+    })
+    assert.equal(created.created, true)
+    const note1 = loadExperienceNote(ws.root, runId)
+    assert.equal(note1.reusedFrom?.runId, srcRun)
+    assert.ok(note1.reusedFrom?.diff, 'diff 须机械生成')
+    // 回填写 reusedFrom
+    const patched = annotateExperienceForTool(ws, {
+      runId,
+      reviewFocus: ['listHitCount'],
+      reusedFromRunId: srcRun,
+      humanApproved: true,
+    })
+    assert.equal(patched.created, false)
+    const note2 = loadExperienceNote(ws.root, runId)
+    assert.equal(note2.reusedFrom?.runId, srcRun)
+    assert.deepEqual(note2.reviewFocus, ['listHitCount'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏', () => {
+  const text = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-abc12345',
+      score: 0.9,
+      outcome: 'success',
+      counterexample: false,
+      reasons: [
+        '同 scenarioId',
+        'stepShape 一致',
+        '规则/技能 Jaccard=1.00',
+        'stepShape 同',
+        'goalClass 同',
+        'scenarioId 同（SCN-AML-FIND-CLUES）',
+        'digest 同构',
+      ],
+    }],
+    advice: 'x',
+  })
+  const fieldLine = text.split('\n').find((l) => l.includes('字段对照')) ?? ''
+  const scoreLine = text.split('\n').find((l) => l.includes('打分')) ?? ''
+  assert.ok(fieldLine.includes('stepShape 同'), `stepShape 同 须在字段对照栏: ${text}`)
+  assert.ok(fieldLine.includes('goalClass 同'), `goalClass 同 须在字段对照栏: ${text}`)
+  assert.ok(fieldLine.includes('scenarioId 同（'), '带括号形态在字段对照栏')
+  assert.ok(scoreLine.includes('同 scenarioId'), '检索打分理由留在打分栏')
+  assert.ok(scoreLine.includes('Jaccard'), 'Jaccard 留在打分栏')
 })

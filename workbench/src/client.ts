@@ -1,7 +1,7 @@
 /**
  * dsh-onto 工作台 client half —— browser entry（classic script，零 runtime import/export）。
  *
- * 五个 tab：包管理 | 建模 | 知识库 | 校验派生 | 场景运行。
+ * 六个 tab：包管理 | 建模 | 知识库 | 校验派生 | 场景运行 | 经验。
  * 远程命名空间：ontoWorkspace / ontoModel / ontoValidate / ontoDerive /
  * ontoKnowledge / ontoRuntime（inject 必须列全）。
  */
@@ -254,6 +254,19 @@ window.__ModuleLoader__.load({
       graphTabTitle: '本体图谱',
       graphTabDesc: '对话旁的常驻画布：每轮起草自动长出节点',
       rightSelected: '图谱包',
+      // 经验闭环（experience-loop P2-1）
+      tabExperience: '经验',
+      expTitle: '经验记录',
+      expOutcome: '结论',
+      expReason: '结论理由',
+      expCounter: '反例',
+      expReused: '复用自',
+      expMis: '误迁移',
+      expFocus: '复核关注',
+      expReviewBtn: '回填',
+      expMisBy: '判定人',
+      expMisNote: '判定说明',
+      expReviewHint: '误迁移只由人判，by 必填；认定在人工',
     }
     const en = {
       panel: 'dsh-onto',
@@ -435,6 +448,19 @@ window.__ModuleLoader__.load({
       graphTabTitle: 'Ontology graph',
       graphTabDesc: 'Persistent canvas beside chat: drafts grow nodes per turn',
       rightSelected: 'Graph package',
+      // experience-loop P2-1
+      tabExperience: 'Experience',
+      expTitle: 'Experience notes',
+      expOutcome: 'Outcome',
+      expReason: 'Outcome reason',
+      expCounter: 'Counterexample',
+      expReused: 'Reused from',
+      expMis: 'Mis-transfer',
+      expFocus: 'Review focus',
+      expReviewBtn: 'Write back',
+      expMisBy: 'Judged by',
+      expMisNote: 'Note',
+      expReviewHint: 'Mis-transfer is human-only; by required. Humans decide.',
     }
 
     function errText(e: unknown): string {
@@ -1183,7 +1209,7 @@ window.__ModuleLoader__.load({
           layer: 'O1' | 'O2' | 'O3'
           name: string
           draft: boolean
-          provenance?: { turnId?: string; sourceId?: string }
+          provenance?: { turnId?: string; sourceId?: string; runId?: string }
           issueLevel?: 'error' | 'warn' | 'info'
           forcedReview?: boolean
           runHit?: boolean
@@ -1434,8 +1460,8 @@ window.__ModuleLoader__.load({
             ),
             kv(t('name'), node.name),
           ]
-          if (node.provenance?.turnId || node.provenance?.sourceId) {
-            rows.push(kv(t('prov'), [node.provenance.turnId, node.provenance.sourceId].filter(Boolean).join(' · ')))
+          if (node.provenance?.turnId || node.provenance?.sourceId || node.provenance?.runId) {
+            rows.push(kv(t('prov'), [node.provenance.turnId, node.provenance.sourceId, node.provenance.runId].filter(Boolean).join(' · ')))
           }
           if (found) {
             const el = found.el
@@ -2138,7 +2164,7 @@ window.__ModuleLoader__.load({
                       h(
                         'div',
                         { key: `pd-${i}`, className: 'ow-note' },
-                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}`,
+                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}${typeof (d.provenance as { runId?: string } | undefined)?.runId === 'string' ? ` · run:${(d.provenance as { runId: string }).runId}` : ''}`,
                       )),
                     pendingDrafts.length > 40
                       ? h('span', { className: 'ow-note' }, `… +${pendingDrafts.length - 40}`)
@@ -3298,6 +3324,225 @@ window.__ModuleLoader__.load({
         }
 
         /* ═══════════════════════════════════════════════════════════════
+         * 经验闭环（experience-loop P2-1）：经验列表 + 人审回填
+         * ═══════════════════════════════════════════════════════════════ */
+
+        function ExperiencePanel(props: {
+          t: (k: string) => string
+          apis: Ctx
+        }) {
+          const { t, apis } = props
+          const [rows, setRows] = useState<Array<{
+            runId: string
+            scenarioId: string
+            packageScope: string
+            outcome: string
+            counterexample: boolean
+            reusedFrom: string | null
+            misTransferJudged: boolean
+            reviewFocus: string[]
+            savedAt: string
+          }>>([])
+          const [error, setError] = useState('')
+          const [busy, setBusy] = useState('')
+          const [viewRun, setViewRun] = useState('')
+          const [viewNote, setViewNote] = useState<Record<string, unknown> | null>(null)
+          // 回填表单
+          const [formOutcome, setFormOutcome] = useState('')
+          const [formReason, setFormReason] = useState('')
+          // 三态：'' 不改 | 'true' 判误迁移 | 'false' 判非误迁移（by 两者皆必填）
+          const [formMis, setFormMis] = useState('')
+          const [formBy, setFormBy] = useState('')
+          const [formNote, setFormNote] = useState('')
+          const [formFocus, setFormFocus] = useState('')
+          const api = apis.remote['ontoRuntime']
+
+          const load = () => {
+            if (!api) return
+            void (async () => {
+              try {
+                const out = unwrap<{ experiences: typeof rows }>(await api.listExperiences())
+                setRows(out.experiences)
+              } catch (e) {
+                setError(errText(e))
+              }
+            })()
+          }
+
+          useEffect(() => {
+            load()
+          }, [apis])
+
+          const review = (runId: string) => {
+            if (!api) return
+            void (async () => {
+              setBusy('review')
+              setError('')
+              try {
+                const patch: Record<string, unknown> = { runId }
+                if (formOutcome) patch.outcome = formOutcome
+                if (formReason.trim()) patch.outcomeReason = formReason
+                if (formMis === 'true' || formMis === 'false') {
+                  patch.misTransfer = { judged: formMis === 'true', by: formBy, note: formNote }
+                }
+                if (formFocus.trim()) patch.reviewFocus = formFocus.split(',').map((s) => s.trim()).filter(Boolean)
+                const out = unwrap<{ note: Record<string, unknown> }>(await api.reviewExperience(patch as never))
+                setViewNote(out.note)
+                load()
+              } catch (e) {
+                setError(errText(e))
+              } finally {
+                setBusy('')
+              }
+            })()
+          }
+
+          return h(
+            'div',
+            { className: 'ow-card' },
+            h('h3', { className: 'ow-h2' }, t('expTitle')),
+            h('p', { className: 'ow-note' }, t('expReviewHint')),
+            h(ErrorBanner, { text: error }),
+            h(
+              'div',
+              { className: 'ow-row' },
+              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => load() }, t('refresh')),
+            ),
+            rows.length > 0
+              ? h(
+                  'table',
+                  { className: 'ow-table' },
+                  h(
+                    'thead',
+                    null,
+                    h('tr', null,
+                      h('th', null, 'runId'), h('th', null, t('scenario')), h('th', null, 'scope'),
+                      h('th', null, t('expOutcome')), h('th', null, t('expCounter')),
+                      h('th', null, t('expReused')), h('th', null, t('expMis')),
+                      h('th', null, t('expFocus')), h('th', null, t('savedAt')), h('th', null, t('actions'))),
+                  ),
+                  h(
+                    'tbody',
+                    null,
+                    ...rows.map((r) =>
+                      h(
+                        'tr',
+                        { key: r.runId },
+                        h('td', { className: 'ow-mono' }, r.runId),
+                        h('td', null, r.scenarioId),
+                        h('td', null, r.packageScope),
+                        h('td', null, h(Tag, {
+                          text: r.outcome,
+                          tone: r.outcome === 'success' ? 'ok' : r.outcome === 'failure' ? 'err' : 'warn',
+                        })),
+                        h('td', null, r.counterexample ? '✓' : '—'),
+                        h('td', { className: 'ow-mono' }, r.reusedFrom ?? '—'),
+                        h('td', null, r.misTransferJudged ? '✓' : '—'),
+                        h('td', null, r.reviewFocus.join(', ') || '—'),
+                        h('td', null, r.savedAt),
+                        h('td', null, h(
+                          'button',
+                          {
+                            className: 'ow-btn ghost',
+                            disabled: !!busy,
+                            onClick: () =>
+                              void (async () => {
+                                setBusy('show')
+                                setError('')
+                                setViewRun(r.runId)
+                                setFormOutcome('')
+                                setFormReason('')
+                                setFormMis('')
+                                setFormBy('')
+                                setFormNote('')
+                                setFormFocus(r.reviewFocus.join(', '))
+                                try {
+                                  const out = unwrap<{ note: Record<string, unknown> }>(
+                                    await api!.showExperience({ runId: r.runId }),
+                                  )
+                                  setViewNote(out.note)
+                                } catch (e) {
+                                  setError(errText(e))
+                                } finally {
+                                  setBusy('')
+                                }
+                              })(),
+                          },
+                          t('expReviewBtn'),
+                        )),
+                      ),
+                    ),
+                  ),
+                )
+              : h('p', { className: 'ow-note' }, t('empty')),
+            viewRun && viewNote
+              ? h(
+                  'div',
+                  { className: 'ow-row' },
+                  h('span', { className: 'ow-stat' }, `${viewRun}`),
+                  h('select', {
+                    className: 'ow-sel',
+                    value: formOutcome,
+                    onChange: (e: { target: { value: string } }) => setFormOutcome(e.target.value),
+                  },
+                    h('option', { value: '' }, '—'),
+                    h('option', { value: 'success' }, 'success'),
+                    h('option', { value: 'partial' }, 'partial'),
+                    h('option', { value: 'failure' }, 'failure'),
+                    h('option', { value: 'pending-human' }, 'pending-human')),
+                  h('input', {
+                    className: 'ow-in',
+                    placeholder: t('expReason'),
+                    value: formReason,
+                    onChange: (e: { target: { value: string } }) => setFormReason(e.target.value),
+                  }),
+                  h('select', {
+                    className: 'ow-sel',
+                    value: formMis,
+                    onChange: (e: { target: { value: string } }) => setFormMis(e.target.value),
+                  },
+                    h('option', { value: '' }, `${t('expMis')} —`),
+                    h('option', { value: 'true' }, `${t('expMis')} true`),
+                    h('option', { value: 'false' }, `${t('expMis')} false`)),
+                  formMis !== ''
+                    ? h('input', {
+                        className: 'ow-in',
+                        placeholder: t('expMisBy'),
+                        value: formBy,
+                        onChange: (e: { target: { value: string } }) => setFormBy(e.target.value),
+                      })
+                    : null,
+                  formMis !== ''
+                    ? h('input', {
+                        className: 'ow-in',
+                        placeholder: t('expMisNote'),
+                        value: formNote,
+                        onChange: (e: { target: { value: string } }) => setFormNote(e.target.value),
+                      })
+                    : null,
+                  h('input', {
+                    className: 'ow-in',
+                    placeholder: t('expFocus'),
+                    value: formFocus,
+                    onChange: (e: { target: { value: string } }) => setFormFocus(e.target.value),
+                  }),
+                  h(
+                    'button',
+                    {
+                      className: 'ow-btn',
+                      disabled:
+                        !!busy ||
+                        (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim()),
+                      onClick: () => review(viewRun),
+                    },
+                    t('expReviewBtn'),
+                  ),
+                )
+              : null,
+          )
+        }
+
+        /* ═══════════════════════════════════════════════════════════════
          * 根组件：tabs + 选中包状态
          * ═══════════════════════════════════════════════════════════════ */
 
@@ -3336,6 +3581,7 @@ window.__ModuleLoader__.load({
             ['knowledge', t('tabKnowledge')],
             ['validate', t('tabValidate')],
             ['run', t('tabRun')],
+            ['experience', t('tabExperience')],
           ]
 
           return h(
@@ -3376,7 +3622,9 @@ window.__ModuleLoader__.load({
                   ? h(KnowledgePanel, { t, apis, selected })
                   : tab === 'validate'
                     ? h(ValidatePanel, { t, apis, selected })
-                    : h(RunPanel, { t, apis, selected }),
+                    : tab === 'experience'
+                      ? h(ExperiencePanel, { t, apis })
+                      : h(RunPanel, { t, apis, selected }),
           )
         }
 

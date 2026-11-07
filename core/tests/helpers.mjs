@@ -116,10 +116,13 @@ export function mkWorkspaceWithPkg(overrides = {}) {
 }
 
 /** 把仓库示例包复制到临时工作区（带派生），返回版本目录。 */
+const EXAMPLE_PKG_NAME = { aml: 'aml-analysis', med: 'med-safety', tax: 'tax-risk' }
 export function copyExamplePackage(domain) {
   const ws = mkWorkspace()
   const src = join(REPO_ROOT, 'packages', domain, '1.0.0')
-  const dir = ws.versionDir(domain === 'aml' ? 'aml-analysis' : 'med-safety', '1.0.0')
+  const pkgName = EXAMPLE_PKG_NAME[domain]
+  if (!pkgName) throw new Error(`unknown example domain: ${domain}`)
+  const dir = ws.versionDir(pkgName, '1.0.0')
   cpSync(src, dir, { recursive: true })
   derivePackage(dir)
   return { ws, dir, root: ws.root }

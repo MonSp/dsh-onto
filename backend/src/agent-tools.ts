@@ -17,19 +17,27 @@ import {
   PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
+  buildDiffTable,
   buildRunRecord,
+  buildTaskSignature,
   compareRunRecords,
   exportRunArchive,
   isInsideDir,
   isValidId,
   isSafeRelPath,
+  loadExperienceNote,
   loadPackage,
   loadRunRecord,
   loadRunRedlines,
+  retrieveSimilar,
+  reviewExperienceNote,
   runScenario,
+  saveExperienceNote,
   saveRunRecord,
   verifyDerived,
   type DraftItem,
+  type ExperienceNote,
+  type ExperienceOutcome,
   type KnowledgeSourceRecord,
   type ModelGraph,
   type OntologyPackage,
@@ -57,6 +65,7 @@ import {
   renderRunDiffText,
   renderRunText,
   retreatPhraseEcho,
+  retreatRenderText,
   toolExecute,
   type BatchRunItem,
   type BatchRunOutput,
@@ -184,7 +193,13 @@ export function loadDatasetFromArgs(
     try {
       text = readFileSync(path, 'utf8')
     } catch {
-      throw new AgentToolError('INVALID_ARGS', `无法读取 dataset 文件: ${raw}`)
+      // D1 方案 B：相对路径按进程 cwd 解析，会话 cwd 不同处必然读不到——
+      // 报错直接给可复制内联示例，调用方无需再猜恢复路径。
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `无法读取 dataset 文件: ${raw} ——相对路径按平台进程工作目录解析，会话工作区或外部夹具请改用 dataset 内联，`
+          + '可复制示例: {"objects":[],"relations":[],"candidates":[]}',
+      )
     }
     let parsed: unknown
     try {
@@ -676,6 +691,217 @@ export function renderScenarioList(scenarios: unknown[]): string {
   )
 }
 
+/**
+ * recall_experience 渲染（N4 / P4-5）：只回结构位（runId/score/outcome/理由含字段级对照），
+ * 无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
+ * render 闸：拼接后兜底（retreatRenderText，P2.2 同口径）。
+ */
+export function renderRecallText(
+  v: {
+    coldStart: boolean
+    hits: Array<{ runId: string; score: number; outcome: string; counterexample: boolean; reasons: string[] }>
+    advice: string
+  },
+  phrases?: readonly string[],
+): string {
+  if (v.coldStart || v.hits.length === 0) {
+    return retreatRenderText(
+      ['冷启动：无相似经验（不硬迁移，走全量执行）。', 'humanReviewRequired=true（认定出口只在人工复核）'].join('\n'),
+      phrases ?? [],
+    )
+  }
+  const lines = v.hits.map((h) => {
+    // 字段级对照 = 签名字段新旧形态（源=/源≠/共有N/同（…）/以「 同」结尾的字段名）；
+    // 打分位 = 同 scenarioId / stepShape 一致 / Jaccard 等检索理由。
+    const field = h.reasons.filter((r) => /源=|源≠|共有\d|同（| 同$/.test(r))
+    const scoreBits = h.reasons.filter((r) => !field.includes(r))
+    return [
+      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}`,
+      `  打分：${scoreBits.join('; ') || '—'}`,
+      `  字段对照：${field.join('; ') || '—'}`,
+    ].join('\n')
+  })
+  return retreatRenderText(
+    [`命中 ${v.hits.length} 条：`, ...lines, v.advice, 'humanReviewRequired=true（认定出口只在人工复核）'].join('\n'),
+    phrases ?? [],
+  )
+}
+
+/**
+ * annotate_experience 纯函数（experience-loop P4-3 / S5.4）：
+ * 人审回填 + 首次标注共用——note 已存在走 reviewExperienceNote，不存在则从 RunRecord 新建。
+ * humanApproved 人审契约：agent 不得自行标注；误迁移 by 必须非空人工身份（模型不自评）。
+ * 审计闸与 CLI `exp annotate` 同口径：新建与回填标 success 均查审计（除非 counterexample）——
+ * 机器闸不否决人审的部分留给 workbench `reviewExperience` 人审面（不经本函数）。
+ * reusedFromRunId：复用归因（S5.4.4），新建与回填均可写，diff 机械生成。
+ */
+export function annotateExperienceForTool(
+  ws: PackageWorkspace,
+  args: {
+    runId: string
+    outcome?: ExperienceOutcome
+    outcomeReason?: string
+    misTransfer?: { judged: boolean; by: string; note?: string }
+    reviewFocus?: string[]
+    counterexample?: boolean
+    reusedFromRunId?: string
+    humanApproved?: unknown
+  },
+): {
+  runId: string
+  outcome: ExperienceOutcome
+  counterexample: boolean
+  misTransferJudged: boolean
+  misTransferBy?: string
+  reviewFocus: string[]
+  created: boolean
+  humanReviewRequired: true
+} {
+  assertHumanApproved(args.humanApproved, '标注经验')
+  const hasPatch =
+    args.outcome !== undefined ||
+    args.outcomeReason !== undefined ||
+    args.misTransfer !== undefined ||
+    args.reviewFocus !== undefined ||
+    args.reusedFromRunId !== undefined
+  if (!hasPatch) {
+    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / misTransfer / reviewFocus / reusedFromRunId 之一')
+  }
+  if (args.misTransfer !== undefined) {
+    if (typeof args.misTransfer.judged !== 'boolean') {
+      throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
+    }
+    if (typeof args.misTransfer.by !== 'string' || args.misTransfer.by.trim() === '') {
+      throw new AgentToolError('INVALID_ARGS', 'misTransfer.by 必须为非空人工身份（误迁移只由人判）')
+    }
+  }
+
+  let existing: ExperienceNote | null = null
+  try {
+    existing = loadExperienceNote(ws.root, args.runId)
+  } catch (e) {
+    if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') existing = null
+    else throw e
+  }
+
+  // 审计闸（新建与回填同口径）：标 success 前查 RunRecord 审计，除非 counterexample。
+  const gateSuccess = (counterexample: boolean): void => {
+    if (args.outcome !== 'success' || counterexample) return
+    const rec = loadRunRecord(ws.root, args.runId)
+    if (rec.result.audit.passed !== true) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        '审计未通过：不得标注 success（请用 failure/partial，或显式 counterexample）',
+      )
+    }
+  }
+
+  if (existing !== null) {
+    gateSuccess(existing.counterexample || args.counterexample === true)
+    const note = reviewExperienceNote(ws.root, args.runId, {
+      outcome: args.outcome,
+      outcomeReason: args.outcomeReason,
+      misTransfer: args.misTransfer,
+      reviewFocus: args.reviewFocus,
+      reusedFromRunId: args.reusedFromRunId,
+    })
+    return projectAnnotateReceipt(note, false)
+  }
+
+  // 新建路径：必须带 outcome；签名从 RunRecord + 包机械导出（同 CLI exp annotate）。
+  if (args.outcome === undefined) {
+    throw new AgentToolError('INVALID_ARGS', '经验记录不存在：创建时必须提供 outcome')
+  }
+  const counterexample = args.counterexample === true
+  const rec = loadRunRecord(ws.root, args.runId)
+  if (args.outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      '审计未通过：不得标注 success（请用 failure/partial，或显式 counterexample）',
+    )
+  }
+  const pkg = loadPackage(ws.versionDir(rec.package.name, rec.package.version))
+  const signature = buildTaskSignature({
+    pkg,
+    scenarioId: rec.scenarioId,
+    datasetSummary: rec.datasetSummary,
+  })
+  const note: ExperienceNote = {
+    runId: args.runId,
+    signature,
+    outcome: args.outcome,
+    outcomeReason: args.outcomeReason,
+    skillRefsUsed: signature.skillRefs,
+    reusedFrom:
+      args.reusedFromRunId !== undefined
+        ? {
+            runId: args.reusedFromRunId,
+            diff: buildDiffTable(signature, loadExperienceNote(ws.root, args.reusedFromRunId).signature),
+          }
+        : undefined,
+    counterexample,
+    misTransfer:
+      args.misTransfer !== undefined
+        ? { judged: args.misTransfer.judged, by: args.misTransfer.by.trim(), note: args.misTransfer.note ?? '' }
+        : undefined,
+    reviewFocus: args.reviewFocus !== undefined ? [...args.reviewFocus] : undefined,
+    savedAt: new Date().toISOString(),
+  }
+  saveExperienceNote(ws.root, note)
+  return projectAnnotateReceipt(note, true)
+}
+
+function projectAnnotateReceipt(
+  note: ExperienceNote,
+  created: boolean,
+): {
+  runId: string
+  outcome: ExperienceOutcome
+  counterexample: boolean
+  misTransferJudged: boolean
+  misTransferBy?: string
+  reviewFocus: string[]
+  created: boolean
+  humanReviewRequired: true
+} {
+  return {
+    runId: note.runId,
+    outcome: note.outcome,
+    counterexample: note.counterexample,
+    misTransferJudged: note.misTransfer?.judged ?? false,
+    misTransferBy: note.misTransfer?.by,
+    reviewFocus: note.reviewFocus ?? [],
+    created,
+    humanReviewRequired: true,
+  }
+}
+
+/** annotate_experience 渲染（N5）：只回结构位回执，无自由流程、无服务端路径；render 闸拼接后兜底。 */
+export function renderAnnotateText(
+  v: {
+    runId: string
+    outcome: string
+    counterexample: boolean
+    misTransferJudged: boolean
+    misTransferBy?: string
+    reviewFocus: string[]
+    created: boolean
+  },
+  phrases?: readonly string[],
+): string {
+  const lines = [
+    `已标注 ${v.runId} outcome=${v.outcome} 反例=${v.counterexample ? '是' : '否'}（${v.created ? '新建' : '回填'}）`,
+  ]
+  if (v.misTransferJudged) {
+    lines.push(`误迁移 judged=true by=${v.misTransferBy ?? ''}`)
+  }
+  if (v.reviewFocus.length > 0) {
+    lines.push(`reviewFocus: ${v.reviewFocus.join(', ')}`)
+  }
+  lines.push('humanReviewRequired=true（认定在人工）')
+  return retreatRenderText(lines.join('\n'), phrases ?? [])
+}
+
 /** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
 export function renderGraphSummary(g: ModelGraph): string {
   const draftCount = g.nodes.filter((n) => n.draft).length
@@ -1113,6 +1339,175 @@ export function apply(ctx: Context): void {
           const exported = exportRunArchive(ws.root, args.runId)
           const summary = exportSummaryOf(exported)
           return toolOut(enforceOutputPolicy(summary, exported.archive.redlines))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'recall_experience',
+      description:
+        '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
+        + '命中理由含字段级 signature 新旧对照（scenarioId/ruleRefs/skillRefs/dataBand 等源→新），不止 Jaccard 数字。'
+        + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
+        + '结果仅含结构位（runId/score/outcome/签名字段）与转人工提示，不含自由流程描述。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
+        dataset: { type: 'json', description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            coldStart: { type: 'boolean', required: true },
+            hits: { type: 'array', required: true, items: { type: 'json' } },
+            advice: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) => textBlock(renderRecallText(value as never, redlines(args))),
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
+          const pkg = load(args.name, args.version)
+          const raw = (args.dataset ?? {}) as Partial<RuntimeDataset>
+          const dataset: RuntimeDataset = {
+            objects: Array.isArray(raw.objects) ? raw.objects : [],
+            relations: Array.isArray(raw.relations) ? raw.relations : [],
+            behaviors: Array.isArray(raw.behaviors) ? raw.behaviors : undefined,
+            candidates: Array.isArray(raw.candidates) ? raw.candidates : [],
+          }
+          const signature = buildTaskSignature({
+            pkg,
+            scenarioId: args.scenarioId,
+            datasetSummary: {
+              objects: dataset.objects.length,
+              relations: dataset.relations.length,
+              behaviors: dataset.behaviors?.length ?? 0,
+              candidates: dataset.candidates.length,
+            },
+          })
+          const result = retrieveSimilar(ws.root, {
+            signature,
+            externalRefs: pkg.meta.externalRefs,
+          })
+          const hits = result.hits.map((h) => ({
+            runId: h.note.runId,
+            score: Number(h.score.toFixed(2)),
+            outcome: h.note.outcome,
+            counterexample: h.note.counterexample,
+            reasons: h.reasons,
+          }))
+          let advice: string
+          if (result.coldStart || hits.length === 0) {
+            advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
+          } else {
+            const draft = buildDiffTable(signature, result.hits[0].note.signature)
+            advice =
+              draft.mustChange.length > 0
+                ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
+                : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+          }
+          // value 闸：包内全部场景红线（goalClass 等包自由文本可能撞红线）。
+          return toolOut(
+            enforceOutputPolicy(
+              { coldStart: result.coldStart, hits, advice, humanReviewRequired: true },
+              phrasesOfPkg(pkg),
+            ),
+          )
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'annotate_experience',
+      description:
+        '标注/回填一条经验记录（ExperienceNote 的 outcome、误迁移、reviewFocus）。'
+        + 'humanApproved 是人审契约：仅当用户明确指示标注时传 true，agent 不得自行标注；'
+        + '误迁移只由人判（misTransfer.by 须为非空人工身份）。'
+        + 'note 不存在时按 RunRecord 新建（须带 outcome）；已存在则回填。'
+        + '新建与回填标 success 均查审计闸（除非 counterexample）。'
+        + 'reusedFromRunId 写复用归因（diff 机械生成）。返回结构位回执，认定出口只在人工。',
+      parameters: {
+        runId: { type: 'string', required: true, description: '运行 ID（如 run-abc12345）' },
+        outcome: {
+          type: 'string',
+          enum: ['success', 'partial', 'failure', 'pending-human'],
+          description: '经验结论；新建时必填',
+        },
+        outcomeReason: { type: 'string', description: '结论理由（结构位补充，非自由流程）' },
+        misTransfer: {
+          type: 'json',
+          description: '误迁移判定 {judged, by, note?}——by 必须为非空人工身份（模型不自评）',
+        },
+        reviewFocus: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '下轮检索提示的结构位条目（特征名/OBJ.attr/ruleId）',
+        },
+        counterexample: { type: 'boolean', description: '反例标记（仅新建路径）' },
+        reusedFromRunId: {
+          type: 'string',
+          description: '复用归因：本轮复用自哪条经验（runId）；diff 按签名机械生成（S5.4.4）',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示标注后代执行传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runId: { type: 'string', required: true },
+            outcome: { type: 'string', required: true },
+            counterexample: { type: 'boolean', required: true },
+            misTransferJudged: { type: 'boolean', required: true },
+            reviewFocus: { type: 'array', required: true, items: { type: 'string' } },
+            created: { type: 'boolean', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) => textBlock(renderAnnotateText(value as never, redlinesForRuns(ws, args))),
+      },
+      execute: toolExecute(
+        (raw: {
+          runId: string
+          humanApproved: boolean
+          outcome?: ExperienceOutcome
+          outcomeReason?: string
+          misTransfer?: unknown
+          reviewFocus?: string[]
+          counterexample?: boolean
+          reusedFromRunId?: string
+        }) => {
+          const args: Parameters<typeof annotateExperienceForTool>[1] = {
+            runId: raw.runId,
+            humanApproved: raw.humanApproved,
+            outcome: raw.outcome,
+            outcomeReason: raw.outcomeReason,
+            misTransfer:
+              raw.misTransfer !== undefined && raw.misTransfer !== null
+                ? (raw.misTransfer as { judged: boolean; by: string; note?: string })
+                : undefined,
+            reviewFocus: raw.reviewFocus,
+            counterexample: raw.counterexample,
+            reusedFromRunId: raw.reusedFromRunId,
+          }
+          // value 闸：误迁移 by / reviewFocus 是人审面自由文本，回流模型面须过红线清单。
+          return toolOut(enforceOutputPolicy(annotateExperienceForTool(ws, args), redlinesForRuns(ws, args)))
         },
         [],
         (args) => redlinesForRuns(ws, args),

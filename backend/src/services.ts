@@ -33,10 +33,13 @@ import {
   exportRunArchive,
   isInsideDir,
   isSafeRelPath,
+  listExperienceNotes,
+  loadExperienceNote,
   loadPackage,
   loadRunRecord,
   listRunRecords,
   readPackageMeta,
+  reviewExperienceNote,
   runScenario,
   savePackage,
   saveRunRecord,
@@ -653,5 +656,64 @@ export class OntoRuntime extends TypertRemoteService {
       const { locator, archive } = exportRunArchive(this.ws.root, request.runId)
       return { locator, archivedAt: archive.archivedAt }
     })
+  }
+
+  /* ── 经验闭环（experience-loop P2）：人审面 wire ── */
+
+  /** 经验记录列表（时间倒序摘要；人审面）。 */
+  @Remote('listExperiences')
+  async remoteExportListExperiences(): Promise<{
+    experiences: Array<{
+      runId: string
+      scenarioId: string
+      packageScope: string
+      outcome: string
+      counterexample: boolean
+      reusedFrom: string | null
+      misTransferJudged: boolean
+      reviewFocus: string[]
+      savedAt: string
+    }>
+  }> {
+    return guard(() => ({
+      experiences: listExperienceNotes(this.ws.root).map((n) => ({
+        runId: n.runId,
+        scenarioId: n.signature.scenarioId,
+        packageScope: n.signature.packageScope,
+        outcome: n.outcome,
+        counterexample: n.counterexample,
+        reusedFrom: n.reusedFrom?.runId ?? null,
+        misTransferJudged: n.misTransfer?.judged ?? false,
+        reviewFocus: n.reviewFocus ?? [],
+        savedAt: n.savedAt,
+      })),
+    }))
+  }
+
+  /** 单条经验全量（含签名与差异表；人审面）。 */
+  @Remote('showExperience')
+  async remoteExportShowExperience(request: { runId: string }): Promise<{
+    note: Awaited<ReturnType<typeof loadExperienceNote>>
+  }> {
+    return guard(() => ({ note: loadExperienceNote(this.ws.root, request.runId) }))
+  }
+
+  /** 人审回填（S5.4）：改判 outcome、误迁移只由人判（by 必填）、reviewFocus 沉淀。 */
+  @Remote('reviewExperience')
+  async remoteExportReviewExperience(request: {
+    runId: string
+    outcome?: 'success' | 'partial' | 'failure' | 'pending-human'
+    outcomeReason?: string
+    misTransfer?: { judged: boolean; by: string; note?: string }
+    reviewFocus?: string[]
+  }): Promise<{ note: Awaited<ReturnType<typeof loadExperienceNote>> }> {
+    return guard(() => ({
+      note: reviewExperienceNote(this.ws.root, request.runId, {
+        outcome: request.outcome,
+        outcomeReason: request.outcomeReason,
+        misTransfer: request.misTransfer,
+        reviewFocus: request.reviewFocus,
+      }),
+    }))
   }
 }

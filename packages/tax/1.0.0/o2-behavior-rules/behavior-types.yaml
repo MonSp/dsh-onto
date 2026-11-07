@@ -1,0 +1,123 @@
+kind: O2BehaviorTypes
+behaviors:
+  - id: BHV-TAX-REGISTER-TAXPAYER
+    name: 纳税人登记
+    anchor: OBJ-TAX-TAXPAYER
+    relations:
+      - REL-TAX-OWNS-ACCOUNT
+    states:
+      - 存续
+      - 非正常
+    trigger: 登记/变更/状态迁移事件
+  - id: BHV-TAX-ISSUE-INVOICE
+    name: 开具发票
+    anchor: OBJ-TAX-INVOICE
+    relations:
+      - REL-TAX-ISSUES-INVOICE
+      - REL-TAX-INVOICE-HAS-LINE
+      - REL-TAX-LINE-GOODS
+    states:
+      - 正常
+    trigger: 开票事件
+  - id: BHV-TAX-RECEIVE-INVOICE
+    name: 接受发票
+    anchor: OBJ-TAX-INVOICE
+    relations:
+      - REL-TAX-RECEIVES-INVOICE
+    states:
+      - 正常
+    trigger: 受票事件
+  - id: BHV-TAX-VOID-INVOICE
+    name: 作废红冲发票
+    anchor: OBJ-TAX-INVOICE
+    relations:
+      - REL-TAX-ISSUES-INVOICE
+      - REL-TAX-RECEIVES-INVOICE
+    states:
+      - 作废
+      - 红冲
+    trigger: 作废/红冲事件
+  - id: BHV-TAX-FILE-RETURN
+    name: 纳税申报
+    anchor: OBJ-TAX-TAX-RETURN
+    relations:
+      - REL-TAX-FILES-RETURN
+      - REL-TAX-RETURN-INVOICE
+      - REL-TAX-BENCHMARK-MATCH
+    states:
+      - 已申报
+    trigger: 申报事件
+  - id: BHV-TAX-PAY-TAX
+    name: 缴纳税款
+    anchor: OBJ-TAX-TAX-RETURN
+    relations:
+      - REL-TAX-FLOW-TAXPAY
+    states:
+      - 已缴
+    trigger: 缴税事件
+  - id: BHV-TAX-TRANSFER-FUND
+    name: 资金转账
+    anchor: OBJ-TAX-BANK-FLOW
+    relations:
+      - REL-TAX-FLOW-FROM
+      - REL-TAX-FLOW-TO
+      - REL-TAX-OWNS-ACCOUNT
+    states:
+      - 已入账
+    trigger: 转账/收付事件
+  - id: BHV-TAX-FUND-RETURN
+    name: 资金回流
+    anchor: OBJ-TAX-BANK-FLOW
+    relations:
+      - REL-TAX-FLOW-INVOICE
+      - REL-TAX-FLOW-FROM
+      - REL-TAX-FLOW-TO
+    states:
+      - 已回流
+    trigger: 回流事件
+  - id: BHV-TAX-BUILD-SUPPLY
+    name: 建立上下游购销关系
+    anchor: OBJ-TAX-TAXPAYER
+    relations:
+      - REL-TAX-SUPPLY
+      - REL-TAX-RELATED-PARTY
+    states:
+      - 已挂链
+    trigger: 购销关系形成事件
+  - id: BHV-TAX-EXPORT-DECLARE
+    name: 出口报关
+    anchor: OBJ-TAX-EXPORT-DOC
+    relations:
+      - REL-TAX-EXPORT-DOC-OWNER
+      - REL-TAX-EXPORT-DOC-GOODS
+    states:
+      - 已报关
+    trigger: 报关事件
+  - id: BHV-TAX-RECEIVE-FX
+    name: 收汇
+    anchor: OBJ-TAX-FX-RECEIPT
+    relations:
+      - REL-TAX-FX-RECEIPT-DOC
+      - REL-TAX-FX-RECEIPT-ACCOUNT
+    states:
+      - 已收汇
+    trigger: 收汇事件
+  - id: BHV-TAX-CLAIM-REFUND
+    name: 申请出口退税
+    anchor: OBJ-TAX-TAX-RETURN
+    relations:
+      - REL-TAX-FILES-RETURN
+      - REL-TAX-RETURN-INVOICE
+    states:
+      - 已申报
+    trigger: 退税申报事件
+  - id: BHV-TAX-VERIFY-DOC
+    name: 单证核验
+    anchor: OBJ-TAX-EXPORT-DOC
+    relations:
+      - REL-TAX-EXPORT-DOC-OWNER
+      - REL-TAX-EXPORT-DOC-GOODS
+      - REL-TAX-FX-RECEIPT-DOC
+    states:
+      - 已核验
+    trigger: 单证核验事件

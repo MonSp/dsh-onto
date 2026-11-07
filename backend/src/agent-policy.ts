@@ -271,6 +271,17 @@ export function assertNoForbiddenPhrases(value: unknown, phrases: readonly strin
   walk(value)
 }
 
+/**
+ * render 拼接后兜底（P2.2 同口径）：模板固定字面碰撞、短语横跨分隔符重组等
+ * 病态构造——整段渲染文本替换为标记。清单为空原样返回。
+ */
+export function retreatRenderText(text: string, phrases: readonly string[]): string {
+  const list = phrases.filter((p) => p !== '')
+  if (list.length === 0) return text
+  if (!list.some((p) => text.includes(p))) return text
+  return requireMaskToken(list)
+}
+
 /** 面向模型的合规渲染：候选摘要 + 强制合规页脚（render 闸，tool-face-policy P2.2）。 */
 export function renderRunText(result: ScenarioRunResult, phrases?: readonly string[]): string {
   const list = phrases !== undefined

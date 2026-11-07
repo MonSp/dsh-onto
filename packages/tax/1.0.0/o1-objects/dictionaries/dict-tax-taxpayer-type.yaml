@@ -1,0 +1,8 @@
+kind: O1Dictionary
+id: dict-tax-taxpayer-type
+name: 纳税人类型
+values:
+  - 企业
+  - 个体工商户
+  - 自然人
+  - 其他

@@ -1,0 +1,284 @@
+kind: O1ObjectTypes
+objects:
+  - id: OBJ-TAX-TAXPAYER
+    name: 纳税人
+    idRule: <tin>
+    attributes:
+      - name: tin
+        type: string
+        required: true
+      - name: name
+        type: string
+        required: true
+      - name: taxpayerType
+        type: enum
+        enumValuesRef: dict-tax-taxpayer-type
+      - name: industryCode
+        type: enum
+        enumValuesRef: dict-tax-industry
+      - name: regionCode
+        type: string
+      - name: registrationDate
+        type: date
+      - name: status
+        type: string
+      - name: creditLevel
+        type: string
+      - name: legalPerson
+        type: string
+      - name: registeredAddress
+        type: string
+      - name: phone
+        type: string
+    lifecycle:
+      - 存续
+      - 非正常
+      - 注销
+      - 吊销
+  - id: OBJ-TAX-INVOICE
+    name: 发票
+    idRule: <invoice_code>:<invoice_no>
+    attributes:
+      - name: invoiceCode
+        type: string
+        required: true
+      - name: invoiceNo
+        type: string
+        required: true
+      - name: invoiceType
+        type: enum
+        enumValuesRef: dict-tax-invoice-type
+      - name: issueDate
+        type: date
+        required: true
+      - name: sellerTin
+        type: string
+        required: true
+      - name: buyerTin
+        type: string
+        required: true
+      - name: amountExTax
+        type: float
+      - name: taxAmount
+        type: float
+      - name: totalAmount
+        type: float
+      - name: goodsSummary
+        type: string
+      - name: status
+        type: string
+    lifecycle:
+      - 正常
+      - 作废
+      - 红冲
+  - id: OBJ-TAX-INVOICE-LINE
+    name: 发票明细
+    idRule: <invoice_code>:<invoice_no>:<line_no>
+    attributes:
+      - name: invoiceCode
+        type: string
+        required: true
+      - name: invoiceNo
+        type: string
+        required: true
+      - name: lineNo
+        type: int
+        required: true
+      - name: goodsCode
+        type: string
+      - name: goodsName
+        type: string
+      - name: spec
+        type: string
+      - name: quantity
+        type: float
+      - name: unitPrice
+        type: float
+      - name: amount
+        type: float
+      - name: taxRate
+        type: float
+  - id: OBJ-TAX-GOODS
+    name: 货物
+    idRule: <goods_code>
+    attributes:
+      - name: goodsCode
+        type: string
+        required: true
+      - name: goodsName
+        type: string
+        required: true
+      - name: category
+        type: string
+      - name: unit
+        type: string
+      - name: isSensitive
+        type: bool
+      - name: exportRebateRate
+        type: float
+  - id: OBJ-TAX-TAX-RETURN
+    name: 申报表
+    idRule: <taxpayer_tin>:<return_type>:<period>
+    attributes:
+      - name: returnType
+        type: enum
+        enumValuesRef: dict-tax-return-type
+        required: true
+      - name: period
+        type: string
+        required: true
+      - name: taxpayerTin
+        type: string
+        required: true
+      - name: salesAmount
+        type: float
+      - name: outputTax
+        type: float
+      - name: inputTax
+        type: float
+      - name: taxPayable
+        type: float
+      - name: taxPaid
+        type: float
+      - name: creditCarryforward
+        type: float
+      - name: refundAmount
+        type: float
+      - name: filingDate
+        type: date
+      - name: status
+        type: string
+  - id: OBJ-TAX-BANK-ACCOUNT
+    name: 银行账户
+    idRule: <bank_code>:<acct_no>
+    attributes:
+      - name: bankCode
+        type: string
+        required: true
+      - name: acctNo
+        type: string
+        required: true
+      - name: bankName
+        type: string
+      - name: acctName
+        type: string
+      - name: openDate
+        type: date
+      - name: status
+        type: string
+      - name: ownerTin
+        type: string
+        required: true
+  - id: OBJ-TAX-BANK-FLOW
+    name: 银行流水
+    idRule: <bank_code>:<flow_no>
+    attributes:
+      - name: bankCode
+        type: string
+        required: true
+      - name: flowNo
+        type: string
+        required: true
+      - name: acctNo
+        type: string
+        required: true
+      - name: counterpartyAcctNo
+        type: string
+      - name: counterpartyName
+        type: string
+      - name: direction
+        type: string
+      - name: amount
+        type: float
+        required: true
+      - name: currency
+        type: string
+      - name: occurredAt
+        type: date
+        required: true
+      - name: summary
+        type: string
+      - name: purpose
+        type: string
+  - id: OBJ-TAX-EXPORT-DOC
+    name: 出口单证
+    idRule: <doc_type>:<doc_no>
+    attributes:
+      - name: docType
+        type: enum
+        enumValuesRef: dict-tax-doc-type
+        required: true
+      - name: docNo
+        type: string
+        required: true
+      - name: issueDate
+        type: date
+      - name: exporterTin
+        type: string
+      - name: foreignBuyer
+        type: string
+      - name: amount
+        type: float
+      - name: currency
+        type: string
+      - name: goodsCode
+        type: string
+      - name: quantity
+        type: float
+      - name: customsCode
+        type: string
+      - name: tradeMode
+        type: string
+      - name: destinationCountry
+        type: string
+      - name: status
+        type: string
+  - id: OBJ-TAX-FX-RECEIPT
+    name: 收汇凭证
+    idRule: <receipt_no>
+    attributes:
+      - name: receiptNo
+        type: string
+        required: true
+      - name: receiptDate
+        type: date
+      - name: amount
+        type: float
+      - name: currency
+        type: string
+      - name: payerName
+        type: string
+      - name: payerCountry
+        type: string
+      - name: payeeAcctNo
+        type: string
+      - name: customsDocNo
+        type: string
+      - name: verifiedStatus
+        type: string
+  - id: OBJ-TAX-INDUSTRY-BENCHMARK
+    name: 行业税负基准
+    idRule: <industry_code>:<tax_type>:<period>:<region_code>
+    attributes:
+      - name: industryCode
+        type: enum
+        enumValuesRef: dict-tax-industry
+        required: true
+      - name: period
+        type: string
+        required: true
+      - name: regionCode
+        type: string
+      - name: taxType
+        type: string
+        required: true
+      - name: avgBurdenRate
+        type: float
+      - name: p25
+        type: float
+      - name: p50
+        type: float
+      - name: p75
+        type: float
+      - name: sampleSize
+        type: int

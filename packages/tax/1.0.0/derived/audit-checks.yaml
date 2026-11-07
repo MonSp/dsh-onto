@@ -1,0 +1,73 @@
+kind: DerivedAuditChecks
+checks:
+  - id: AUD-TAX-BURDEN-ANOMALY-O1_CLOSED
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    check: O1_CLOSED
+    requirement: 引用的对象/关系真实存在（对照行为实例表与运行时数据）
+  - id: AUD-TAX-BURDEN-ANOMALY-O2_CLOSED
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    check: O2_CLOSED
+    requirement: 行为实例与规则命中真实发生（对照行为实例表与规则日志）
+  - id: AUD-TAX-BURDEN-ANOMALY-O3_CLOSED
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    check: O3_CLOSED
+    requirement: 结论未越出场景卡输出契约；禁用表述零命中
+  - id: AUD-TAX-EXPORT-REFUND-O1_CLOSED
+    scenario: SCN-TAX-EXPORT-REFUND
+    check: O1_CLOSED
+    requirement: 引用的对象/关系真实存在（对照行为实例表与运行时数据）
+  - id: AUD-TAX-EXPORT-REFUND-O2_CLOSED
+    scenario: SCN-TAX-EXPORT-REFUND
+    check: O2_CLOSED
+    requirement: 行为实例与规则命中真实发生（对照行为实例表与规则日志）
+  - id: AUD-TAX-EXPORT-REFUND-O3_CLOSED
+    scenario: SCN-TAX-EXPORT-REFUND
+    check: O3_CLOSED
+    requirement: 结论未越出场景卡输出契约；禁用表述零命中
+  - id: AUD-TAX-FAKE-INVOICE-O1_CLOSED
+    scenario: SCN-TAX-FAKE-INVOICE
+    check: O1_CLOSED
+    requirement: 引用的对象/关系真实存在（对照行为实例表与运行时数据）
+  - id: AUD-TAX-FAKE-INVOICE-O2_CLOSED
+    scenario: SCN-TAX-FAKE-INVOICE
+    check: O2_CLOSED
+    requirement: 行为实例与规则命中真实发生（对照行为实例表与规则日志）
+  - id: AUD-TAX-FAKE-INVOICE-O3_CLOSED
+    scenario: SCN-TAX-FAKE-INVOICE
+    check: O3_CLOSED
+    requirement: 结论未越出场景卡输出契约；禁用表述零命中
+forbiddenPhrases:
+  SCN-TAX-BURDEN-ANOMALY:
+    - 认定偷税
+    - 确定为偷税
+    - 已构成逃税罪
+    - 该纳税人系偷税企业
+  SCN-TAX-EXPORT-REFUND:
+    - 认定骗取出口退税
+    - 确定为骗取出口退税
+    - 已构成骗取出口退税罪
+    - 该纳税人系骗税企业
+  SCN-TAX-FAKE-INVOICE:
+    - 认定虚开增值税专用发票
+    - 确定为虚开发票
+    - 已构成虚开增值税专用发票罪
+    - 该纳税人系虚开发票企业
+mustInclude:
+  SCN-TAX-BURDEN-ANOMALY:
+    - candidateList
+    - riskScore
+    - hitRuleIds
+    - evidenceChains
+    - pendingChecks
+  SCN-TAX-EXPORT-REFUND:
+    - candidateList
+    - riskScore
+    - hitRuleIds
+    - evidenceChains
+    - pendingChecks
+  SCN-TAX-FAKE-INVOICE:
+    - candidateList
+    - riskScore
+    - hitRuleIds
+    - evidenceChains
+    - pendingChecks

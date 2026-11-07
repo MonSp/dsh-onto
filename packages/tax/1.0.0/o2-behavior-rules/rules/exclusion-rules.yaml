@@ -1,0 +1,36 @@
+kind: O2ExclusionRules
+rules:
+  - id: RULE-TAX-EXCL-WHITELIST
+    name: 白名单及A级纳税人排除
+    action: drop
+    condition: tag == 'whitelist'
+  - id: RULE-TAX-EXCL-MICRO
+    name: 小微普惠及未达起征点排除
+    action: drop
+    condition: tag == 'micro-exempt'
+  - id: RULE-TAX-EXCL-NEW-SEASONAL
+    name: 新办及季节性波动降权
+    action: downweight
+    factor: 0.6
+    condition: tag == 'new-entity' || tag == 'seasonal'
+  - id: RULE-TAX-EXCL-POLICY-INCOME
+    name: 政策性收入排除
+    action: drop
+    condition: tag == 'policy-income'
+  - id: RULE-TAX-EXCL-REVERSED
+    name: 红冲作废已处理降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'reversed-cleared'
+  - id: RULE-TAX-EXCL-CONSISTENT
+    name: 票货资金一致且完税排除
+    action: drop
+    condition: tag == 'three-flow-consistent'
+  - id: RULE-TAX-EXCL-REFUND-CLOSED
+    name: 单证齐全且退税已核销排除
+    action: drop
+    condition: tag == 'refund-verified'
+  - id: RULE-TAX-EXCL-AGENT-EXPORT
+    name: 代理出口证明齐全排除
+    action: drop
+    condition: tag == 'agent-export-cleared'

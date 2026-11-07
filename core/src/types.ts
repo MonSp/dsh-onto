@@ -465,10 +465,12 @@ export interface DraftCandidate extends DraftItem {
   createdAt: string
 }
 
-/** 草案来源定位：对话轮次（turnId）或知识源（sourceId）。 */
+/** 草案来源定位：对话轮次（turnId）或知识源（sourceId）；经验闭环增运行（runId）。 */
 export interface DraftProvenance {
   turnId?: string
   sourceId?: string
+  /** 经验闭环（experience-loop S4.4）：草案来自哪次运行——人审面回放锚点。 */
+  runId?: string
 }
 
 export interface LlmParseRequest {

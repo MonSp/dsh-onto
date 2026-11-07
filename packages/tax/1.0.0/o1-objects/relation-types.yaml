@@ -1,0 +1,159 @@
+kind: O1RelationTypes
+relations:
+  - id: REL-TAX-OWNS-ACCOUNT
+    name: 纳税人持有账户
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-BANK-ACCOUNT
+    attributes:
+      - name: since
+        type: date
+      - name: role
+        type: string
+  - id: REL-TAX-FLOW-FROM
+    name: 流水付款账户
+    from: OBJ-TAX-BANK-FLOW
+    to: OBJ-TAX-BANK-ACCOUNT
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-FLOW-TO
+    name: 流水收款账户
+    from: OBJ-TAX-BANK-FLOW
+    to: OBJ-TAX-BANK-ACCOUNT
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-ISSUES-INVOICE
+    name: 销方开票
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-INVOICE
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-RECEIVES-INVOICE
+    name: 购方受票
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-INVOICE
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-INVOICE-HAS-LINE
+    name: 发票含明细
+    from: OBJ-TAX-INVOICE
+    to: OBJ-TAX-INVOICE-LINE
+    attributes: []
+  - id: REL-TAX-LINE-GOODS
+    name: 明细对应货物
+    from: OBJ-TAX-INVOICE-LINE
+    to: OBJ-TAX-GOODS
+    attributes:
+      - name: matchType
+        type: enum
+        enumValuesRef: dict-tax-match-type
+  - id: REL-TAX-SUPPLY
+    name: 上下游购销关系
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-TAXPAYER
+    attributes:
+      - name: direction
+        type: string
+      - name: amount
+        type: float
+      - name: goodsCode
+        type: string
+      - name: period
+        type: string
+      - name: source
+        type: string
+  - id: REL-TAX-RELATED-PARTY
+    name: 关联关系
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-TAXPAYER
+    attributes:
+      - name: relationType
+        type: string
+      - name: shareRatio
+        type: float
+      - name: controlFlag
+        type: bool
+      - name: since
+        type: date
+  - id: REL-TAX-FILES-RETURN
+    name: 纳税人申报
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-TAX-RETURN
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-RETURN-INVOICE
+    name: 票表比对
+    from: OBJ-TAX-TAX-RETURN
+    to: OBJ-TAX-INVOICE
+    attributes:
+      - name: matchType
+        type: enum
+        enumValuesRef: dict-tax-match-type
+      - name: diffAmount
+        type: float
+  - id: REL-TAX-FLOW-INVOICE
+    name: 票款对应
+    from: OBJ-TAX-BANK-FLOW
+    to: OBJ-TAX-INVOICE
+    attributes:
+      - name: matchType
+        type: enum
+        enumValuesRef: dict-tax-match-type
+      - name: amount
+        type: float
+      - name: lagDays
+        type: int
+  - id: REL-TAX-FLOW-TAXPAY
+    name: 缴税流水
+    from: OBJ-TAX-BANK-FLOW
+    to: OBJ-TAX-TAX-RETURN
+    attributes:
+      - name: taxType
+        type: string
+      - name: amount
+        type: float
+  - id: REL-TAX-EXPORT-DOC-OWNER
+    name: 单证出口方
+    from: OBJ-TAX-EXPORT-DOC
+    to: OBJ-TAX-TAXPAYER
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-EXPORT-DOC-GOODS
+    name: 单证对应货物
+    from: OBJ-TAX-EXPORT-DOC
+    to: OBJ-TAX-GOODS
+    attributes:
+      - name: matchType
+        type: enum
+        enumValuesRef: dict-tax-match-type
+  - id: REL-TAX-FX-RECEIPT-DOC
+    name: 收汇对应报关单
+    from: OBJ-TAX-FX-RECEIPT
+    to: OBJ-TAX-EXPORT-DOC
+    attributes:
+      - name: matchType
+        type: enum
+        enumValuesRef: dict-tax-match-type
+      - name: diffAmount
+        type: float
+  - id: REL-TAX-FX-RECEIPT-ACCOUNT
+    name: 收汇入账
+    from: OBJ-TAX-FX-RECEIPT
+    to: OBJ-TAX-BANK-ACCOUNT
+    attributes:
+      - name: role
+        type: string
+  - id: REL-TAX-BENCHMARK-MATCH
+    name: 行业基准匹配
+    from: OBJ-TAX-TAXPAYER
+    to: OBJ-TAX-INDUSTRY-BENCHMARK
+    attributes:
+      - name: period
+        type: string
+      - name: deviation
+        type: float

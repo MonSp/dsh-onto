@@ -1,0 +1,96 @@
+kind: O3ScenarioCard
+scenario:
+  id: SCN-TAX-EXPORT-REFUND
+  name: 出口退税风险识别
+  goal: 从出口单证、收汇凭证与申报表出发，识别单证缺失、收汇不匹配、出口货物流异常等候选风险线索，输出风险分与待核实点；不作定性。
+  boundary: 仅输出候选线索、风险分与待核实点；不作定性，不替代人工复核与处理决定。
+  inputs:
+    - description: 纳税人识别号
+      name: taxpayerId
+      required: true
+      type: string
+    - description: 指定报关单/退税申报号（可选）
+      name: declarationNo
+      required: false
+      type: string
+    - description: 观察期，YYYY-MM
+      name: period
+      required: false
+      type: string
+    - description: 特征观察窗口（天），缺省 180
+      name: windowDays
+      required: false
+      type: int
+  outputs:
+    fields:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+      - excluded
+  pipeline:
+    - label: 归一纳税人、出口单证、收汇、申报与购销关系
+      stepId: s1
+      stepType: DATA_INGEST
+    - label: 装载开票、申报、转账、购销、报关、收汇、退税申报、单证核验行为
+      stepId: s2
+      stepType: BEHAVIOR_CALL
+    - label: 排除段：白名单/退税已核销/代理出口证明齐全
+      order: before-scoring
+      stepId: s3
+      stepType: RULE_EVALUATE
+    - label: 打分段：公共 4 条 + 骗税带 3 条
+      stepId: s4
+      stepType: RULE_EVALUATE
+    - label: 单证收汇叙述
+      skillRefs:
+        - SKL-TAX-EXPORT-REFUND-NARRATIVE
+      stepId: s5
+      stepType: SKILL_RUN
+    - label: 三层闭合审计
+      stepId: s6
+      stepType: AUDIT_CHECK
+    - label: 人工复核
+      stepId: s7
+      stepType: HUMAN_REVIEW
+  behaviorRefs:
+    - BHV-TAX-ISSUE-INVOICE
+    - BHV-TAX-FILE-RETURN
+    - BHV-TAX-TRANSFER-FUND
+    - BHV-TAX-BUILD-SUPPLY
+    - BHV-TAX-EXPORT-DECLARE
+    - BHV-TAX-RECEIVE-FX
+    - BHV-TAX-CLAIM-REFUND
+    - BHV-TAX-VERIFY-DOC
+  exclusionRefs:
+    - RULE-TAX-EXCL-WHITELIST
+    - RULE-TAX-EXCL-REFUND-CLOSED
+    - RULE-TAX-EXCL-AGENT-EXPORT
+  scoreRefs:
+    - RULE-TAX-SCORE-REGISTRATION
+    - RULE-TAX-SCORE-RELATED-CONCENTRATION
+    - RULE-TAX-SCORE-FUND-ANOMALY
+    - RULE-TAX-SCORE-DECLARATION-CONSISTENCY
+    - RULE-TAX-SCORE-DOC-COMPLETENESS
+    - RULE-TAX-SCORE-FX-MATCH
+    - RULE-TAX-SCORE-EXPORT-GOODS
+  output_contract:
+    mustInclude:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+    forbiddenPhrases:
+      - 认定骗取出口退税
+      - 确定为骗取出口退税
+      - 已构成骗取出口退税罪
+      - 该纳税人系骗税企业
+  review_gate:
+    required: true
+    threshold: 0.45
+  auditChecks:
+    - O1_CLOSED
+    - O2_CLOSED
+    - O3_CLOSED

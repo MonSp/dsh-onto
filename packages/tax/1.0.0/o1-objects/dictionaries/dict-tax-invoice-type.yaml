@@ -1,0 +1,9 @@
+kind: O1Dictionary
+id: dict-tax-invoice-type
+name: 发票类型
+values:
+  - 增值税专用发票
+  - 增值税普通发票
+  - 电子发票
+  - 出口发票
+  - 其他

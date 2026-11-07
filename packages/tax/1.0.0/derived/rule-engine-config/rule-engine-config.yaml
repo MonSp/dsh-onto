@@ -1,0 +1,180 @@
+kind: DerivedRuleEngineConfig
+llmForbidden: true
+weightSum: 1
+exclusion:
+  - id: RULE-TAX-EXCL-WHITELIST
+    name: 白名单及A级纳税人排除
+    action: drop
+    factor: null
+    condition: tag == 'whitelist'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-MICRO
+    name: 小微普惠及未达起征点排除
+    action: drop
+    factor: null
+    condition: tag == 'micro-exempt'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-NEW-SEASONAL
+    name: 新办及季节性波动降权
+    action: downweight
+    factor: 0.6
+    condition: tag == 'new-entity' || tag == 'seasonal'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-POLICY-INCOME
+    name: 政策性收入排除
+    action: drop
+    factor: null
+    condition: tag == 'policy-income'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-REVERSED
+    name: 红冲作废已处理降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'reversed-cleared'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-CONSISTENT
+    name: 票货资金一致且完税排除
+    action: drop
+    factor: null
+    condition: tag == 'three-flow-consistent'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-REFUND-CLOSED
+    name: 单证齐全且退税已核销排除
+    action: drop
+    factor: null
+    condition: tag == 'refund-verified'
+    order: before-scoring
+  - id: RULE-TAX-EXCL-AGENT-EXPORT
+    name: 代理出口证明齐全排除
+    action: drop
+    factor: null
+    condition: tag == 'agent-export-cleared'
+    order: before-scoring
+scoring:
+  - id: RULE-TAX-SCORE-REGISTRATION
+    name: 主体登记与状态异常
+    weight: 0.1
+    expression: min(1, 0.5 * statusAbnormalFlag + 0.3 * shortLifeFlag + 0.2 * identityClusterRatio)
+    threshold: 0.5
+    evidenceTemplate: 登记状态异常 {statusAbnormalFlag}，存续期过短 {shortLifeFlag}，同址同人聚集度 {identityClusterRatio}
+  - id: RULE-TAX-SCORE-RELATED-CONCENTRATION
+    name: 关联交易与网络集中
+    weight: 0.1
+    expression: min(1, 0.5 * relatedTradeRatio + 0.3 * counterpartyConcentration + 0.2 * sameControllerFlag)
+    threshold: 0.5
+    evidenceTemplate: 关联交易占比 {relatedTradeRatio}，上下游集中度 {counterpartyConcentration}，同一控制人 {sameControllerFlag}
+  - id: RULE-TAX-SCORE-FUND-ANOMALY
+    name: 资金流异常
+    weight: 0.1
+    expression: min(1, 0.45 * fastInOutRatio + 0.3 * personalAccountRatio + 0.25 * flowScaleMismatch)
+    threshold: 0.5
+    evidenceTemplate: 快进快出占比 {fastInOutRatio}，私户收款占比 {personalAccountRatio}，流水经营背离度 {flowScaleMismatch}
+  - id: RULE-TAX-SCORE-DECLARATION-CONSISTENCY
+    name: 票表税一致性
+    weight: 0.1
+    expression: min(1, 0.4 * invoiceReturnGap + 0.3 * inputOutputGap + 0.3 * taxPaidGap)
+    threshold: 0.5
+    evidenceTemplate: 开票与申报差异度 {invoiceReturnGap}，进销项背离度 {inputOutputGap}，已缴与应纳税差异度 {taxPaidGap}
+  - id: RULE-TAX-SCORE-INVOICE-GOODS
+    name: 票货不符
+    weight: 0.06
+    expression: min(1, 0.5 * goodsMismatchRatio + 0.3 * noLogisticsFlag + 0.2 * topLimitInvoiceRatio)
+    threshold: 0.55
+    evidenceTemplate: 票货不符占比 {goodsMismatchRatio}，无物流标记 {noLogisticsFlag}，顶额开票占比 {topLimitInvoiceRatio}
+  - id: RULE-TAX-SCORE-FUND-LOOP
+    name: 资金回流闭环
+    weight: 0.08
+    expression: min(1, 0.55 * fundLoopRatio + 0.3 * loopSpeedScore + 0.15 * loopViaRelatedPartyFlag)
+    threshold: 0.55
+    evidenceTemplate: 回流金额占比 {fundLoopRatio}，回流时滞评分 {loopSpeedScore}，经关联方回流 {loopViaRelatedPartyFlag}
+  - id: RULE-TAX-SCORE-RELATED-LOOP
+    name: 关联方开票闭环
+    weight: 0.06
+    expression: min(1, 0.5 * relatedInvoiceRatio + 0.3 * shellCompanyFlag + 0.2 * deregisterAfterInvoiceFlag)
+    threshold: 0.5
+    evidenceTemplate: 关联方开票占比 {relatedInvoiceRatio}，新设空壳 {shellCompanyFlag}，开票后注销 {deregisterAfterInvoiceFlag}
+  - id: RULE-TAX-SCORE-BURDEN-DEVIATION
+    name: 税负率偏离
+    weight: 0.08
+    expression: min(1, 0.6 * burdenDeviation + 0.25 * belowP25Flag + 0.15 * lowBurdenMonthsScore)
+    threshold: 0.55
+    evidenceTemplate: 税负率偏离度 {burdenDeviation}，低于行业P25 {belowP25Flag}，连续低税负月数评分 {lowBurdenMonthsScore}
+  - id: RULE-TAX-SCORE-INPUT-STRUCTURE
+    name: 进项结构异常
+    weight: 0.06
+    expression: min(1, 0.4 * inputSpikeRatio + 0.3 * sensitiveGoodsRatio + 0.3 * inputOutputGoodsMismatch)
+    threshold: 0.55
+    evidenceTemplate: 进项突增比例 {inputSpikeRatio}，敏感品目进项占比 {sensitiveGoodsRatio}，进销品名背离度 {inputOutputGoodsMismatch}
+  - id: RULE-TAX-SCORE-REVENUE-MISMATCH
+    name: 收入申报背离
+    weight: 0.06
+    expression: min(1, 0.4 * invoiceSalesGap + 0.4 * bankInflowGap + 0.2 * lossExpansionFlag)
+    threshold: 0.5
+    evidenceTemplate: 开票与申报销售额差异度 {invoiceSalesGap}，流水与申报差异度 {bankInflowGap}，长期亏损仍扩张 {lossExpansionFlag}
+  - id: RULE-TAX-SCORE-DOC-COMPLETENESS
+    name: 单证完备性
+    weight: 0.08
+    expression: min(1, 0.5 * missingDocRatio + 0.3 * docAmountMismatch + 0.2 * docIssuerAbnormalFlag)
+    threshold: 0.55
+    evidenceTemplate: 单证缺失比例 {missingDocRatio}，单证金额差异度 {docAmountMismatch}，签发方异常 {docIssuerAbnormalFlag}
+  - id: RULE-TAX-SCORE-FX-MATCH
+    name: 收汇匹配
+    weight: 0.06
+    expression: min(1, 0.45 * fxAmountGap + 0.35 * fxDelayScore + 0.2 * payerBuyerMismatchFlag)
+    threshold: 0.55
+    evidenceTemplate: 收汇与报关金额差异度 {fxAmountGap}，收汇时滞评分 {fxDelayScore}，付款人与买方不一致 {payerBuyerMismatchFlag}
+  - id: RULE-TAX-SCORE-EXPORT-GOODS
+    name: 出口货物流异常
+    weight: 0.06
+    expression: min(1, 0.4 * highRebateRatio + 0.35 * buyerConcentration + 0.25 * destinationAbnormalFlag)
+    threshold: 0.5
+    evidenceTemplate: 高退税率商品占比 {highRebateRatio}，境外买方集中度 {buyerConcentration}，目的国/路线异常 {destinationAbnormalFlag}
+skillTemplates:
+  - id: SKL-TAX-BURDEN-NARRATIVE
+    name: 税负偏离叙述
+    weights:
+      RULE-TAX-SCORE-BURDEN-DEVIATION: 0.08
+      RULE-TAX-SCORE-DECLARATION-CONSISTENCY: 0.1
+      RULE-TAX-SCORE-DOC-COMPLETENESS: 0.08
+      RULE-TAX-SCORE-EXPORT-GOODS: 0.06
+      RULE-TAX-SCORE-FUND-ANOMALY: 0.1
+      RULE-TAX-SCORE-FUND-LOOP: 0.08
+      RULE-TAX-SCORE-FX-MATCH: 0.06
+      RULE-TAX-SCORE-INPUT-STRUCTURE: 0.06
+      RULE-TAX-SCORE-INVOICE-GOODS: 0.06
+      RULE-TAX-SCORE-REGISTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-CONCENTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-LOOP: 0.06
+      RULE-TAX-SCORE-REVENUE-MISMATCH: 0.06
+  - id: SKL-TAX-EXPORT-REFUND-NARRATIVE
+    name: 单证收汇叙述
+    weights:
+      RULE-TAX-SCORE-BURDEN-DEVIATION: 0.08
+      RULE-TAX-SCORE-DECLARATION-CONSISTENCY: 0.1
+      RULE-TAX-SCORE-DOC-COMPLETENESS: 0.08
+      RULE-TAX-SCORE-EXPORT-GOODS: 0.06
+      RULE-TAX-SCORE-FUND-ANOMALY: 0.1
+      RULE-TAX-SCORE-FUND-LOOP: 0.08
+      RULE-TAX-SCORE-FX-MATCH: 0.06
+      RULE-TAX-SCORE-INPUT-STRUCTURE: 0.06
+      RULE-TAX-SCORE-INVOICE-GOODS: 0.06
+      RULE-TAX-SCORE-REGISTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-CONCENTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-LOOP: 0.06
+      RULE-TAX-SCORE-REVENUE-MISMATCH: 0.06
+  - id: SKL-TAX-FAKE-INVOICE-NARRATIVE
+    name: 票货资金回流叙述
+    weights:
+      RULE-TAX-SCORE-BURDEN-DEVIATION: 0.08
+      RULE-TAX-SCORE-DECLARATION-CONSISTENCY: 0.1
+      RULE-TAX-SCORE-DOC-COMPLETENESS: 0.08
+      RULE-TAX-SCORE-EXPORT-GOODS: 0.06
+      RULE-TAX-SCORE-FUND-ANOMALY: 0.1
+      RULE-TAX-SCORE-FUND-LOOP: 0.08
+      RULE-TAX-SCORE-FX-MATCH: 0.06
+      RULE-TAX-SCORE-INPUT-STRUCTURE: 0.06
+      RULE-TAX-SCORE-INVOICE-GOODS: 0.06
+      RULE-TAX-SCORE-REGISTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-CONCENTRATION: 0.1
+      RULE-TAX-SCORE-RELATED-LOOP: 0.06
+      RULE-TAX-SCORE-REVENUE-MISMATCH: 0.06
