@@ -693,14 +693,22 @@ export function renderScenarioList(scenarios: unknown[]): string {
 }
 
 /**
- * recall_experience 渲染（N4 / P4-5）：只回结构位（runId/score/outcome/理由含字段级对照），
- * 无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
+ * recall_experience 渲染（N4 / P4-5 / E1-2）：只回结构位（runId/score/outcome/理由含字段级对照/
+ * reviewFocus 下轮复核提示），无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
  * render 闸：拼接后兜底（retreatRenderText，P2.2 同口径）。
  */
 export function renderRecallText(
   v: {
     coldStart: boolean
-    hits: Array<{ runId: string; score: number; outcome: string; counterexample: boolean; reasons: string[] }>
+    hits: Array<{
+      runId: string
+      score: number
+      outcome: string
+      counterexample: boolean
+      reasons: string[]
+      /** 下轮复核提示（人审面沉淀的结构位条目，过 value/render 闸后上墙）。 */
+      reviewFocus: string[]
+    }>
     advice: string
   },
   phrases?: readonly string[],
@@ -716,8 +724,9 @@ export function renderRecallText(
     // 打分位 = 同 scenarioId / stepShape 一致 / Jaccard 等检索理由。
     const field = h.reasons.filter((r) => /源=|源≠|共有\d|同（| 同$/.test(r))
     const scoreBits = h.reasons.filter((r) => !field.includes(r))
+    const focus = h.reviewFocus.length > 0 ? ` 复核提示[${h.reviewFocus.join(', ')}]` : ''
     return [
-      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}`,
+      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}${focus}`,
       `  打分：${scoreBits.join('; ') || '—'}`,
       `  字段对照：${field.join('; ') || '—'}`,
     ].join('\n')
@@ -726,6 +735,39 @@ export function renderRecallText(
     [`命中 ${v.hits.length} 条：`, ...lines, v.advice, 'humanReviewRequired=true（认定出口只在人工复核）'].join('\n'),
     phrases ?? [],
   )
+}
+
+/**
+ * recall_experience 命中投影（E1-2）：结构位 + reviewFocus 下轮复核提示。
+ * 经验只提示不改分——本函数不触碰打分语义；reviewFocus 经 value 闸后上墙。
+ */
+export function projectRecallHits(
+  hits: ReadonlyArray<{
+    note: {
+      runId: string
+      outcome: string
+      counterexample: boolean
+      reviewFocus?: string[]
+    }
+    score: number
+    reasons: string[]
+  }>,
+): Array<{
+  runId: string
+  score: number
+  outcome: string
+  counterexample: boolean
+  reasons: string[]
+  reviewFocus: string[]
+}> {
+  return hits.map((h) => ({
+    runId: h.note.runId,
+    score: Number(h.score.toFixed(2)),
+    outcome: h.note.outcome,
+    counterexample: h.note.counterexample,
+    reasons: h.reasons,
+    reviewFocus: h.note.reviewFocus ?? [],
+  }))
 }
 
 /**
@@ -1359,8 +1401,9 @@ export function apply(ctx: Context): void {
       description:
         '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
         + '命中理由含字段级 signature 新旧对照（scenarioId/ruleRefs/skillRefs/dataBand 等源→新），不止 Jaccard 数字。'
+        + '命中含 reviewFocus（下轮复核提示，人审面沉淀的结构位条目）。'
         + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
-        + '结果仅含结构位（runId/score/outcome/签名字段）与转人工提示，不含自由流程描述。',
+        + '结果仅含结构位（runId/score/outcome/签名字段/reviewFocus）与转人工提示，不含自由流程描述。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
@@ -1404,13 +1447,7 @@ export function apply(ctx: Context): void {
             signature,
             externalRefs: pkg.meta.externalRefs,
           })
-          const hits = result.hits.map((h) => ({
-            runId: h.note.runId,
-            score: Number(h.score.toFixed(2)),
-            outcome: h.note.outcome,
-            counterexample: h.note.counterexample,
-            reasons: h.reasons,
-          }))
+          const hits = projectRecallHits(result.hits)
           let advice: string
           if (result.coldStart || hits.length === 0) {
             advice = '冷启动：无相似经验（不硬迁移，走全量执行）'

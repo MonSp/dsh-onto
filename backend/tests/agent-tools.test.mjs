@@ -29,6 +29,7 @@ import {
   loadDatasetFromArgs,
   loadToolPackage,
   projectPackageList,
+  projectRecallHits,
   renderRecallText,
   renderAnnotateText,
   annotateExperienceForTool,
@@ -242,13 +243,13 @@ test('只读查询投影：摘要/口径/场景清单字段齐全', () => {
   assert.match(renderScenarioList(catalog.scenarios), /SCN-AML-FIND-CLUES/)
 })
 
-test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬迁；差异转人工', () => {
+test('recall_experience 渲染（N4/P4-5/E1-2）：字段级对照；冷启动不硬迁；差异转人工；reviewFocus 上墙', () => {
   // 冷启动：不硬迁移话术
   const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
   assert.match(cold, /冷启动/)
   assert.match(cold, /不硬迁移/)
 
-  // 命中：打分行 + 字段级对照行 + 低置信度转人工
+  // 命中：打分行 + 字段级对照行 + 低置信度转人工 + 下轮复核提示
   const hit = renderRecallText({
     coldStart: false,
     hits: [{
@@ -266,6 +267,7 @@ test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬�
         'skillRefs 共有1/新独有0/源独有0',
         'inputShape 同（taxpayerId:string）',
       ],
+      reviewFocus: ['listHitCount', '集中转入'],
     }],
     advice: '低置信度：结构位差异（ruleRefs）→ 转人工确认后方可复用',
   })
@@ -277,8 +279,25 @@ test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬�
   assert.match(hit, /ruleRefs 共有5\/新独有0\/源独有0/)
   assert.match(hit, /Jaccard=1\.00/)
   assert.match(hit, /转人工/)
+  // E1-2：下轮复核提示随命中上墙
+  assert.match(hit, /复核提示\[listHitCount, 集中转入\]/)
   // 无自由流程描述（不出现步骤编造词）
   assert.doesNotMatch(hit, /执行流程|步骤图|自由/)
+
+  // reviewFocus 为空则不出现复核提示段（不渲染空括号）
+  const noFocus = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-empty01',
+      score: 0.8,
+      outcome: 'success',
+      counterexample: false,
+      reasons: ['同 scenarioId'],
+      reviewFocus: [],
+    }],
+    advice: 'x',
+  })
+  assert.ok(!noFocus.includes('复核提示'), `空 reviewFocus 不得渲染复核提示: ${noFocus}`)
 })
 
 test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () => {
@@ -287,6 +306,64 @@ test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () 
   const coreSrc = readFileSync(join(REPO, 'core', 'src', 'experience.ts'), 'utf8')
   assert.ok(coreSrc.includes('signatureFieldReasons'), 'core 须导出 signatureFieldReasons')
   assert.ok(coreSrc.includes('reasons.push(...signatureFieldReasons'), 'retrieveSimilar 须挂字段级理由')
+})
+
+test('E1-2：recall execute 投影 reviewFocus，render 上墙复核提示（源断言）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const recallIdx = src.indexOf("name: 'recall_experience'")
+  const annotateIdx = src.indexOf("name: 'annotate_experience'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
+  const recallSlice = src.slice(recallIdx, annotateIdx)
+  // execute：命中投影走 projectRecallHits（带 note.reviewFocus ?? []）
+  assert.ok(recallSlice.includes('projectRecallHits'), 'recall execute 须走 projectRecallHits')
+  const projIdx = src.indexOf('export function projectRecallHits')
+  assert.ok(projIdx > 0, '须导出 projectRecallHits 纯函数')
+  assert.ok(
+    src.includes('reviewFocus: h.note.reviewFocus ?? []'),
+    'projectRecallHits 须投影 h.note.reviewFocus ?? []',
+  )
+  // render：复核提示上墙且挂 retreatRenderText 兜底
+  assert.ok(recallSlice.includes('renderRecallText'), 'recall render 须走 renderRecallText')
+  assert.ok(src.includes('复核提示['), 'renderRecallText 须渲染复核提示')
+  assert.ok(src.includes('retreatRenderText'), 'renderRecallText 须挂 retreatRenderText 兜底')
+  // 描述须声明 reviewFocus 可发现
+  assert.ok(recallSlice.includes('reviewFocus'), '工具描述须声明 reviewFocus')
+  // 打分语义不碰：rules.ts 不得引用 experience
+  const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
+  assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
+})
+
+test('E1-2：projectRecallHits 纯函数——reviewFocus 缺省 []，score 两位小数', () => {
+  const hits = projectRecallHits([
+    {
+      note: {
+        runId: 'run-e12a',
+        outcome: 'success',
+        counterexample: false,
+        reviewFocus: ['listHitCount'],
+      },
+      score: 0.906,
+      reasons: ['digest 同构'],
+    },
+    {
+      note: {
+        runId: 'run-e12b',
+        outcome: 'partial',
+        counterexample: true,
+      },
+      score: 0.7,
+      reasons: ['同 scenarioId'],
+    },
+  ])
+  assert.equal(hits.length, 2)
+  assert.deepEqual(hits[0].reviewFocus, ['listHitCount'])
+  assert.equal(hits[0].score, 0.91)
+  assert.deepEqual(hits[1].reviewFocus, [], '缺省 reviewFocus 须为 []')
+  assert.equal(hits[1].score, 0.7)
+  assert.equal(hits[1].counterexample, true)
+  assert.equal(hits[0].reasons[0], 'digest 同构')
+  // 打分语义不碰：投影只透传 score，不重算
+  assert.equal(hits[0].score, Number((0.906).toFixed(2)))
 })
 
 test('知识上传回执不回显 content', () => {
@@ -1463,6 +1540,7 @@ test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记',
       outcome: 'success',
       counterexample: false,
       reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`, '同 scenarioId'],
+      reviewFocus: [],
     }],
     advice: '结构同构可参考复用',
   })
@@ -1475,6 +1553,7 @@ test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记',
       outcome: 'success',
       counterexample: false,
       reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`],
+      reviewFocus: [],
     }],
     advice: 'x',
   }, [phrase])
@@ -1619,6 +1698,7 @@ test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏',
         'scenarioId 同（SCN-AML-FIND-CLUES）',
         'digest 同构',
       ],
+      reviewFocus: [],
     }],
     advice: 'x',
   })
