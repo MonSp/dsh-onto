@@ -88,6 +88,11 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | **完成**（轮 11） |
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | **完成**（轮 12） |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | **完成**（轮 13，P3 收官） |
+| P4-1 | P4 | D1 修复：datasetPath 相对路径（**默认方案 B**：错误提示附可复制内联示例；方案 A 改 baseDir 语义留作可选） | 相对路径报错给出内联示例，不再只报「无法读取」 | 待办 |
+| P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | 待办 |
+| P4-3 | P4 | `annotate_experience` agent 工具（回写工具面，过三出口） | NL 剧本 N5：对话中标注 outcome/误迁移，结构位回执 | 待办 |
+| P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | 待办 |
+| P4-5 | P4 | `recall_experience` 证据链增强（字段级 signature 新旧对照） | 命中理由含字段级 diff，不止 Jaccard 数字 | 待办 |
 
 （P1-1 起即开；每轮 T1 从上表取片。全片完成 = experience-loop.md 达 delivered。）
 
@@ -160,4 +165,31 @@ experience-loop.md [S7] P1+P2+P3 全部分期出口达成——**「经验→技
 |---|---|---|
 | 循环间隔 | 30 分钟（`*/30 * * * *`，job d732893d） | 2026-11-07 |
 | 提交策略 | 每轮自动提交，不推送 | 2026-11-06 |
+| D1 处置 | **默认方案 B**（错误提示附内联示例）；方案 A（baseDir 改会话工作区）留作可选，随时可改 | 2026-11-07 |
+
+## 七、新会话启动（P4 循环）
+
+P1–P3 已收官（13/13）。下一批是 **P4**（见 §三 backlog）。循环事实源永远是**本文件**
+（协议 §二、backlog §三、台账 §五）——新会话不需要聊天历史，读本文件即可续跑。
+
+**环境前置**（同 T4）：原生 Node `%LOCALAPPDATA%\Temp\nodejs24\node-v24.22.2-win-x64`、
+pnpm `%LOCALAPPDATA%\pnpm\.tools\pnpm\11.28.5\bin`、Tabbit CLI、harness 在 `../deepseek-harness`。
+
+**启动方式（二选一）**：
+
+1. **等 durable 定时任务**——30 分钟一轮，跨会话存活（`/loops` 可查 job id）；
+2. **手动立即跑一轮**——在新会话粘贴下面的 prompt（或 `/loop 30m <同 prompt>`）。
+
+**自包含循环 prompt**（新会话直接可用）：
+
+```
+[experience-loop 迭代轮·P4] 读 docs/compose/notes/experience-loop-iteration-plan.md，
+按其 §二 tick 协议执行一轮：T1 选片（§三 backlog P4 优先 > §五台账新缺陷 > 用户指示）
+→ T2 开发 → T3 验证阶梯（按改动面裁剪 + dump-config）
+→ T4 真实浏览器冒烟（dev-web + Tabbit，剧本 B1-B3；环境前置见 T4）
+→ T5 真实 NL 对话（剧本 N1-N3；P4-3 起含 N5）
+→ T6 回写台账 §五 → T7 自动提交（fix:/feat:/docs:，不推送）。
+恒守 AGENTS.md 不可违背四条与 tool-face-policy 三出口。
+P4 清空或无事可做则停下报告，等待新指示。
+```
 | 分支 | `master` | 2026-11-06 |
