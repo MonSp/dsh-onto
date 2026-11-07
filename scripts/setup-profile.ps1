@@ -75,7 +75,8 @@ try {
         $wsPackages = Join-Path $dataDir 'workspace\packages'
         $seedMap = @(
             @{ Src = 'aml'; Dst = 'aml-analysis' },
-            @{ Src = 'med'; Dst = 'med-safety' }
+            @{ Src = 'med'; Dst = 'med-safety' },
+            @{ Src = 'tax'; Dst = 'tax-risk' }
         )
         foreach ($s in $seedMap) {
             $src = Join-Path $RepoRoot "packages\$($s.Src)\1.0.0"

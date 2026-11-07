@@ -1,0 +1,12 @@
+kind: BusinessOntologyPackage
+name: tax-risk
+version: 1.0.0
+domain: TAX
+metaFrameworkVersion: "1.0"
+status: ISSUED
+issueRecord:
+  - version: 1.0.0
+    issuedAt: 2026-11-06T12:52:46.355Z
+    issuedBy: qgh13（人工）
+    manifestDigest: b3902b33c81e4c7b76d87d687d2f774e26bbfe2bdb34a9e57b2a2552657ae994
+externalRefs: []

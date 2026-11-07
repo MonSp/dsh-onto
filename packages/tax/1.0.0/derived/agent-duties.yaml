@@ -1,0 +1,198 @@
+kind: DerivedAgentDuties
+duties:
+  - id: AGT-TAX-BURDEN-ANOMALY-s1
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs: &a1
+      - TOOL-TAX-TAXPAYER
+      - TOOL-TAX-INVOICE
+      - TOOL-TAX-INVOICE-LINE
+      - TOOL-TAX-GOODS
+      - TOOL-TAX-TAX-RETURN
+      - TOOL-TAX-BANK-ACCOUNT
+      - TOOL-TAX-BANK-FLOW
+      - TOOL-TAX-EXPORT-DOC
+      - TOOL-TAX-FX-RECEIPT
+      - TOOL-TAX-INDUSTRY-BENCHMARK
+      - TOOL-TAX-OWNS-ACCOUNT
+      - TOOL-TAX-FLOW-FROM
+      - TOOL-TAX-FLOW-TO
+      - TOOL-TAX-ISSUES-INVOICE
+      - TOOL-TAX-RECEIVES-INVOICE
+      - TOOL-TAX-INVOICE-HAS-LINE
+      - TOOL-TAX-LINE-GOODS
+      - TOOL-TAX-SUPPLY
+      - TOOL-TAX-RELATED-PARTY
+      - TOOL-TAX-FILES-RETURN
+      - TOOL-TAX-RETURN-INVOICE
+      - TOOL-TAX-FLOW-INVOICE
+      - TOOL-TAX-FLOW-TAXPAY
+      - TOOL-TAX-EXPORT-DOC-OWNER
+      - TOOL-TAX-EXPORT-DOC-GOODS
+      - TOOL-TAX-FX-RECEIPT-DOC
+      - TOOL-TAX-FX-RECEIPT-ACCOUNT
+      - TOOL-TAX-BENCHMARK-MATCH
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s2
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s3
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s4
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s5
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s6
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-BURDEN-ANOMALY-s7
+    scenario: SCN-TAX-BURDEN-ANOMALY
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs: []
+    llm: forbidden
+    humanGate: true
+  - id: AGT-TAX-EXPORT-REFUND-s1
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s2
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s3
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s4
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s5
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s6
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-EXPORT-REFUND-s7
+    scenario: SCN-TAX-EXPORT-REFUND
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs: []
+    llm: forbidden
+    humanGate: true
+  - id: AGT-TAX-FAKE-INVOICE-s1
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s2
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s3
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s4
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 规则引擎判定（排除/打分）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s5
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s6
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-TAX-FAKE-INVOICE-s7
+    scenario: SCN-TAX-FAKE-INVOICE
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs: []
+    llm: forbidden
+    humanGate: true

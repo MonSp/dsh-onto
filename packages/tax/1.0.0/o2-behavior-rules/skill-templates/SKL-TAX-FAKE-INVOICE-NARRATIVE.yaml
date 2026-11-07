@@ -1,0 +1,24 @@
+kind: O2SkillTemplate
+template:
+  id: SKL-TAX-FAKE-INVOICE-NARRATIVE
+  name: 票货资金回流叙述
+  weights:
+    RULE-TAX-SCORE-BURDEN-DEVIATION: 0.08
+    RULE-TAX-SCORE-DECLARATION-CONSISTENCY: 0.1
+    RULE-TAX-SCORE-DOC-COMPLETENESS: 0.08
+    RULE-TAX-SCORE-EXPORT-GOODS: 0.06
+    RULE-TAX-SCORE-FUND-ANOMALY: 0.1
+    RULE-TAX-SCORE-FUND-LOOP: 0.08
+    RULE-TAX-SCORE-FX-MATCH: 0.06
+    RULE-TAX-SCORE-INPUT-STRUCTURE: 0.06
+    RULE-TAX-SCORE-INVOICE-GOODS: 0.06
+    RULE-TAX-SCORE-REGISTRATION: 0.1
+    RULE-TAX-SCORE-RELATED-CONCENTRATION: 0.1
+    RULE-TAX-SCORE-RELATED-LOOP: 0.06
+    RULE-TAX-SCORE-REVENUE-MISMATCH: 0.06
+  steps:
+    - 核对发票明细与上下游购销链
+    - 追踪付款与回流路径、时滞
+    - 标记待核实的关联方与空壳特征
+  outputTemplate: 候选 {candidateId}：风险分 {riskScore}，命中 {hitCount} 条规则（{ruleIds}）；票货不符占比
+    {goodsMismatchRatio}，资金回流占比 {fundLoopRatio}，关联方开票占比 {relatedInvoiceRatio}。请核实合同、物流与资金闭环。

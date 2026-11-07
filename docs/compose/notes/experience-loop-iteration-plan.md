@@ -91,7 +91,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P4-1 | P4 | D1 修复：datasetPath 相对路径（**默认方案 B**：错误提示附可复制内联示例；方案 A 改 baseDir 语义留作可选） | 相对路径报错给出内联示例，不再只报「无法读取」 | **完成**（轮 14） |
 | P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | **完成**（轮 15） |
 | P4-3 | P4 | `annotate_experience` agent 工具（回写工具面，过三出口） | NL 剧本 N5：对话中标注 outcome/误迁移，结构位回执 | **完成**（轮 16） |
-| P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | 待办 |
+| P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | **完成**（轮 17） |
 | P4-5 | P4 | `recall_experience` 证据链增强（字段级 signature 新旧对照） | 命中理由含字段级 diff，不止 Jaccard 数字 | 待办 |
 
 （P1-1 起即开；每轮 T1 从上表取片。全片完成 = experience-loop.md 达 delivered。）
@@ -121,7 +121,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 16 | 2026-11-07 | P4-3 annotate_experience 工具 | ✓ backend 129/129 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3 + N5 | 无 | 本轮提交 |
+| 17 | 2026-11-07 | P4-4 tax 第三域 MULTI-DOMAIN | ✓ core 145/145 + backend 130/130 + dump 2/2 + MULTI-DOMAIN PASS | ✓ B1–B3（tax 三场景+执行） | ✓ N1–N3（tax 批量/export/recall） | 无 | 本轮提交 |
+| 16 | 2026-11-07 | P4-3 annotate_experience 工具 | ✓ backend 129/129 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3 + N5 | 无 | 1e29870 |
 | 15 | 2026-11-07 | P4-2 spec delivered 状态 | ✓ 143+126 + dump 2/2（纯文档） | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
 | 14 | 2026-11-07 | P4-1 D1 方案 B 相对路径内联示例 | ✓ backend 126/126 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3（含 D1 错误面实测） | 无 | 87072c7 |
 | 13 | 2026-11-07 | P3-3 压缩/遗忘 | ✓ 143/143 + COMPRESS SMOKE | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
@@ -154,6 +155,11 @@ P3-1 抽象全链（聚簇→草案→人审→物化 SKL-AML-EXP-FIND-CLUES）�
 （反例留/被复用留/复用证据留/新鲜留/陈旧归档，压缩比指标可出）。
 experience-loop.md [S7] P1+P2+P3 全部分期出口达成——**「经验→技能→类比→验证→回写」
 闭环完整落地**。P4 起批见 §三（D1 已于轮 14 按方案 B 关闭）。
+
+**三域 MULTI-DOMAIN PASS（轮 17，P4-4）**：aml-analysis / med-safety / tax-risk 换包零改引擎——
+core 三域场景全过（tax 三场景各 7 命中、白名单排除在场、禁语 0）；backend `runScenarioBatch`
+tax 三场景 7/7/7 hits + audit passed；浏览器 tax 包三场景可见并执行；NL 批量 3/3 ok +
+export_audit + recall 冷启动不硬迁。`packages/tax` + `examples/tax-run.json` 入库。
 
 **轮 1 缺陷台账**
 

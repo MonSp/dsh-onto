@@ -1,0 +1,67 @@
+kind: DerivedManifest
+package: tax-risk
+version: 1.0.0
+domain: TAX
+generatedAt: 2026-11-06T13:43:43.266Z
+sourceDigest: 3535d6509900a2a82d7f9e8573c3f8b6101c8dc096f5d246fb11c92575385943
+sources:
+  - path: package.yaml
+    sha256: 2f62693fe74aea71b78f3899ad43146b1dcfd47e24fb42ea3a5b164873adb392
+  - path: o1-objects/object-types.yaml
+    sha256: e6fd120c3ecfc5ca6201003e06bdaa3958ff0d711fcf6b14563fd162aaf1fd88
+  - path: o1-objects/relation-types.yaml
+    sha256: 7daca08d10caeccad8105cad46d7021e251f96b244006a0eca8e6ab60b1de0d5
+  - path: o1-objects/dictionaries/dict-tax-doc-type.yaml
+    sha256: d93cee4916dbf4d576922117bb63f1f78aa8749211d136108571d9cce68a28d2
+  - path: o1-objects/dictionaries/dict-tax-industry.yaml
+    sha256: 693b34fa2ed0a38f4181eef7f2599d45d162746bcaac31d4bf3ef35d8ddae76d
+  - path: o1-objects/dictionaries/dict-tax-invoice-type.yaml
+    sha256: 630ce0fb7d89abe8c47ea34c3794c623155f3b9d8e565e7df287027eb67bc331
+  - path: o1-objects/dictionaries/dict-tax-match-type.yaml
+    sha256: 7eb05ba1b44c1999dfe50f1a789264f40418cf20b08581680ee36a842535af22
+  - path: o1-objects/dictionaries/dict-tax-return-type.yaml
+    sha256: f9293b9e9832777c80ef7afb31fa22852d704280c929b951670a51875e2ec0db
+  - path: o1-objects/dictionaries/dict-tax-taxpayer-type.yaml
+    sha256: fc1d46bd17e90587c410c8883e9e34c2c740221024710d99b93edc0db77f3fe9
+  - path: o2-behavior-rules/behavior-types.yaml
+    sha256: 81f4037f9d4fdc9040af3f120622295b34df6820ed3c673deb10c199c2a0fa79
+  - path: o2-behavior-rules/rules/score-rules.yaml
+    sha256: c2277659b7add5f12ba4fd8f31c5f667e6f87577d563fcfefa78c0b2bb0e9a4a
+  - path: o2-behavior-rules/rules/exclusion-rules.yaml
+    sha256: fa1afd6acf3c4b5c7ed7b1bb5c39471a304ee09ee9a12d5a08698533ae1b9483
+  - path: o2-behavior-rules/skill-templates/SKL-TAX-BURDEN-NARRATIVE.yaml
+    sha256: cc5608465e985342e68e8114e36f65c2745dade2f923086321730287b034e5ab
+    layer: L3
+  - path: o2-behavior-rules/skill-templates/SKL-TAX-EXPORT-REFUND-NARRATIVE.yaml
+    sha256: 08d6bc142ed2008a9397d9796215441af99518739ac6220017b3c043e2489375
+    layer: L3
+  - path: o2-behavior-rules/skill-templates/SKL-TAX-FAKE-INVOICE-NARRATIVE.yaml
+    sha256: 2444fae6548d4f7946cf1abe372c5945bd4857e913818cb0e81a2ec4088b528d
+    layer: L3
+  - path: o3-scenarios/SCN-TAX-BURDEN-ANOMALY.yaml
+    sha256: 025dba9d81af9d4aa83d9b609ea4b48febab98d28f52fa119f8664820973b5fe
+  - path: o3-scenarios/SCN-TAX-EXPORT-REFUND.yaml
+    sha256: b958341e3abb5bbfe2a9380ffb6f7411f9c23e5dacf0cab4bf6e851a713931c4
+  - path: o3-scenarios/SCN-TAX-FAKE-INVOICE.yaml
+    sha256: 71dcb9d8dcd090641facb0f4b3ec500134ef580bdc0c04504fabb19dacc9fcba
+  - path: bindings/field-maps.yaml
+    sha256: 02fd93955240d5080db74bb44a2fdb752e46a89a9ad9f2e80e2fbd6df32e6d9c
+    layer: L2
+  - path: bindings/api-sources.yaml
+    sha256: 22fe005ec4f98753fa690790bf0178f563b731ad04f2789fc8d69739617e9464
+    layer: L2
+derived:
+  - path: derived/tool-contracts/tool-contracts.yaml
+    sha256: 3aec6b80fbb0ad627c0512aec61ba755087b0d9b7f9d3db067a69c649dc06ee5
+    layer: L2
+  - path: derived/rule-engine-config/rule-engine-config.yaml
+    sha256: 209239b47a91e3ae808d68b613abcf2ed342153d2fcca8537ff700bbac7e1335
+  - path: derived/agent-duties.yaml
+    sha256: de06cee175ae40417bbf132a134ebf39599064645622ad04b73bb014009ad389
+    layer: L4
+  - path: derived/audit-checks.yaml
+    sha256: d319f9e27787799012b30bb0af62d2e838cfbe386b23217b702b1d2ba6365809
+    layer: L4
+  - path: derived/scenario-orchestration.yaml
+    sha256: 21abe1679d2286f31c75d7eda1379133bf8111034dd2a4f4e969fa6a40c14f00
+    layer: L4

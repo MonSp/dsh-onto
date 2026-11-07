@@ -1,0 +1,17 @@
+{
+  "package": "tax-risk",
+  "version": "1.0.0",
+  "generatedAt": "2026-11-06T13:43:27.577Z",
+  "errors": [],
+  "warnings": [],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 10 / 关系 18 / 字典 6 / 行为 13 / 打分规则 13 / 排除规则 8 / 方法论模板 3 / 场景 3 / 字段映射 0 / 数据源 0"
+    }
+  ],
+  "score": 100,
+  "passed": true
+}

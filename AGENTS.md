@@ -4,7 +4,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 工具面信任边界与三策略收口见 [docs/compose/spec/tool-face-policy.md](docs/compose/spec/tool-face-policy.md)），
 以 dsh plugin bundle 形态承载：`backend/`（@dsh-onto/backend 统一后端 wire 服务）、
 `workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）。
-示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0），场景样例在 `examples/`。
+示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0、tax/1.0.0），场景样例在 `examples/`。
 
 ## 不可违背
 
@@ -37,7 +37,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 5. 运行历史与审计留痕冒烟（run-insight）：`examples/aml-run.json` 两轮运行（第二轮 fork
    改权重）→ `compare_runs`（或 CLI `runs compare`）出命中增删与分数 delta →
    `export_audit` 落盘 `runs/exports/` 且人审面含 ruleId/证据链/审计项 → 工具 content +
-   render 禁语零命中 → `run_scenarios` 批量 aml+med 全场景过装配断言 → workbench
+   render 禁语零命中 → `run_scenarios` 批量 aml+med+tax 全场景过装配断言 → workbench
    场景运行 tab 运行记录/两轮对比/导出 locator 可见。
 
 ## 核心模块地图（core/src/）

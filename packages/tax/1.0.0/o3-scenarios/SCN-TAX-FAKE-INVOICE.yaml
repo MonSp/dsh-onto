@@ -1,0 +1,98 @@
+kind: O3ScenarioCard
+scenario:
+  id: SCN-TAX-FAKE-INVOICE
+  name: 虚开发票风险识别
+  goal: 从纳税人、发票与资金流水出发，识别票货不符、资金回流、关联方开票闭环等候选风险线索，输出风险分与待核实点；不作定性。
+  boundary: 仅输出候选线索、风险分与待核实点；不作定性，不替代人工复核与处理决定。
+  inputs:
+    - description: 纳税人识别号
+      name: taxpayerId
+      required: true
+      type: string
+    - description: 指定发票（可选）
+      name: invoiceId
+      required: false
+      type: string
+    - description: 观察期，YYYY-MM
+      name: period
+      required: false
+      type: string
+    - description: 特征观察窗口（天），缺省 180
+      name: windowDays
+      required: false
+      type: int
+  outputs:
+    fields:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+      - excluded
+  pipeline:
+    - label: 归一纳税人、发票、流水与购销关系
+      stepId: s1
+      stepType: DATA_INGEST
+    - label: 装载登记、开票、受票、作废、申报、缴税、转账、回流、购销行为
+      stepId: s2
+      stepType: BEHAVIOR_CALL
+    - label: 排除段：白名单/红冲已处理/三流一致
+      order: before-scoring
+      stepId: s3
+      stepType: RULE_EVALUATE
+    - label: 打分段：公共 4 条 + 虚开带 3 条
+      stepId: s4
+      stepType: RULE_EVALUATE
+    - label: 票货资金回流叙述
+      skillRefs:
+        - SKL-TAX-FAKE-INVOICE-NARRATIVE
+      stepId: s5
+      stepType: SKILL_RUN
+    - label: 三层闭合审计
+      stepId: s6
+      stepType: AUDIT_CHECK
+    - label: 人工复核（含排除件）
+      stepId: s7
+      stepType: HUMAN_REVIEW
+  behaviorRefs:
+    - BHV-TAX-REGISTER-TAXPAYER
+    - BHV-TAX-ISSUE-INVOICE
+    - BHV-TAX-RECEIVE-INVOICE
+    - BHV-TAX-VOID-INVOICE
+    - BHV-TAX-FILE-RETURN
+    - BHV-TAX-PAY-TAX
+    - BHV-TAX-TRANSFER-FUND
+    - BHV-TAX-FUND-RETURN
+    - BHV-TAX-BUILD-SUPPLY
+  exclusionRefs:
+    - RULE-TAX-EXCL-WHITELIST
+    - RULE-TAX-EXCL-REVERSED
+    - RULE-TAX-EXCL-CONSISTENT
+  scoreRefs:
+    - RULE-TAX-SCORE-REGISTRATION
+    - RULE-TAX-SCORE-RELATED-CONCENTRATION
+    - RULE-TAX-SCORE-FUND-ANOMALY
+    - RULE-TAX-SCORE-DECLARATION-CONSISTENCY
+    - RULE-TAX-SCORE-INVOICE-GOODS
+    - RULE-TAX-SCORE-FUND-LOOP
+    - RULE-TAX-SCORE-RELATED-LOOP
+  output_contract:
+    mustInclude:
+      - candidateList
+      - riskScore
+      - hitRuleIds
+      - evidenceChains
+      - pendingChecks
+    forbiddenPhrases:
+      - 认定虚开增值税专用发票
+      - 确定为虚开发票
+      - 已构成虚开增值税专用发票罪
+      - 该纳税人系虚开发票企业
+  review_gate:
+    required: true
+    threshold: 0.45
+    includeExcluded: true
+  auditChecks:
+    - O1_CLOSED
+    - O2_CLOSED
+    - O3_CLOSED

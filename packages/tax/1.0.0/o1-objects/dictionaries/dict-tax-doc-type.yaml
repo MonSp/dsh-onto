@@ -1,0 +1,10 @@
+kind: O1Dictionary
+id: dict-tax-doc-type
+name: 出口单证类型
+values:
+  - 出口货物报关单
+  - 提单
+  - 装箱单
+  - 出口合同
+  - 代理出口证明
+  - 其他

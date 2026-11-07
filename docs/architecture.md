@@ -243,8 +243,8 @@ scenario:
 | LLM 边界、人审门禁 | 绑定的数据源、字段 |
 | 三层审计闭合 | 领域词典 |
 
-引擎代码不含任何领域常量：`packages/aml`（反洗钱）与 `packages/med`（医疗）只是包内容，
-换包即换域，引擎零修改（`core/tests/multi-domain.test.mjs` 证明）。
+引擎代码不含任何领域常量：`packages/aml`（反洗钱）、`packages/med`（医疗）与 `packages/tax`（税务）
+只是包内容，换包即换域，引擎零修改（`core/tests/multi-domain.test.mjs` 三域证明）。
 
 ## 11. 模块地图与测试
 
