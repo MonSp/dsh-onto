@@ -69,7 +69,7 @@
 | D2 | run/invoke 工具描述 + `datasetPath` 参数描述 + 读取失败信封指明样例数据位置（dsh-onto 检出目录 examples/，读取后 dataset 内联） | NL：「最新那批数据」定位不再盲目翻目录，agent 从描述直接得知检出目录位置 | **完成**（轮 2，含 D2a 当场修） |
 | E1-2 | `recall_experience` hits 投影补 `reviewFocus`（过 value/render 闸） | NL：用户问「上次类似的跑得怎么样」，回答含下轮复核提示 | **完成**（轮 3） |
 | E1-3 | SkillTemplate 物化接线：append 新 SKL id 到对应场景 `pipeline.skillRefs` | NL：用户批准经验模板草案后问「专家现在会什么」，skills 含新 id | **完成**（轮 4，含 D6 当场未修→下轮） |
-| E2-1 | `abstract_experience` 工具（humanApproved，聚簇草案入队，结构位回执） | NL：用户说「最近这些成功经验总结一下」，agent 聚簇入队并让人审 | 待做 |
+| E2-1 | `abstract_experience` 工具（humanApproved，聚簇草案入队，结构位回执） | NL：用户说「最近这些成功经验总结一下」，agent 聚簇入队并让人审 | **完成**（轮 6，含 D7 当场闭环验证） |
 | E2-2 | reviseDiff 接生产（可选）：recall top-1 走双路修正 + 转人工闸 | NL：差异大时 advice 明确「转人工」而非硬复用 | 待做 |
 | E3-1 | 操作简化：画布节点内嵌批准/驳回；draft_elements 批量 apply | NL 建模对话中点头次数减少（台账记录前后对比） | 待做 |
 
@@ -97,6 +97,7 @@
 | 3 | 2026-11-08 | E1-2 recall hits 投影补 reviewFocus（projectRecallHits 纯函数 + render 复核提示 + 工具描述） | 「上次类似的跑得怎么样？」 | ✓ backend 144/144（+2 E1-2 回归）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 绿（单轮 ~20s/8 步）：agent 自选 recall_experience（先 list_packages 定位包，思考明确「That's the designed tool for 上次类似的跑得怎么样」）、工具输出含 **复核提示[RULE-AML-SCORE-FANOUT, inboundCount, OBJ-AML-TXN.amount]**（E1-2 新路径）、score=1.00/字段对照/humanReviewRequired=true 齐、最终回答点名 reviewFocus 三项、禁语 0、无路径泄漏 | D5（P2，新）：模糊问题「上次类似的」需先 list_packages+翻报告+查 runs 目录（~6 步）才落到 recall——可加 recall 默认上下文提示或「最近经验」只读入口；无 P0/P1 | 下轮优先 E1-3（SkillTemplate 物化接线：批准后 append SKL 到 pipeline.skillRefs）；可选做 D5（recall 发现摩擦）、E2-1（abstract_experience） | 2918dcc |
 | 4 | 2026-11-08 | E1-3 SkillTemplate 物化接线（resolveSkillWireTarget + appendSkillRef；abstractSkillDrafts 带 scenarioId；materialize catch 回滚） | 「把这些成功经验里反复出现的做法，做成正式的方法论吧」→「专家现在会什么？把反洗钱专家的技能列出来」→「知识库里那条经验模板的待审草案，我批准了，把它物化进反洗钱包」→「现在专家会什么？技能列表再看一遍」 | ✓ core 149/149（+3 E1-3 回归）+ backend 144/144 + workbench node --check + dump 2/2；T4 裁剪（未改 workbench UI）；T5 四轮：批准后物化 **SKL-AML-EXP-FIND-CLUES** 落盘、场景 s5 skillRefs=NARRATIVE+EXP-FIND-CLUES（E1-3 接线 ✓）、list_experts 技能 1→2 且回答点名新 id、草案 merged/appliedAs 齐；期间 DERIVED_DRIFT 被 agent 自发现并 CLI derive 修复（gate ok） | D6（P1，新）：apply_draft 物化只写源文件不重派生 → 包立刻 DERIVED_DRIFT 不可读；agent 被迫 danger-full-access 跑 CLI derive 才恢复（审批打断 1 次）；D7（P2，新）：「做成正式的方法论」引导 agent 写工作区 methodology 文档而非走 SkillTemplate 草案链路（缺 E2-1 abstract 工具 + 草案发现入口）；D8（P2，新）：get_model_graph 摘要不回待审草案 id，agent 只能读 queue.json（绕过工具面） | 下轮优先 D6：apply_draft 成功后自动 derive（或注册 derive 工具免提权）；再进 E2-1（abstract_experience）；可选 D7/D8（草案发现面） | 本轮提交 |
 | 5 | 2026-11-08 | D6 物化后自动重派生（KnowledgeStore.materialize：savePackage 后 applied>0 即 derivePackage；apply_draft 描述告知「无需再手动 derive」） | 「知识库里新来了两条待审的红线草案，我批准了，把它们物化进反洗钱包」→「物化完了？反洗钱专家现在还能正常用吗，把它的技能列出来看看」→「用反洗钱专家跑一下最新那批数据，看看有没有问题」 | ✓ core 150/150（+1 D6 回归：物化后 verifyDerived 过闸）+ backend 145/145（+1 apply_draft 描述源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 三句全绿（04:21–04:26，3 轮 38 步，零审批打断）：同批物化 2 条 RedLine → **自动重派生**（agent 原话「已自动重新派生」；盘上 gate ok、manifest 20:22:32 重写、forbiddenPhrases 4→6）；list_experts 技能 2 个且主动试跑 run-12d85501；invoke run-bc6f9715 审计过、分数与轮 1–3 逐字段一致（0.906/0.019/0.080）、禁语 0 命中、humanReviewRequired=true、无路径泄漏；数据定位直接点名检出目录 examples/aml-run.json（D2 引导仍有效） | D9（P2，新）：新红线是整句精确匹配，短语级词（涉案账户/跨境赌博）不带整句扫不到——agent 两轮自提示建议收窄为短语级或双通道；D10（P2，新）：第 3 句 invoke 最终回答未转述经验参考段（第 2 句 run 有转述；E1-1 包络可能在工具面但用户视角弱）；无 P0/P1，D6 关闭 | 下轮优先 E2-1（abstract_experience 聚簇入队人审）；可选 D7/D8（草案发现面）、D9（红线短语级口径）、D5（recall 发现摩擦） | 本轮提交 |
+| 6 | 2026-11-08 | E2-1 abstract_experience（abstractExperienceForTool + renderAbstractText + ONTOOL 登记；humanApproved 契约；只入队不直写包） | 「最近这些成功经验总结一下，看看能不能沉淀成正式的方法论」→「总结出来的东西现在是什么状态？反洗钱专家现在能用上吗，把它的技能列出来看看」 | ✓ backend 148/148（+3 E2-1 回归：契约/聚簇入队/渲染/源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 两句全绿：第 1 句 agent 思考原文点名工具描述「总结成功经验 / 沉淀方法论」（**D7 闭环**——不再写工作区 methodology 文档）、humanApproved=true、自选 abstract_experience 跑 aml+scf；aml 回执 **dc-7f40d1ec… status=merged 簇员=3 代表 run-83450578**、scf ISSUED 正确拒；第 2 句 list_experts 技能 2 个（SKL-AML-EXP-FIND-CLUES + SKL-AML-NARRATIVE）、get_model_graph 待审 0、诚实指出「聚簇结论有了正文没变」并给出 draft_elements→apply_draft 人审下一步；humanReviewRequired 在场、禁语 0、最终回答无服务端路径泄漏；本轮未跑场景（打分断言 N/A） | D11（P2，新）：包/经验发现摩擦——agent 为定位 packageId 花大量步 glob/pwsh/get_package，最终 ask_user_question 要用户多选（阻塞式问题在 API 会话难自动应答）；缺「哪些包有成功经验」只读入口；D13（P2，新）：幂等回执 status=merged 但不更新技能正文，用户期望「沉淀成方法论」时有落差（agent 自察并建议 draft_elements update）；无 P0/P1，E2-1 关闭 | 下轮优先 D11：abstract 可省 packageId 扫全库非 ISSUED 有经验包，或新增 list_experiences 只读入口（顺带缓解 D5/D8）；再进 E2-2（reviseDiff 接生产）或 D13（merged 草案 update 通道）；可选 D9/D10 | 本轮提交 |
 
 **轮 1 反馈细节（T5 收集）**：
 - 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具；但数据定位阶段 agent 长时间自主翻目录（用户视角等待 ~5min46s 才出结论）。
@@ -136,6 +137,15 @@
 - 输出回答真实问题：是——除跑分外给出 6 条分级数据质量问题（listHitCount 无源占 44% 分、特征不可复算、同账户矛盾候选等），并确认新红线 0 误伤。
 - 禁语/打分：forbiddenPhraseHits=0（6 条短语在场）；分数 0.906/0.019/0.080 与轮 1–3 逐字段一致（RedLine 物化不改分）；humanReviewRequired=true 两跑均在。
 - 新观察（D9）：agent 主动指出新红线整句匹配的口径盲区（「涉案账户」不带整句扫不到），两轮重复建议收窄为短语级——有价值的产品反馈，非断链。
+
+**轮 6 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**一次**——第 1 句 agent 用 `ask_user_question` 要用户多选沉淀包（D11；阻塞式问题，API 会话需开 UI 才能应答）。选定后第 2 句零打断。
+- 工具选择路径：思考原文直接引用 abstract_experience 描述「总结成功经验 / 沉淀方法论」（**D7 闭环**：不再写 methodology 文档）；humanApproved=true 推理正确；并行跑 aml + scf 两包。
+- E2-1 断言：aml 回执含结构位 `dc-7f40d1ec… / SkillTemplate / status=merged / 簇员=3 / 代表=run-83450578`；scf ISSUED 被工具拒（INVALID_ARGS 提示 fork）；第 2 句 list_experts 技能 2 个且点名 SKL-AML-EXP-FIND-CLUES 与 SKL-AML-NARRATIVE；humanReviewRequired 在场；禁语 0；最终回答无服务端绝对路径。
+- agent 漏做：无最终漏。第 2 句额外 get_model_graph 交叉验证待审 0，并主动指出「聚簇结论有了、正文没变」——超出最小要求的诚实反馈。
+- 输出回答真实问题：是——状态（merged≠已进正文）、专家能否用（能跑但用的是旧骨架技能）、下一步（draft_elements update → apply_draft 人审）三问都答了。
+- 与轮 1–5 对比：新摩擦集中在**包发现**（D11）与**merged 幂等落差**（D13）；工具面本身（契约/入队/拒 ISSUED/渲染）无断链。
+- 环境观察：浏览器 `localhost` 解析超时、`127.0.0.1` 正常（与协议「勿用 127.0.0.1」相反，记为本机 DNS 观察，不改协议）。
 
 ## 六、拍板记录
 

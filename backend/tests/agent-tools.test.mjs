@@ -32,7 +32,9 @@ import {
   projectRecallHits,
   renderRecallText,
   renderAnnotateText,
+  renderAbstractText,
   annotateExperienceForTool,
+  abstractExperienceForTool,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -1537,6 +1539,156 @@ test('annotate_experience 渲染（N5）：结构位回执、无自由流程、h
   assert.match(text, /humanReviewRequired=true/)
   // 无自由流程描述、无服务端路径
   assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
+})
+
+/* ── E2-1 abstract_experience ── */
+
+function mkAbstractFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'onto-abs-'))
+  const ws = new PackageWorkspace(join(root, 'workspace'))
+  const dir = ws.versionDir('aml-analysis', '1.0.0')
+  cpSync(AML_DIR, dir, { recursive: true })
+  derivePackage(dir)
+  const knowledge = new KnowledgeStore(root)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  const mkRun = () => {
+    const result = runScenario(dir, 'SCN-AML-FIND-CLUES', dataset)
+    const rec = buildRunRecord({
+      package: { name: 'aml-analysis', version: '1.0.0' },
+      dataset,
+      result,
+      redlines: [],
+    })
+    saveRunRecord(ws.root, rec)
+    annotateExperienceForTool(ws, {
+      runId: rec.runId,
+      outcome: 'success',
+      outcomeReason: '三层闭合',
+      reviewFocus: ['listHitCount'],
+      humanApproved: true,
+    })
+    return rec.runId
+  }
+  return { root, ws, knowledge, mkRun }
+}
+
+test('abstract_experience：humanApproved 契约 + 聚簇入队结构位回执（E2-1）', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    // 未点头 → 人审契约拒绝
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0' }),
+      'INVALID_ARGS',
+    )
+    // 单条经验不足簇 → 空回执（不硬凑）
+    mkRun()
+    const empty = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(empty.queued.length, 0)
+    assert.equal(empty.skills, 0)
+    assert.equal(empty.humanReviewRequired, true)
+
+    // 第二条成功同构 → SkillTemplate 草案入队 pending
+    mkRun()
+    const abs = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(abs.package, 'aml-analysis@1.0.0')
+    assert.equal(abs.skills, 1)
+    assert.equal(abs.queued.length, 1)
+    const q = abs.queued[0]
+    assert.equal(q.targetKind, 'SkillTemplate')
+    assert.equal(q.status, 'pending')
+    assert.equal(q.members, 2)
+    assert.ok(q.id.startsWith('dc-'))
+    assert.equal(abs.humanReviewRequired, true)
+    // 只入队：草案在知识库队列，不直写包
+    const cands = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(cands.length, 1)
+    assert.equal(cands[0].id, q.id)
+
+    // 幂等：同簇再抽象返回同一条 live 草案
+    const again = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(again.queued[0].id, q.id)
+
+    // minCluster 非法
+    expectCode(
+      () =>
+        abstractExperienceForTool(ws, knowledge, {
+          packageId: 'aml-analysis@1.0.0',
+          minCluster: 0,
+          humanApproved: true,
+        }),
+      'INVALID_ARGS',
+    )
+
+    // ISSUED 拒绝（package.yaml 平铺 meta；只写 meta 不动派生）
+    const pkgPath = ws.versionDir('aml-analysis', '1.0.0')
+    const pkg = loadPackage(pkgPath)
+    pkg.meta.status = 'ISSUED'
+    writeFileSync(join(pkgPath, 'package.yaml'), dumpYaml(pkg.meta), 'utf8')
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('abstract_experience 渲染（E2-1）：结构位回执、空簇说明、humanReviewRequired 在场', () => {
+  const text = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(text, /aml-analysis@1\.0\.0/)
+  assert.match(text, /入队 1 条/)
+  assert.match(text, /SkillTemplate/)
+  assert.match(text, /dc-abc123/)
+  assert.match(text, /status=pending/)
+  assert.match(text, /簇员=3/)
+  assert.match(text, /humanReviewRequired=true/)
+  assert.match(text, /apply_draft/)
+  assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
+
+  const cold = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [],
+    skills: 0,
+    counters: 0,
+  })
+  assert.match(cold, /无可入队簇/)
+  assert.match(cold, /humanReviewRequired=true/)
+})
+
+test('E2-1 源断言：abstract_experience 注册 + ONTOOL_NAMES + 描述引导方法论链路', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0, 'abstract_experience 须注册')
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 4000)
+  assert.ok(slice.includes('abstractExperienceForTool'), 'execute 须走纯函数')
+  assert.ok(slice.includes('humanApproved'), 'humanApproved 契约在场')
+  assert.ok(slice.includes('总结成功经验') || slice.includes('方法论'), '描述须引导方法论链路（D7）')
+  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  assert.ok(grants.includes("'abstract_experience'"), 'ONTOOL_NAMES 须登记')
 })
 
 /* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */

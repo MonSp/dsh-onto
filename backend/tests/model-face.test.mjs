@@ -60,6 +60,7 @@ const NEW_TOOLS = [
   'save_skeleton',
   'recall_experience',
   'annotate_experience',
+  'abstract_experience',
 ]
 
 function mkAmlWorkspace({ derived = false } = {}) {

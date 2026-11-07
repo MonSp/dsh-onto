@@ -17,6 +17,8 @@ import {
   PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
+  abstractCounterexampleDrafts,
+  abstractSkillDrafts,
   buildDiffTable,
   buildRunRecord,
   buildTaskSignature,
@@ -945,6 +947,125 @@ export function renderAnnotateText(
   return retreatRenderText(lines.join('\n'), phrases ?? [])
 }
 
+/**
+ * abstract_experience 纯函数（闭环 E2-1）：成功/反例经验按结构签名聚簇 →
+ * SkillTemplate / RedLine / ExclusionRule 草案入知识库人审队列（pending）。
+ * 只入队、永不直写包（I1）；物化必经 apply_draft（humanApproved 人审契约）。
+ * 经验只提示不改分——本函数不触碰 core/src/rules.ts 打分语义。
+ */
+export function abstractExperienceForTool(
+  ws: PackageWorkspace,
+  knowledge: KnowledgeStore,
+  args: {
+    packageId: string
+    minCluster?: number
+    humanApproved?: unknown
+  },
+): {
+  package: string
+  queued: Array<{
+    id: string
+    name: string
+    targetKind: string
+    status: string
+    members: number
+    runId: string
+  }>
+  skills: number
+  counters: number
+  humanReviewRequired: true
+} {
+  assertHumanApproved(args.humanApproved, '总结经验')
+  const packageName = requireExistingPackage(ws.listVersions(), args.packageId)
+  const version = args.packageId.slice(args.packageId.lastIndexOf('@') + 1)
+  const dir = ws.versionDir(packageName, version)
+  let pkg: OntologyPackage
+  try {
+    pkg = loadPackage(dir)
+  } catch {
+    throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.packageId}`)
+  }
+  if (pkg.meta.status === 'ISSUED') {
+    throw new AgentToolError('INVALID_ARGS', `${packageName}@${version} 已签发只读：请 fork 新版本（P1）`)
+  }
+  let minCluster: number | undefined
+  if (args.minCluster !== undefined) {
+    if (typeof args.minCluster !== 'number' || !Number.isInteger(args.minCluster) || args.minCluster < 1) {
+      throw new AgentToolError('INVALID_ARGS', 'minCluster 必须是 ≥1 的整数')
+    }
+    minCluster = args.minCluster
+  }
+  const abs = abstractSkillDrafts(ws.root, { pkg, minCluster })
+  const counters = abstractCounterexampleDrafts(ws.root, { pkg, minCluster })
+  const queued: Array<{
+    id: string
+    name: string
+    targetKind: string
+    status: string
+    members: number
+    runId: string
+  }> = []
+  for (const a of [...abs, ...counters]) {
+    const c = knowledge.addDraft({
+      packageId: packageName,
+      item: a.draft,
+      provenance: { runId: a.memberRunIds[0] },
+    })
+    queued.push({
+      id: c.id,
+      name: c.name,
+      targetKind: c.targetKind,
+      status: c.status,
+      members: a.memberRunIds.length,
+      runId: a.memberRunIds[0],
+    })
+  }
+  return {
+    package: `${packageName}@${version}`,
+    queued,
+    skills: abs.length,
+    counters: counters.length,
+    humanReviewRequired: true,
+  }
+}
+
+/** abstract_experience 渲染（E2-1）：结构位回执（草案 id/kind/簇员/status），无服务端路径。 */
+export function renderAbstractText(
+  v: {
+    package: string
+    queued: Array<{
+      id: string
+      name: string
+      targetKind: string
+      status: string
+      members: number
+      runId: string
+    }>
+    skills: number
+    counters: number
+  },
+  phrases?: readonly string[],
+): string {
+  if (v.queued.length === 0) {
+    return retreatRenderText(
+      [
+        `包 ${v.package}：无可入队簇（成功同构/反例簇员需 ≥minCluster，缺省 2；当前不足或无参聚经验）`,
+        'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
+      ].join('\n'),
+      phrases ?? [],
+    )
+  }
+  const lines = [
+    `包 ${v.package}：经验抽象入队 ${v.queued.length} 条（技能 ${v.skills} · 反例 ${v.counters}）`,
+    ...v.queued.map(
+      (q) =>
+        `+ [${q.targetKind}] ${q.name}（${q.id}） status=${q.status} 簇员=${q.members} 代表=${q.runId}`,
+    ),
+    'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
+  ]
+  return retreatRenderText(lines.join('\n'), phrases ?? [])
+}
+
 /** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
 export function renderGraphSummary(g: ModelGraph): string {
   const draftCount = g.nodes.filter((n) => n.draft).length
@@ -1555,6 +1676,62 @@ export function apply(ctx: Context): void {
         },
         [],
         (args) => redlinesForRuns(ws, args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'abstract_experience',
+      description:
+        '经验抽象巩固（E2-1）：把包内成功/反例经验按结构签名聚簇，产出 SkillTemplate/RedLine/ExclusionRule'
+        + '草案入知识库人审队列——只入队、永不直写包；物化必须走 apply_draft（humanApproved 人审）。'
+        + '用于「总结成功经验 / 沉淀方法论 / 反复出现的做法」类请求：不要再写工作区方法论文档代替本工具。'
+        + 'humanApproved 是人审契约：仅当用户明确要求总结/沉淀经验时传 true，agent 不得自行总结。'
+        + '反例/误迁移经验不参聚成功簇（反例只落红线或排除草案）；簇员不足回执说明、不硬凑。'
+        + '返回结构位回执（草案 id/kind/status/簇员数），认定出口只在人工。',
+      parameters: {
+        packageId: { type: 'string', required: true, description: '包 ID（name@version，如 aml-analysis@1.0.0）' },
+        minCluster: {
+          type: 'number',
+          description: '最小簇员数（缺省 2；≥1 整数）——低于该值不出草案',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示总结/沉淀经验时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            package: { type: 'string', required: true },
+            queued: { type: 'array', required: true, items: { type: 'json' } },
+            skills: { type: 'number', required: true },
+            counters: { type: 'number', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => textBlock(renderAbstractText(value as never, redlines(_args))),
+      },
+      execute: toolExecute(
+        (args: { packageId: string; minCluster?: number; humanApproved: boolean }) => {
+          // 抽象只读 O 层源与 experiences/，不依赖派生门禁（与 draft_elements 同口径）。
+          const result = abstractExperienceForTool(ws, knowledge, {
+            packageId: args.packageId,
+            minCluster: args.minCluster,
+            humanApproved: args.humanApproved,
+          })
+          const packageName = requireExistingPackage(ws.listVersions(), args.packageId)
+          const version = args.packageId.slice(args.packageId.lastIndexOf('@') + 1)
+          const pkg = loadPackage(ws.versionDir(packageName, version))
+          // value 闸：包内场景红线（rationale/名称等自由文本可能撞红线）。
+          return toolOut(enforceOutputPolicy(result, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
       ),
     }),
   )
