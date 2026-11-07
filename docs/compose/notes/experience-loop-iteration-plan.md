@@ -88,7 +88,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P3-1 | P3 | 自动技能抽象草案（DraftCandidate targetKind=SkillTemplate） | 高频聚簇 → 草案 → 人审 → 物化全链 | **完成**（轮 11） |
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | **完成**（轮 12） |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | **完成**（轮 13，P3 收官） |
-| P4-1 | P4 | D1 修复：datasetPath 相对路径（**默认方案 B**：错误提示附可复制内联示例；方案 A 改 baseDir 语义留作可选） | 相对路径报错给出内联示例，不再只报「无法读取」 | 待办 |
+| P4-1 | P4 | D1 修复：datasetPath 相对路径（**默认方案 B**：错误提示附可复制内联示例；方案 A 改 baseDir 语义留作可选） | 相对路径报错给出内联示例，不再只报「无法读取」 | **完成**（轮 14） |
 | P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | 待办 |
 | P4-3 | P4 | `annotate_experience` agent 工具（回写工具面，过三出口） | NL 剧本 N5：对话中标注 outcome/误迁移，结构位回执 | 待办 |
 | P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | 待办 |
@@ -120,6 +120,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
+| 14 | 2026-11-07 | P4-1 D1 方案 B 相对路径内联示例 | ✓ backend 126/126 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3（含 D1 错误面实测） | 无 | 本轮提交 |
 | 13 | 2026-11-07 | P3-3 压缩/遗忘 | ✓ 143/143 + COMPRESS SMOKE | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
 | 12 | 2026-11-07 | P3-2 反例利用 | ✓ 142/142 + REDLINE-CHAIN PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 96eaabe |
 | 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | b9d87c1 |
@@ -149,13 +150,13 @@ P3-1 抽象全链（聚簇→草案→人审→物化 SKL-AML-EXP-FIND-CLUES）�
 （结论性→RedLine 只落红线，物化 forbiddenPhrases）→ P3-3 压缩分层
 （反例留/被复用留/复用证据留/新鲜留/陈旧归档，压缩比指标可出）。
 experience-loop.md [S7] P1+P2+P3 全部分期出口达成——**「经验→技能→类比→验证→回写」
-闭环完整落地**。按协议停下，等待新指示（D1 datasetPath 相对路径仍待拍板）。
+闭环完整落地**。P4 起批见 §三（D1 已于轮 14 按方案 B 关闭）。
 
 **轮 1 缺陷台账**
 
 | # | 级 | 现象 | 处置 |
 |---|---|---|---|
-| D1 | P2 | `run_scenario` 的 `datasetPath` 传相对路径（`examples/aml-run.json`）报「无法读取」；绝对路径被围栏拒（设计如此）。会话 cwd 与平台 cwd 不一致时相对路径无处解析 | 待拍板：相对路径 baseDir 改为会话工作区，或错误提示直接给内联示例 |
+| D1 | P2 | `run_scenario` 的 `datasetPath` 传相对路径（`examples/aml-run.json`）报「无法读取」；绝对路径被围栏拒（设计如此）。会话 cwd 与平台 cwd 不一致时相对路径无处解析 | **已修（轮 14，方案 B）**：读取失败错误附可复制内联示例 `{"objects":[],"relations":[],"candidates":[]}` + dataset 内联指引；NL 实测错误面原样透出。方案 A（baseDir 改会话工作区）留作可选 |
 | D2 | P2 | dev-web 在 MiMo 运行时 node 下启动失败（Electron V8 指纹被拒） | 已修协议：T4 前置原生 Node + pnpm 路径 |
 | D3 | P2 | `exp abstract` 的 knowledge 队列 root 与 backend dataDir 不一致（workspace/knowledge vs dataDir/knowledge），草案入错队列 | 已修：abstract 按 workspace 布局派生 dataDir=dirname(workspace)；输出 knowledgeRoot 供核对 |
 
@@ -166,6 +167,7 @@ experience-loop.md [S7] P1+P2+P3 全部分期出口达成——**「经验→技
 | 循环间隔 | 30 分钟（`*/30 * * * *`，job d732893d） | 2026-11-07 |
 | 提交策略 | 每轮自动提交，不推送 | 2026-11-06 |
 | D1 处置 | **默认方案 B**（错误提示附内联示例）；方案 A（baseDir 改会话工作区）留作可选，随时可改 | 2026-11-07 |
+| D1 落地 | 方案 B 已实现并过 T4/T5（轮 14）；方案 A 仍未做 | 2026-11-07 |
 
 ## 七、新会话启动（P4 循环）
 

@@ -187,7 +187,13 @@ export function loadDatasetFromArgs(
     try {
       text = readFileSync(path, 'utf8')
     } catch {
-      throw new AgentToolError('INVALID_ARGS', `无法读取 dataset 文件: ${raw}`)
+      // D1 方案 B：相对路径按进程 cwd 解析，会话 cwd 不同处必然读不到——
+      // 报错直接给可复制内联示例，调用方无需再猜恢复路径。
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `无法读取 dataset 文件: ${raw} ——相对路径按平台进程工作目录解析，会话工作区或外部夹具请改用 dataset 内联，`
+          + '可复制示例: {"objects":[],"relations":[],"candidates":[]}',
+      )
     }
     let parsed: unknown
     try {

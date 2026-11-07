@@ -604,6 +604,33 @@ test('dataset 错误回显调用方原文，不回显 resolve 后绝对路径', 
   }
 })
 
+test('D1 方案 B：相对路径读取失败给出可复制 dataset 内联示例（不再只报「无法读取」）', () => {
+  // 相对路径按 process.cwd() 解析且落在默认围栏内，但文件不存在 → 走读取失败分支
+  // （模拟会话 cwd 与仓库不一致时 examples/aml-run.json 读不到的 D1 场景）。
+  const rel = 'no-such-d1-relative-dataset.json'
+  let caught
+  try {
+    loadDatasetFromArgs({ datasetPath: rel })
+    assert.fail('期望 INVALID_ARGS')
+  } catch (e) {
+    caught = e
+  }
+  assert.ok(caught instanceof AgentToolError, `期望 AgentToolError，得到 ${caught}`)
+  assert.equal(caught.code, 'INVALID_ARGS')
+  assert.ok(caught.message.includes(rel), `应回显调用方原文: ${caught.message}`)
+  assert.ok(caught.message.includes('无法读取'), `应保留读取失败语义: ${caught.message}`)
+  assert.ok(caught.message.includes('dataset 内联'), `须指引内联恢复: ${caught.message}`)
+  assert.ok(
+    caught.message.includes('{"objects":[],"relations":[],"candidates":[]}'),
+    `须附可复制内联示例: ${caught.message}`,
+  )
+  // 内联示例本身必须过形状校验（调用方可原样粘贴恢复）
+  const example = JSON.parse(caught.message.slice(caught.message.indexOf('{"objects"')))
+  assert.doesNotThrow(() => validateDatasetShape(example))
+  // 错误面不回显 resolve 后绝对路径（含 cwd 盘符路径）
+  assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
+})
+
 test('知识上传全链路：name@version 入参 → 裸名入库 → 解析 → 物化不被 package mismatch 拒绝', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'onto-chain-'))
   try {
