@@ -89,7 +89,7 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 | P3-2 | P3 | 反例利用（ExclusionRule / RedLine 草案） | counterexample 聚簇出草案 | **完成**（轮 12） |
 | P3-3 | P3 | 压缩 / 遗忘策略（字段够算 + 保留分层） | 压缩比指标可出 | **完成**（轮 13，P3 收官） |
 | P4-1 | P4 | D1 修复：datasetPath 相对路径（**默认方案 B**：错误提示附可复制内联示例；方案 A 改 baseDir 语义留作可选） | 相对路径报错给出内联示例，不再只报「无法读取」 | **完成**（轮 14） |
-| P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | 待办 |
+| P4-2 | P4 | experience-loop.md 状态 proposed → delivered | frontmatter status 更新；[S7] 三期出口全达成标注 | **完成**（轮 15） |
 | P4-3 | P4 | `annotate_experience` agent 工具（回写工具面，过三出口） | NL 剧本 N5：对话中标注 outcome/误迁移，结构位回执 | 待办 |
 | P4-4 | P4 | 第三域验证（tax-risk@1.0.0 换包零改引擎复验） | 三域 MULTI-DOMAIN PASS | 待办 |
 | P4-5 | P4 | `recall_experience` 证据链增强（字段级 signature 新旧对照） | 命中理由含字段级 diff，不止 Jaccard 数字 | 待办 |
@@ -120,7 +120,8 @@ experience-loop.md 定「是什么」（两层架构、数据模型、三件事�
 
 | 轮 | 日期 | 切片 | T3 | T4 | T5 | 新缺陷 | 提交 |
 |---|---|---|---|---|---|---|---|
-| 14 | 2026-11-07 | P4-1 D1 方案 B 相对路径内联示例 | ✓ backend 126/126 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3（含 D1 错误面实测） | 无 | 本轮提交 |
+| 15 | 2026-11-07 | P4-2 spec delivered 状态 | ✓ 143+126 + dump 2/2（纯文档） | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
+| 14 | 2026-11-07 | P4-1 D1 方案 B 相对路径内联示例 | ✓ backend 126/126 + dump 2/2 | ✓ B1–B3 | ✓ N1–N3（含 D1 错误面实测） | 无 | 87072c7 |
 | 13 | 2026-11-07 | P3-3 压缩/遗忘 | ✓ 143/143 + COMPRESS SMOKE | ✓ B1–B3 | ✓ N1–N3 | 无 | 本轮提交 |
 | 12 | 2026-11-07 | P3-2 反例利用 | ✓ 142/142 + REDLINE-CHAIN PASS | ✓ B1–B3 | ✓ N1–N3 | 无 | 96eaabe |
 | 11 | 2026-11-07 | P3-1 自动技能抽象 | ✓ 141/141 + FULL-CHAIN PASS | ✓ 抽象草案+runId 可见 | ✓ N1–N3 | D3 exp abstract knowledge root 派生（当场修） | b9d87c1 |
