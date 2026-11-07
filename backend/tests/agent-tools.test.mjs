@@ -1691,6 +1691,109 @@ test('E2-1 源断言：abstract_experience 注册 + ONTOOL_NAMES + 描述引导�
   assert.ok(grants.includes("'abstract_experience'"), 'ONTOOL_NAMES 须登记')
 })
 
+/* ── D11 abstract_experience 省 packageId 扫全库 ── */
+
+test('D11：省 packageId 扫全库——有经验非 ISSUED 包入队，ISSUED 跳过不整单失败', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    // humanApproved 契约与 packageId 无关（省略 packageId 也要点头）
+    expectCode(() => abstractExperienceForTool(ws, knowledge, {}), 'INVALID_ARGS')
+
+    // 无任何经验 → 空扫描回执（不抛、不硬凑）
+    const cold = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    assert.equal(cold.package, '全库')
+    assert.deepEqual(cold.scanned, [])
+    assert.equal(cold.queued.length, 0)
+    assert.equal(cold.humanReviewRequired, true)
+
+    // 两条同构成功经验 → 扫描模式入队，queued 带包归属
+    mkRun()
+    mkRun()
+    const scan = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    assert.equal(scan.package, '全库')
+    assert.ok(Array.isArray(scan.scanned))
+    const entry = scan.scanned.find((s) => s.package === 'aml-analysis@1.0.0')
+    assert.ok(entry, '有经验包须进 scanned')
+    assert.equal(entry.skipped, undefined)
+    assert.equal(entry.queued, 1)
+    assert.equal(scan.queued.length, 1)
+    assert.equal(scan.queued[0].package, 'aml-analysis@1.0.0')
+    assert.equal(scan.queued[0].targetKind, 'SkillTemplate')
+    assert.equal(scan.skills, 1)
+    assert.equal(scan.humanReviewRequired, true)
+
+    // ISSUED → 记入 skipped，不整单失败（发现面不被单个只读包打断）
+    const pkgPath = ws.versionDir('aml-analysis', '1.0.0')
+    const pkg = loadPackage(pkgPath)
+    pkg.meta.status = 'ISSUED'
+    writeFileSync(join(pkgPath, 'package.yaml'), dumpYaml(pkg.meta), 'utf8')
+    const skippedScan = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    const skipped = skippedScan.scanned.find((s) => s.package === 'aml-analysis@1.0.0')
+    assert.ok(skipped, 'ISSUED 包仍须出现在 scanned')
+    assert.match(skipped.skipped, /ISSUED|签发只读/)
+    assert.equal(skippedScan.queued.length, 0)
+    assert.equal(skippedScan.humanReviewRequired, true)
+    // 显式传 packageId 的单包路径仍硬拒（E2-1 契约不回退）
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('D11 渲染：全库扫描回执逐包一行（含跳过原因）+ 草案带包归属 + humanReviewRequired', () => {
+  const text = renderAbstractText({
+    package: '全库',
+    scanned: [
+      { package: 'aml-analysis@1.0.0', queued: 1, skills: 1, counters: 0 },
+      { package: 'tax-analysis@1.0.0', skipped: '已签发只读：请 fork 新版本（P1）', queued: 0, skills: 0, counters: 0 },
+    ],
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+        package: 'aml-analysis@1.0.0',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(text, /全库扫描/)
+  assert.match(text, /候选经验包 2 个/)
+  assert.match(text, /aml-analysis@1\.0\.0：入队 1 条/)
+  assert.match(text, /tax-analysis@1\.0\.0：跳过（已签发只读/)
+  assert.match(text, /@aml-analysis@1\.0\.0/)
+  assert.match(text, /dc-abc123/)
+  assert.match(text, /humanReviewRequired=true/)
+  assert.doesNotMatch(text, /D:\\|workspace\//)
+
+  const empty = renderAbstractText({ package: '全库', scanned: [], queued: [], skills: 0, counters: 0 })
+  assert.match(empty, /候选经验包 0 个/)
+  assert.match(empty, /无可入队簇/)
+  assert.match(empty, /humanReviewRequired=true/)
+})
+
+test('D11 源断言：packageId 可省略 + 描述引导「不必先追问包名」', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0)
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 5000)
+  // 参数声明不得再 required: true
+  const paramBlock = slice.slice(slice.indexOf('parameters:'), slice.indexOf('output:'))
+  assert.ok(!/packageId:\s*\{[^}]*required:\s*true/.test(paramBlock), 'packageId 不得 required')
+  assert.ok(slice.includes('可省略'), '描述须声明 packageId 可省略（D11）')
+  assert.ok(slice.includes('扫描全库'), '描述须引导扫全库（D11）')
+  assert.ok(slice.includes('不必先追问包名') || slice.includes('不要为此翻目录'), '描述须阻止追问包名摩擦（D11）')
+})
+
+
 /* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */
 
 test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记', () => {
