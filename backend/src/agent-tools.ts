@@ -38,6 +38,7 @@ import {
   saveExperienceNote,
   saveRunRecord,
   verifyDerived,
+  type DraftCandidate,
   type DraftItem,
   type ExperienceNote,
   type ExperienceOutcome,
@@ -949,6 +950,148 @@ export function renderAnnotateText(
 }
 
 /**
+ * abstract_experience 回执行（D13）：merged 技能簇附正文状态/更新通道字段。
+ * - `op=update` + `targetId`：正文过期，已入队正文更新草案（批准后 apply_draft 刷新正文）。
+ * - `bodyUpToDate`：包内正文与最新簇一致，无需更新（消「批准也没用」落差）。
+ */
+export interface AbstractQueuedEntry {
+  id: string
+  name: string
+  targetKind: string
+  status: string
+  members: number
+  runId: string
+  package?: string
+  op?: 'update'
+  targetId?: string
+  bodyUpToDate?: true
+}
+
+/** D13：包内技能正文与最新簇载荷比对（steps/outputTemplate 精确、weights 键排序）。 */
+export function skillBodyCurrent(
+  el: { steps?: string[]; weights?: Record<string, number>; outputTemplate?: string },
+  payload: Record<string, unknown>,
+): boolean {
+  const steps = Array.isArray(payload['steps']) ? (payload['steps'] as unknown[]) : null
+  const w = payload['weights']
+  const weights = w !== null && typeof w === 'object' && !Array.isArray(w) ? (w as Record<string, unknown>) : null
+  const out = typeof payload['outputTemplate'] === 'string' ? payload['outputTemplate'] : null
+  const canon = (x: Record<string, unknown> | null): string =>
+    x === null ? 'null' : JSON.stringify(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+  return (
+    JSON.stringify(el.steps ?? null) === JSON.stringify(steps) &&
+    canon(el.weights ?? null) === canon(weights) &&
+    (el.outputTemplate ?? null) === out
+  )
+}
+
+/** D13：从簇载荷提取 SkillTemplate 可更新字段（id/scenarioId 在 update 白名单外，起草即拒——剥掉）。 */
+function pickSkillBodyPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (Array.isArray(payload['steps'])) out['steps'] = payload['steps']
+  if (payload['weights'] !== null && typeof payload['weights'] === 'object' && !Array.isArray(payload['weights'])) {
+    out['weights'] = payload['weights']
+  }
+  if (typeof payload['outputTemplate'] === 'string') out['outputTemplate'] = payload['outputTemplate']
+  return out
+}
+
+/**
+ * D13：SkillTemplate 簇命中已物化（merged）草案 → 正文更新通道。
+ * 比对包内元素正文与最新簇载荷：一致 → 回执 bodyUpToDate（诚实状态，消落差）；
+ * 过期 → 入队 op=update 正文更新草案（在途 pending/approved 直接复用，pending 载荷刷新到最新簇；
+ * 上一代已物化则按 `#N` 换代重提，绕开 update 幂等键防死锁）。元素定位不到 → null（走原 merged 回执）。
+ * 只入队不直写包（I1）；物化必经 apply_draft。经验只提示不改分。
+ */
+export function skillBodyUpdateEntry(
+  knowledge: KnowledgeStore,
+  pkg: OntologyPackage,
+  packageName: string,
+  a: { draft: DraftItem; memberRunIds: string[] },
+  mergedCreate: DraftCandidate,
+  withPackage: boolean,
+): AbstractQueuedEntry | null {
+  const base = {
+    members: a.memberRunIds.length,
+    runId: a.memberRunIds[0],
+    ...(withPackage ? { package: `${pkg.meta.name}@${pkg.meta.version}` } : {}),
+  }
+  // 定位已物化元素：appliedAs → payload.id → 同名兜底
+  const hint =
+    typeof mergedCreate.appliedAs === 'string' && mergedCreate.appliedAs !== ''
+      ? mergedCreate.appliedAs
+      : typeof mergedCreate.payload['id'] === 'string'
+        ? (mergedCreate.payload['id'] as string)
+        : undefined
+  const el =
+    (hint !== undefined ? pkg.skillTemplates.find((s) => s.id === hint) : undefined) ??
+    pkg.skillTemplates.find((s) => s.name === a.draft.name)
+  if (!el) return null
+  const fresh = pickSkillBodyPayload(a.draft.payload)
+  if (skillBodyCurrent(el, a.draft.payload)) {
+    return {
+      id: mergedCreate.id,
+      name: mergedCreate.name,
+      targetKind: 'SkillTemplate',
+      status: 'merged',
+      ...base,
+      targetId: el.id,
+      bodyUpToDate: true,
+    }
+  }
+  // 在途 update（pending/approved）直接复用——不覆盖 payload（人审可能已编辑；载荷落后时
+  // 物化后下轮重抽象会按 #N 换代重提，自愈）
+  const baseName = a.draft.name
+  const prior = knowledge
+    .listCandidates({ packageId: packageName })
+    .filter(
+      (x) =>
+        x.op === 'update' &&
+        x.targetKind === 'SkillTemplate' &&
+        x.targetId === el.id &&
+        (x.name === baseName || x.name.startsWith(`${baseName}#`)) &&
+        x.status !== 'rejected',
+    )
+  const inflight = prior.find((x) => x.status === 'pending' || x.status === 'approved')
+  if (inflight) {
+    return {
+      id: inflight.id,
+      name: inflight.name,
+      targetKind: 'SkillTemplate',
+      status: inflight.status,
+      ...base,
+      op: 'update',
+      targetId: el.id,
+    }
+  }
+  // 无在途 → 新一代 update：上一代已 merged 时按计数换名，绕开同键幂等返回旧草案
+  const name = prior.length === 0 ? baseName : `${baseName}#${prior.length + 1}`
+  const upd = knowledge.addDraft({
+    packageId: packageName,
+    item: {
+      layer: 'O2',
+      op: 'update',
+      targetKind: 'SkillTemplate',
+      targetId: el.id,
+      name,
+      payload: fresh,
+      confidence: a.draft.confidence,
+      rationale: a.draft.rationale,
+    },
+    provenance: { runId: a.memberRunIds[0] },
+  })
+  return {
+    id: upd.id,
+    name: upd.name,
+    targetKind: 'SkillTemplate',
+    status: upd.status,
+    ...base,
+    op: 'update',
+    targetId: el.id,
+  }
+}
+
+/**
  * abstract_experience 纯函数（闭环 E2-1；D11 扫全库）：成功/反例经验按结构签名聚簇 →
  * SkillTemplate / RedLine / ExclusionRule 草案入知识库人审队列（pending）。
  * 只入队、永不直写包（I1）；物化必经 apply_draft（humanApproved 人审契约）。
@@ -974,15 +1117,7 @@ export function abstractExperienceForTool(
     skills: number
     counters: number
   }>
-  queued: Array<{
-    id: string
-    name: string
-    targetKind: string
-    status: string
-    members: number
-    runId: string
-    package?: string
-  }>
+  queued: AbstractQueuedEntry[]
   skills: number
   counters: number
   humanReviewRequired: true
@@ -1001,35 +1136,27 @@ export function abstractExperienceForTool(
     packageName: string,
     withPackage: boolean,
   ): {
-    queued: Array<{
-      id: string
-      name: string
-      targetKind: string
-      status: string
-      members: number
-      runId: string
-      package?: string
-    }>
+    queued: AbstractQueuedEntry[]
     skills: number
     counters: number
   } => {
     const abs = abstractSkillDrafts(ws.root, { pkg, minCluster })
     const counters = abstractCounterexampleDrafts(ws.root, { pkg, minCluster })
-    const queued: Array<{
-      id: string
-      name: string
-      targetKind: string
-      status: string
-      members: number
-      runId: string
-      package?: string
-    }> = []
+    const queued: AbstractQueuedEntry[] = []
     for (const a of [...abs, ...counters]) {
       const c = knowledge.addDraft({
         packageId: packageName,
         item: a.draft,
         provenance: { runId: a.memberRunIds[0] },
       })
+      // D13：SkillTemplate 已物化（merged）→ 正文更新通道（一致回执 bodyUpToDate；过期入队 op=update）
+      if (c.status === 'merged' && a.draft.targetKind === 'SkillTemplate') {
+        const entry = skillBodyUpdateEntry(knowledge, pkg, packageName, a, c, withPackage)
+        if (entry !== null) {
+          queued.push(entry)
+          continue
+        }
+      }
       queued.push({
         id: c.id,
         name: c.name,
@@ -1075,15 +1202,7 @@ export function abstractExperienceForTool(
     skills: number
     counters: number
   }> = []
-  const queued: Array<{
-    id: string
-    name: string
-    targetKind: string
-    status: string
-    members: number
-    runId: string
-    package?: string
-  }> = []
+  const queued: AbstractQueuedEntry[] = []
   let skills = 0
   let countersTotal = 0
   for (const v of ws.listVersions()) {
@@ -1116,7 +1235,7 @@ export function abstractExperienceForTool(
   }
 }
 
-/** abstract_experience 渲染（E2-1/D11）：结构位回执（草案 id/kind/簇员/status），无服务端路径。 */
+/** abstract_experience 渲染（E2-1/D11/D13）：结构位回执（草案 id/kind/簇员/status + 正文更新通道），无服务端路径。 */
 export function renderAbstractText(
   v: {
     package: string
@@ -1127,20 +1246,23 @@ export function renderAbstractText(
       skills: number
       counters: number
     }>
-    queued: Array<{
-      id: string
-      name: string
-      targetKind: string
-      status: string
-      members: number
-      runId: string
-      package?: string
-    }>
+    queued: AbstractQueuedEntry[]
     skills: number
     counters: number
   },
   phrases?: readonly string[],
 ): string {
+  // D13：merged 技能簇行附正文状态——op=update（过期已入队更新草案）/ bodyUpToDate（一致无需更新）
+  const entryLine = (q: AbstractQueuedEntry): string => {
+    const at = v.scanned !== undefined ? `@${q.package ?? ''} ` : ' '
+    const body =
+      q.op === 'update' && q.targetId !== undefined
+        ? ` op=update targetId=${q.targetId}（正文过时：批准后 apply_draft 刷新技能正文）`
+        : q.bodyUpToDate === true
+          ? ' bodyUpToDate（正文已与最新簇一致，无需更新）'
+          : ''
+    return `+ [${q.targetKind}] ${q.name}（${q.id}）${at}status=${q.status} 簇员=${q.members} 代表=${q.runId}${body}`
+  }
   if (v.scanned !== undefined) {
     // D11 扫全库回执：逐包一行（含跳过原因），草案行带包归属。
     const lines = [
@@ -1150,10 +1272,7 @@ export function renderAbstractText(
           ? `- ${s.package}：跳过（${s.skipped}）`
           : `- ${s.package}：入队 ${s.queued} 条（技能 ${s.skills} · 反例 ${s.counters}）`,
       ),
-      ...v.queued.map(
-        (q) =>
-          `+ [${q.targetKind}] ${q.name}（${q.id}）@${q.package ?? ''} status=${q.status} 簇员=${q.members} 代表=${q.runId}`,
-      ),
+      ...v.queued.map(entryLine),
       'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
     ]
     if (v.queued.length === 0) {
@@ -1176,10 +1295,7 @@ export function renderAbstractText(
   }
   const lines = [
     `包 ${v.package}：经验抽象入队 ${v.queued.length} 条（技能 ${v.skills} · 反例 ${v.counters}）`,
-    ...v.queued.map(
-      (q) =>
-        `+ [${q.targetKind}] ${q.name}（${q.id}） status=${q.status} 簇员=${q.members} 代表=${q.runId}`,
-    ),
+    ...v.queued.map(entryLine),
     'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
   ]
   return retreatRenderText(lines.join('\n'), phrases ?? [])
@@ -1810,6 +1926,8 @@ export function apply(ctx: Context): void {
         + 'packageId 可省略：省略即扫描全库有经验的非 ISSUED 包（「最近这些成功经验」类请求不必先追问包名，'
         + '也不要为此翻目录找包——直接不传 packageId）。'
         + '反例/误迁移经验不参聚成功簇（反例只落红线或排除草案）；簇员不足回执说明、不硬凑。'
+        + 'D13 正文更新通道：技能簇已物化（merged）后重跑——回执 bodyUpToDate 表示正文已与最新簇一致；'
+        + '回执 op=update/targetId 表示正文过时、已入队正文更新草案，批准后 apply_draft 即刷新技能正文。'
         + '返回结构位回执（草案 id/kind/status/簇员数），认定出口只在人工。',
       parameters: {
         packageId: {

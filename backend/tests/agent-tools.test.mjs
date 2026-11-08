@@ -35,6 +35,7 @@ import {
   renderAbstractText,
   annotateExperienceForTool,
   abstractExperienceForTool,
+  skillBodyCurrent,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -1791,6 +1792,191 @@ test('D11 源断言：packageId 可省略 + 描述引导「不必先追问包名
   assert.ok(slice.includes('可省略'), '描述须声明 packageId 可省略（D11）')
   assert.ok(slice.includes('扫描全库'), '描述须引导扫全库（D11）')
   assert.ok(slice.includes('不必先追问包名') || slice.includes('不要为此翻目录'), '描述须阻止追问包名摩擦（D11）')
+})
+
+/* ── D13 SkillTemplate merged → 正文更新通道 ── */
+
+test('D13 skillBodyCurrent：steps/outputTemplate 精确比对、weights 键序无关', () => {
+  const el = { steps: ['候选 {candidateId}', 'listHitCount'], weights: { 'RULE-A': 0.6, 'RULE-B': 0.4 }, outputTemplate: '摘要：{riskScore}' }
+  // 完全一致（weights 键序不同也算一致）
+  assert.equal(
+    skillBodyCurrent(el, {
+      steps: ['候选 {candidateId}', 'listHitCount'],
+      weights: { 'RULE-B': 0.4, 'RULE-A': 0.6 },
+      outputTemplate: '摘要：{riskScore}',
+    }),
+    true,
+  )
+  // steps 少一项 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: ['候选 {candidateId}'], weights: el.weights, outputTemplate: el.outputTemplate }), false)
+  // steps 多一项（新 reviewFocus 入簇）→ 过期
+  assert.equal(
+    skillBodyCurrent(el, { steps: [...el.steps, '关联集中度'], weights: el.weights, outputTemplate: el.outputTemplate }),
+    false,
+  )
+  // outputTemplate 变 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: el.steps, weights: el.weights, outputTemplate: '别的' }), false)
+  // weights 数值变 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: el.steps, weights: { 'RULE-A': 0.5, 'RULE-B': 0.5 }, outputTemplate: el.outputTemplate }), false)
+})
+
+test('D13：SkillTemplate 已物化后再抽象——正文一致回执 bodyUpToDate；正文过期入队 op=update', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    const dir = ws.versionDir('aml-analysis', '1.0.0')
+    const pkgId = 'aml-analysis@1.0.0'
+
+    mkRun()
+    mkRun()
+    // 第一次抽象：create 草案 pending
+    const first = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(first.queued[0].status, 'pending')
+    assert.equal(first.queued[0].op, undefined, '未物化不走正文更新通道')
+    const createId = first.queued[0].id
+
+    // 人审批准 + 物化（同 apply_draft 路径）
+    knowledge.reviewCandidate(createId, 'approve')
+    const applied = knowledge.materialize(dir, [createId])
+    assert.deepEqual(applied.applied, [createId])
+    const el0 = loadPackage(dir).skillTemplates.find((s) => s.name === first.queued[0].name)
+    assert.ok(el0, '物化后技能元素须在包内')
+
+    // 第二次抽象（无新经验）→ 正文与最新簇一致 → bodyUpToDate，不入新草案
+    const second = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(second.queued[0].status, 'merged')
+    assert.equal(second.queued[0].bodyUpToDate, true, '正文一致须回执 bodyUpToDate')
+    assert.equal(second.queued[0].targetId, el0.id)
+    const pendingAfterUpToDate = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(pendingAfterUpToDate.length, 0, 'bodyUpToDate 不得入队新草案')
+
+    // 新 reviewFocus 入簇 → 正文过期 → 入队 op=update 正文更新草案
+    const runIds = first.queued[0].runId // 任取其一；再补一条新 focus 的经验
+    annotateExperienceForTool(ws, {
+      runId: runIds,
+      reviewFocus: ['listHitCount', '关联集中度'],
+      humanApproved: true,
+    })
+    const third = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    const updEntry = third.queued[0]
+    assert.equal(updEntry.op, 'update', '正文过期须回执 op=update')
+    assert.equal(updEntry.targetId, el0.id)
+    assert.equal(updEntry.status, 'pending')
+    assert.equal(updEntry.targetKind, 'SkillTemplate')
+    assert.notEqual(updEntry.id, createId, 'update 草案须是新候选，不得复用 merged create')
+
+    // 幂等：在途 update 再抽象返回同一条，不重复入队
+    const thirdAgain = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(thirdAgain.queued[0].id, updEntry.id, '在途 update 须幂等复用')
+    const updates = knowledge
+      .listCandidates({ packageId: 'aml-analysis' })
+      .filter((c) => c.op === 'update' && c.targetKind === 'SkillTemplate')
+    assert.equal(updates.length, 1, '不得重复入队 update')
+
+    // 批准 + 物化 update → 正文刷新
+    knowledge.reviewCandidate(updEntry.id, 'approve')
+    const appliedUpd = knowledge.materialize(dir, [updEntry.id])
+    assert.deepEqual(appliedUpd.applied, [updEntry.id])
+    const el1 = loadPackage(dir).skillTemplates.find((s) => s.id === el0.id)
+    assert.ok(el1.steps.includes('关联集中度'), `物化后 steps 须含新 focus: ${JSON.stringify(el1.steps)}`)
+
+    // 第三次抽象（无再变）→ bodyUpToDate
+    const fourth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(fourth.queued[0].bodyUpToDate, true)
+
+    // 又一批新 focus 入簇 → 上一代 update 已 merged → 按 #N 换代重提，不撞幂等
+    annotateExperienceForTool(ws, {
+      runId: runIds,
+      reviewFocus: ['listHitCount', '关联集中度', '资金分层'],
+      humanApproved: true,
+    })
+    const fifth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    const gen2 = fifth.queued[0]
+    assert.equal(gen2.op, 'update')
+    assert.equal(gen2.status, 'pending')
+    assert.match(gen2.name, /#2$/, `上一代 merged 后须换代重提: ${gen2.name}`)
+    assert.notEqual(gen2.id, updEntry.id)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('D13 渲染：op=update/targetId 与 bodyUpToDate 结构位 + 无路径泄漏', () => {
+  const stale = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-upd001',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+        op: 'update',
+        targetId: 'SKL-AML-EXP-FIND-CLUES',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(stale, /op=update targetId=SKL-AML-EXP-FIND-CLUES/)
+  assert.match(stale, /正文过时/)
+  assert.match(stale, /humanReviewRequired=true/)
+  assert.doesNotMatch(stale, /D:\\|workspace\//)
+
+  const current = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'merged',
+        members: 3,
+        runId: 'run-abc12345',
+        targetId: 'SKL-AML-EXP-FIND-CLUES',
+        bodyUpToDate: true,
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(current, /bodyUpToDate/)
+  assert.match(current, /正文已与最新簇一致/)
+  assert.doesNotMatch(current, /op=update/, 'bodyUpToDate 不得误报 update')
+
+  // 扫全库路径同样带正文状态位
+  const scanned = renderAbstractText({
+    package: '全库',
+    scanned: [{ package: 'aml-analysis@1.0.0', queued: 1, skills: 1, counters: 0 }],
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'merged',
+        members: 3,
+        runId: 'run-abc12345',
+        package: 'aml-analysis@1.0.0',
+        bodyUpToDate: true,
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(scanned, /@aml-analysis@1\.0\.0 status=merged/)
+  assert.match(scanned, /bodyUpToDate/)
+})
+
+test('D13 源断言：描述引导正文更新通道（op=update / bodyUpToDate）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0)
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 6000)
+  assert.ok(slice.includes('正文更新通道'), '描述须声明 D13 正文更新通道')
+  assert.ok(slice.includes('op=update'), '描述须引导 op=update 正文更新草案')
+  assert.ok(slice.includes('bodyUpToDate'), '描述须声明 bodyUpToDate 诚实回执')
+  assert.ok(slice.includes('apply_draft'), '描述须指明刷新路径是 apply_draft')
 })
 
 
