@@ -13,8 +13,10 @@ import {
   assertNoForbiddenPhrases,
   assertRunContract,
   asToolError,
+  configureDiffLlm,
   enforceOutputPolicy,
   renderRunText,
+  reviseTopHitAdvice,
 } from '../dist/agent-policy.js'
 import {
   assertDatasetGranted,
@@ -2161,4 +2163,85 @@ test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏',
   assert.ok(fieldLine.includes('scenarioId 同（'), '带括号形态在字段对照栏')
   assert.ok(scoreLine.includes('同 scenarioId'), '检索打分理由留在打分栏')
   assert.ok(scoreLine.includes('Jaccard'), 'Jaccard 留在打分栏')
+})
+
+/* ── E2-2：reviseTopHitAdvice 接生产（digest 短路 + reviseDiff 双路 + 转人工闸） ── */
+
+test('E2-2：reviseTopHitAdvice——digest 短路 / heuristic 转人工闸 / LLM 腿注入与回落', async () => {
+  const pkg = loadPackage(AML_DIR)
+  const sigS = buildTaskSignature({
+    pkg,
+    scenarioId: 'SCN-AML-FIND-CLUES',
+    datasetSummary: { objects: 4, relations: 4, behaviors: 0, candidates: 4 },
+  })
+  const sigM = buildTaskSignature({
+    pkg,
+    scenarioId: 'SCN-AML-FIND-CLUES',
+    datasetSummary: { objects: 4, relations: 4, behaviors: 0, candidates: 67 },
+  })
+  configureDiffLlm(null)
+  try {
+    // digest 同构 → 短路跳过修正
+    const same = await reviseTopHitAdvice(sigS, sigS)
+    assert.equal(same.revision.engine, 'digest')
+    assert.equal(same.revision.humanGate, false)
+    assert.match(same.advice, /结构同构可参考复用/)
+    assert.match(same.advice, /digest 同构短路/)
+    assert.deepEqual(same.revision.unknown, [])
+
+    // 非同构 + 默认 null 端口 → heuristic 腿：人工闸恒触发（confidence 0.50 < 0.75）
+    const gated = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(gated.revision.engine, 'heuristic')
+    assert.equal(gated.revision.humanGate, true)
+    assert.match(gated.advice, /转人工/)
+    assert.match(gated.advice, /engine=heuristic/)
+    assert.match(gated.advice, /confidence=0\.50/)
+    assert.ok(gated.revision.mustChange.includes('dataBand'), 'S→M 须落 mustChange')
+    assert.ok(gated.revision.unknown.includes('scenarioId'), 'heuristic 不背书项落 unknown')
+
+    // LLM 腿注入：高置信 + unknown 空 → 闸放行
+    configureDiffLlm({
+      complete: async () =>
+        JSON.stringify({
+          reusable: [{ item: 'stepShape', note: '同' }],
+          mustChange: [{ item: 'dataBand', why: 'S→M' }],
+          unknown: [],
+          confidence: 0.92,
+        }),
+    })
+    const ok = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(ok.revision.engine, 'llm')
+    assert.equal(ok.revision.humanGate, false)
+    assert.match(ok.advice, /修正后可参考复用/)
+    assert.match(ok.advice, /engine=llm/)
+    assert.match(ok.advice, /dataBand/, '放行仍须列出差异表调整项')
+
+    // LLM 腿失败 → reviseDiff 回落 heuristic（双路语义）
+    configureDiffLlm({ complete: async () => { throw new Error('net down') } })
+    const fb = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(fb.revision.engine, 'heuristic')
+    assert.equal(fb.revision.humanGate, true)
+    assert.match(fb.advice, /转人工/)
+  } finally {
+    configureDiffLlm(null)
+  }
+})
+
+test('E2-2 源断言：recall/hint 接 reviseTopHitAdvice（双路+人工闸）；rules.ts 不碰', () => {
+  const atSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const recallIdx = atSrc.indexOf("name: 'recall_experience'")
+  const annotateIdx = atSrc.indexOf("name: 'annotate_experience'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
+  const recallSlice = atSrc.slice(recallIdx, annotateIdx)
+  assert.ok(recallSlice.includes('reviseTopHitAdvice'), 'recall execute 须走 reviseTopHitAdvice')
+  assert.ok(recallSlice.includes('revision'), 'recall value 须带 revision 结构位回执')
+  assert.ok(recallSlice.includes('engine/confidence'), '工具描述须声明 engine/confidence 结构位')
+  const aeSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  assert.ok(aeSrc.includes('await reviseTopHitAdvice') || aeSrc.includes('reviseTopHitAdvice('), 'hint 须接 reviseTopHitAdvice')
+  assert.ok(/await experienceHintOf\(/.test(aeSrc), 'hint 调用点须 await（async 接线）')
+  const policySrc = readFileSync(join(REPO, 'backend', 'src', 'agent-policy.ts'), 'utf8')
+  assert.ok(policySrc.includes('requiresHumanReview'), '闸门须用 requiresHumanReview')
+  assert.ok(policySrc.includes('reviseDiff'), '须接 reviseDiff 双路')
+  const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
+  assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
 })

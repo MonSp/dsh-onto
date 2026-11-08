@@ -70,7 +70,7 @@
 | E1-2 | `recall_experience` hits 投影补 `reviewFocus`（过 value/render 闸） | NL：用户问「上次类似的跑得怎么样」，回答含下轮复核提示 | **完成**（轮 3） |
 | E1-3 | SkillTemplate 物化接线：append 新 SKL id 到对应场景 `pipeline.skillRefs` | NL：用户批准经验模板草案后问「专家现在会什么」，skills 含新 id | **完成**（轮 4，含 D6 当场未修→下轮） |
 | E2-1 | `abstract_experience` 工具（humanApproved，聚簇草案入队，结构位回执） | NL：用户说「最近这些成功经验总结一下」，agent 聚簇入队并让人审 | **完成**（轮 6，含 D7 当场闭环验证） |
-| E2-2 | reviseDiff 接生产（可选）：recall top-1 走双路修正 + 转人工闸 | NL：差异大时 advice 明确「转人工」而非硬复用 | 待做 |
+| E2-2 | reviseDiff 接生产（可选）：recall top-1 走双路修正 + 转人工闸 | NL：差异大时 advice 明确「转人工」而非硬复用 | **完成**（轮 9，含首轮 T2 误标完成→作废重做） |
 | E3-1 | 操作简化：画布节点内嵌批准/驳回；draft_elements 批量 apply | NL 建模对话中点头次数减少（台账记录前后对比） | 待做 |
 
 ## 四、NL 验证剧本模板（真实用户口吻，非工具指令）
@@ -83,6 +83,7 @@
 | E1 | 「这次跑完了，结论是分析成功，复核时注意一下那个集中转入的特征」 | agent annotate 成功 + reviewFocus；不再需要用户指工具 |
 | E1 | 「把这些成功经验里反复出现的做法，做成正式的方法论吧」 | agent 聚簇出 SkillTemplate 草案入队，提示人审；批准后专家技能可见 |
 | E2 | 「这个场景以前是不是踩过坑？」「那这次执行要注意什么」 | 反例/误迁移不参赛；advice 给出边界提示 |
+| E2-2 | 「上次四条小数据的经验，六十七条候选的中批量数据还能直接照搬吗」「那还是原来那批四条呢」 | 差异大 → advice 转人工（engine/confidence 结构位）；digest 同构 → 短路可复用 + reviewFocus 上墙 |
 | E3 | 「给我建个税务风险的新包」「对象是发票和申报表」「场景就是查虚开发票」 | 建模对话点头次数少；画布可直接批准 |
 
 **断言点**（每轮按剧本裁剪）：agent 自选工具正确；`humanReviewRequired=true` 在场；
@@ -100,6 +101,7 @@
 | 6 | 2026-11-08 | E2-1 abstract_experience（abstractExperienceForTool + renderAbstractText + ONTOOL 登记；humanApproved 契约；只入队不直写包） | 「最近这些成功经验总结一下，看看能不能沉淀成正式的方法论」→「总结出来的东西现在是什么状态？反洗钱专家现在能用上吗，把它的技能列出来看看」 | ✓ backend 148/148（+3 E2-1 回归：契约/聚簇入队/渲染/源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 两句全绿：第 1 句 agent 思考原文点名工具描述「总结成功经验 / 沉淀方法论」（**D7 闭环**——不再写工作区 methodology 文档）、humanApproved=true、自选 abstract_experience 跑 aml+scf；aml 回执 **dc-7f40d1ec… status=merged 簇员=3 代表 run-83450578**、scf ISSUED 正确拒；第 2 句 list_experts 技能 2 个（SKL-AML-EXP-FIND-CLUES + SKL-AML-NARRATIVE）、get_model_graph 待审 0、诚实指出「聚簇结论有了正文没变」并给出 draft_elements→apply_draft 人审下一步；humanReviewRequired 在场、禁语 0、最终回答无服务端路径泄漏；本轮未跑场景（打分断言 N/A） | D11（P2，新）：包/经验发现摩擦——agent 为定位 packageId 花大量步 glob/pwsh/get_package，最终 ask_user_question 要用户多选（阻塞式问题在 API 会话难自动应答）；缺「哪些包有成功经验」只读入口；D13（P2，新）：幂等回执 status=merged 但不更新技能正文，用户期望「沉淀成方法论」时有落差（agent 自察并建议 draft_elements update）；无 P0/P1，E2-1 关闭 | 下轮优先 D11：abstract 可省 packageId 扫全库非 ISSUED 有经验包，或新增 list_experiences 只读入口（顺带缓解 D5/D8）；再进 E2-2（reviseDiff 接生产）或 D13（merged 草案 update 通道）；可选 D9/D10 | 本轮提交 |
 | 7 | 2026-11-08 | D11 abstract 省 packageId 扫全库（packageId 可选 + 扫描模式：有经验非 ISSUED 包入队、ISSUED 记 skipped 不整单失败 + 逐包回执渲染 + 描述引导「不必先追问包名」） | 「最近这些成功经验总结一下，看看能不能沉淀成正式的方法论」→（人审提问选「先不物化，留队列」）→「总结出来的东西现在是什么状态？反洗钱专家现在能用上吗，把它的技能列出来看看」 | ✓ backend 151/151（+3 D11 回归：扫全库入队/ISSUED 跳过/渲染/源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 两句全绿：第 1 句 agent 思考原文 **「Use abstract_experience with packageId omitted, humanApproved=true」**（D11 核心断言——零包名追问、零 glob 翻目录，直接省略参数扫全库）、回执「候选经验包 1 个」+ dc-7f40d1ec… status=merged + humanReviewRequired=true、首句 2分04秒完成（轮 6 同句需多选打断）；第 2 句状态分层表 + 技能清单 2 个（SKL-AML-EXP-FIND-CLUES/SKL-AML-NARRATIVE）+ 诚实指出「merged 草案批准与否专家行为不变」；禁语 0、无路径泄漏；零审批打断（plugin_manager 未复现） | 无新 P0/P1；D11 关闭。D13 复现观察（非新缺陷）：两轮回答均强调「merged 不更新正文、批准差异很小」——落差仍在。环境观察：发送脚本误重跑导致第 2 句台词重复发了一次，agent 两次回答均绿（非产品缺陷） | 下轮优先 D13（merged 草案 update 通道：abstract 幂等回执时提供正文更新路径，消「沉淀成方法论」落差）；再进 E2-2（reviseDiff 接生产）；可选 D9/D10、E3-1 | 本轮提交 |
 | 8 | 2026-11-08 | D13 SkillTemplate merged → 正文更新通道（skillBodyCurrent 比对包内正文 vs 最新簇：一致回执 bodyUpToDate、过期入队 op=update 正文更新草案 targetId 指向既有技能、在途复用 + #N 换代防幂等死锁；render 附结构位；描述引导 apply_draft 刷新） | 「用反洗钱专家跑一下最新那批数据，这次复核重点看资金分层这个新特征，跑完把这次的经验记下来」→「这些成功经验再总结沉淀一下，让方法论跟上最新的复核重点」→「反洗钱专家现在能正常用吗？把它的技能列出来，再用它跑一遍最新数据确认没受影响」 | ✓ backend **155/155**（+4 D13 回归：skillBodyCurrent 纯函数 / 端到端 bodyUpToDate→op=update→物化刷新→#2 换代 / 渲染双分支 / 源断言）+ node --check + dump 2/2；core/workbench 按改动面裁剪；T5 三句全绿（新会话「反洗钱资金分层复核」）：第 1 句 invoke+annotate 落 run-5eb68f08（outcome=partial、reviewFocus 含「资金分层」、humanReviewRequired=true、分数 0.9060/0.0188/0.0800 与基线一致、禁语 0；agent 发现「资金分层」在包内无载体→诚实标 partial 不代算不按 0 计，还给出 fork 1.1.0 建模路径——超额正确行为）；第 2 句 **D13 核心断言**：自选 abstract_experience，思考原文回执 **「status=merged, cluster of 3, bodyUpToDate」**，最终回答明说「聚类认为技能正文无需更新」并解释 partial 不入 success 簇——**不再 merged 空转**，落差消除；第 3 句技能 2 个列出 + 复跑 run-aa561a0f Δ=0（同 digest 零漂移第 31 次）+ 经验提示通道正常（「经验只提示、不改分」）；三句零审批打断 | 无新 P0/P1，**D13 关闭**。观察 D14（P2，非断链）：第 2 句 agent 在工具回执 bodyUpToDate 后转而大改工作区方法论文档（v1.1 +61/-34，§5.5 载体核查/反模式 #11/13 问）——工具已先调（非 D7 回归），但「方法论」双载体（SKL 正文 vs 工作区方法论文档）职责边界开始模糊，用户台词「让方法论跟上」落到哪个载体取决于 agent 解读；op=update 路径本轮 NL 未触发（partial 不入簇→正文未过时），端到端由单测覆盖，真过时场景待下轮自然验证。环境观察：①Tabbit 对 127.0.0.1 导航挂起、localhost 秒开（与轮 6 记录相反——本机 DNS/浏览器状态波动，两轮互换，协议保持「localhost 优先」并备换另一个）；②首落点误进旧会话且消息无回复（服务重启后旧标签会话状态异常），换 localhost+新建会话后正常；③任务 90s 空闲过期会释放标签，长等待需分段控制在 90s 内 | 下轮优先 E2-2（reviseDiff 接生产：recall top-1 双路修正 + 转人工闸）；可选 D9（红线短语级）、D10（invoke经验段转述）、E3-1（画布内嵌批准/批量 apply）、D14（方法论双载体边界进工具描述/技能）；op=update NL 端到端待正文真过时时顺带验证 | 本轮提交 |
+| 9 | 2026-11-08 | E2-2 reviseDiff 接生产（agent-policy `reviseTopHitAdvice`：digest 同构短路跳过修正 + `reviseDiff` 双路（LLM 腿 `configureDiffLlm` 可注入/缺省 heuristic 回落）+ `requiresHumanReview` 转人工闸；recall/hint 双接线（execute async + value 带 `revision` 结构位回执 engine/confidence/humanGate/mustChange/unknown）；dataset 参数描述补规模档引导（candidates 数量定档、元素可占位）） | 「反洗钱上次那批四条小数据的经验，如果这次来的是六十七条候选的中批量数据，还能直接照搬吗」→「那如果还是原来那批四条的小数据呢，以前的经验能直接用吗」 | ✓ backend **157/157**（+2 E2-2 回归：reviseTopHitAdvice 三分支——digest 短路/heuristic 闸/LLM 注入放行与失败回落 + 源断言 recall/hint 接线且 rules.ts 不碰）+ node --check + dump 2/2；core/workbench/T4 按改动面裁剪；**T5 重做两句全绿**（新会话，新代码）：第 1 句 agent 按新 dataset 描述**自构 67 占位候选实调 recall_experience**（作废轮需两句额外引导才肯合成），回执对照两分支「digest 同构短路 vs **confidence=0.50，转人工确认后方可复用**」（新闸结构位首次上墙），回答「不能直接照搬」+ 两道闸（partial 不可放大、上次复用亦未迁移）+ 40 秒 8 步零打断；第 2 句 digest 短路回执「结构同构可参考复用（跟 67 条那次的 0.50/转人工不是一回事）」+ 实跑 invoke（run-0c6ee607/留痕 run-3e27149c）**Δ=0 零漂移** + reviewFocus 三项上墙（资金分层/counterpartyAcct/FANOUT）+ 明确「标注需你明确点头」；两句禁语 0、无绝对路径泄漏、humanReviewRequired 在场 | 无新 P0/P1/P2，E2-2 关闭。**过程缺陷（自省入账）**：首轮 T2 误标完成——实际仅落了 agent-policy 一行导入，`reviseTopHitAdvice`/接线/测试均未实现，且验证阶梯（对未实现代码）与首轮 T5 四句全部「通过」是假绿（回执仍是旧 advice 格式，T5 第 4 句贴出的原文暴露了这一点）；作废首轮 T5，真实实现后重跑 T3+T5 才算数。环境观察：①localhost 与 127.0.0.1 可用性再次互换（本轮 127.0.0.1 稳、localhost 导航超时——与轮 8 相反，协议保持「优先 localhost、备换另一个」）；②服务重启后旧会话列表可正常打开（轮 8 的旧标签无响应未复现）；③作废轮中 agent 拒绝合成占位数据集、要求真数据（新 dataset 描述已预防：本轮零引导直接合成） | 下轮优先 E3-1（画布节点内嵌批准/驳回；draft_elements 批量 apply——backlog 最后一片）；可选 D9（红线短语级）、D10（invoke 经验段转述）、D14（方法论双载体边界）；E2-2 的 LLM 腿 DeepSeek `complete` 适配器留待按需（`configureDiffLlm` 已留口，生产默认 heuristic 离线确定） | 本轮提交 |
 
 **轮 1 反馈细节（T5 收集）**：
 - 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具；但数据定位阶段 agent 长时间自主翻目录（用户视角等待 ~5min46s 才出结论）。
@@ -165,6 +167,15 @@
 - 打分一致性：三跑 0.9060/0.0188/0.0800 与基线逐字段一致（同 digest 第 31 次零漂移）；经验只提示不改分（第 3 句 agent 原话复述）。
 - 禁语/路径：三句均无禁语命中（agent 自报 0）；最终回答无服务端绝对路径（第 1 句文件编辑列表用 `~/.dsh/...` 与工作区相对路径）。
 - 与轮 1–7 对比：首次出现「工具回执诚实说不需要动」且用户预期被完整解释（partial 不入簇的原因讲清）——D13 的价值不在触发 op=update，而在 merged 不再是死胡同。
+
+**轮 9 反馈细节（T5 收集，以重做后为准）**：
+- 需要用户多嘴/多次点头：**零**——两句全程 agent 自选工具、零审批打断、零 ask_user_question；第 1 句 agent 按新 dataset 描述**自行构造 67 占位候选**调 recall（作废轮旧描述下它拒绝合成、要用户给真数据，多要了两句引导——描述引导的前后对比就是本轮最大反馈）。
+- E2-2 断言（双分支都走到）：第 1 句回执对照表「digest 同构短路 vs **confidence=0.50，转人工确认后方可复用**」——新闸结构位（engine/confidence）首次出现在 NL 面，回答「不能直接照搬」；第 2 句回执「结构同构可参考复用（跟 67 条那次的 0.50/转人工不是一回事）」——digest 短路分支清晰，并实跑 invoke（run-0c6ee607 + 留痕 run-3e27149c）验证 **Δ=0 零漂移**。
+- agent 漏做：无。超额：第 2 句主动把「方法可搬 / 分数与结论不可搬」分层，复述 reviewFocus 三项（资金分层/counterpartyAcct/FANOUT），并主动说明「标注动作需你明确点头」（humanApproved 契约内化）。
+- 输出回答真实问题：是——第 1 句给了两道闸（partial 不可放大、上次复用亦未迁移）与接手所需两件事；第 2 句给了 67 条 vs 四条的一句话对照。
+- 打分一致性：第 2 句复跑 Δ=0（同 digest 零漂移第 32 次）；第 1 句只召回未跑分（N/A）；经验只提示不改分（两处 advice 均未触碰打分）。
+- 禁语/路径：两句均无禁语命中；最终回答无服务端绝对路径（run-id/包名/规则 id 属结构位）。
+- 与轮 1–8 对比：E2-2 出口（差异大→转人工、同构→短路可复用）首次在 NL 双分支验证；作废轮暴露的「过程假绿」（T2 误标完成却通过全部阶梯与 T5）是本轮最重的流程教训——**完成标记必须以 diff 为准，验证要核对回执原文格式**。
 
 ## 六、拍板记录
 

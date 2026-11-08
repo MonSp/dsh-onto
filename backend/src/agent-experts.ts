@@ -14,7 +14,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   DERIVED_FILES,
-  buildDiffTable,
   buildRunRecord,
   buildTaskSignature,
   loadPackage,
@@ -33,7 +32,9 @@ import {
   recallPhrases,
   rememberPhrases,
   retreatRenderText,
+  reviseTopHitAdvice,
   toolExecute,
+  type TopHitRevision,
 } from './agent-policy.js'
 import { assertDatasetGranted, readToolContracts } from './agent-grants.js'
 import type { PackageWorkspace } from '@dsh-onto/core'
@@ -159,19 +160,22 @@ export interface ExperienceHint {
     reviewFocus: string[]
   }>
   advice: string
+  /** E2-2 修正回执（engine/confidence/人工闸/差异项）；冷启动缺省。 */
+  revision?: TopHitRevision['revision']
 }
 
 /**
  * 执行前结构召回（E1-1）：按 TaskSignature 检索相似经验并投影为只读提示段。
  * 经验只提示不改分——本函数不触碰打分语义，结果仅附加到 expert 包络。
- * 冷启动明说不硬迁移；差异含结构位变更 → 转人工话术（与 recall_experience 同口径）。
+ * 冷启动明说不硬迁移；命中 top-1 走 reviseTopHitAdvice（E2-2：双路修正 + 转人工闸，
+ * digest 同构短路），与 recall_experience 同口径。
  */
-export function experienceHintOf(input: {
+export async function experienceHintOf(input: {
   root: string
   pkg: OntologyPackage
   scenarioId: string
   datasetSummary: { objects: number; relations: number; behaviors: number; candidates: number }
-}): ExperienceHint {
+}): Promise<ExperienceHint> {
   const { root, pkg, scenarioId, datasetSummary } = input
   const signature = buildTaskSignature({ pkg, scenarioId, datasetSummary })
   const result = retrieveSimilar(root, {
@@ -186,16 +190,20 @@ export function experienceHintOf(input: {
     reviewFocus: h.note.reviewFocus ?? [],
   }))
   let advice: string
+  let revision: TopHitRevision['revision'] | undefined
   if (result.coldStart || hits.length === 0) {
     advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
   } else {
-    const draft = buildDiffTable(signature, result.hits[0].note.signature)
-    advice =
-      draft.mustChange.length > 0
-        ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
-        : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+    const top = await reviseTopHitAdvice(signature, result.hits[0].note.signature)
+    advice = top.advice
+    revision = top.revision
   }
-  return { coldStart: result.coldStart && hits.length === 0, hits, advice }
+  return {
+    coldStart: result.coldStart && hits.length === 0,
+    hits,
+    advice,
+    ...(revision ? { revision } : {}),
+  }
 }
 
 /**
@@ -338,7 +346,7 @@ export function registerExpertTools(
         render: (_args, value) => textBlock(renderInvoke(value)),
       },
       execute: toolExecute(
-        (args: { name: string; version: string; scenarioId: string; datasetPath?: string; dataset?: unknown }) => {
+        async (args: { name: string; version: string; scenarioId: string; datasetPath?: string; dataset?: unknown }) => {
           const dataset = loadDatasetFromArgs(args)
           const pkg = loadGated(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
@@ -356,7 +364,7 @@ export function registerExpertTools(
           assertDatasetGranted(dataset, contracts)
 
           // E1-1：执行前只读召回（经验只提示不改分——不进 runScenario、不碰 rules.ts）。
-          const experience = experienceHintOf({
+          const experience = await experienceHintOf({
             root: ws.root,
             pkg,
             scenarioId: scenario.id,

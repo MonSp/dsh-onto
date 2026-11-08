@@ -70,10 +70,12 @@ import {
   renderRunText,
   retreatPhraseEcho,
   retreatRenderText,
+  reviseTopHitAdvice,
   toolExecute,
   type BatchRunItem,
   type BatchRunOutput,
   type BatchRunSummary,
+  type TopHitRevision,
 } from './agent-policy.js'
 import {
   assertDatasetGranted,
@@ -1758,13 +1760,20 @@ export function apply(ctx: Context): void {
         '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
         + '命中理由含字段级 signature 新旧对照（scenarioId/ruleRefs/skillRefs/dataBand 等源→新），不止 Jaccard 数字。'
         + '命中含 reviewFocus（下轮复核提示，人审面沉淀的结构位条目）。'
-        + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
-        + '结果仅含结构位（runId/score/outcome/签名字段/reviewFocus）与转人工提示，不含自由流程描述。',
+        + 'top-1 走差异修正双路（LLM 腿可注入/启发式回落）与人工闸：unknown 非空或置信度<0.75 → advice 明确转人工'
+        + '（附 engine/confidence 结构位）；digest 同构短路直接可参考复用。'
+        + '冷启动（无相似经验）或低置信度时不得硬迁移——'
+        + '结果仅含结构位（runId/score/outcome/签名字段/reviewFocus/修正回执）与转人工提示，不含自由流程描述。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
         scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
-        dataset: { type: 'json', description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集）' },
+        dataset: {
+          type: 'json',
+          description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集=S 档）。'
+            + '规模档只看 candidates 数量（S<50/M<500/L≥500）——用户提到数据量时按其数量构造 candidates 数组即可'
+            + '（元素可为占位对象，objects/relations 可为空数组）',
+        },
       },
       output: {
         schema: {
@@ -1774,13 +1783,14 @@ export function apply(ctx: Context): void {
             coldStart: { type: 'boolean', required: true },
             hits: { type: 'array', required: true, items: { type: 'json' } },
             advice: { type: 'string', required: true },
+            revision: { type: 'json' },
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
         render: (args, value) => textBlock(renderRecallText(value as never, redlines(args))),
       },
       execute: toolExecute(
-        (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
+        async (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
           const pkg = load(args.name, args.version)
           const raw = (args.dataset ?? {}) as Partial<RuntimeDataset>
           const dataset: RuntimeDataset = {
@@ -1805,19 +1815,25 @@ export function apply(ctx: Context): void {
           })
           const hits = projectRecallHits(result.hits)
           let advice: string
+          let revision: TopHitRevision['revision'] | null = null
           if (result.coldStart || hits.length === 0) {
             advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
           } else {
-            const draft = buildDiffTable(signature, result.hits[0].note.signature)
-            advice =
-              draft.mustChange.length > 0
-                ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
-                : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+            // E2-2：top-1 走 reviseDiff 双路修正 + 转人工闸（digest 同构由 helper 短路）。
+            const top = await reviseTopHitAdvice(signature, result.hits[0].note.signature)
+            advice = top.advice
+            revision = top.revision
           }
           // value 闸：包内全部场景红线（goalClass 等包自由文本可能撞红线）。
           return toolOut(
             enforceOutputPolicy(
-              { coldStart: result.coldStart, hits, advice, humanReviewRequired: true },
+              {
+                coldStart: result.coldStart,
+                hits,
+                advice,
+                ...(revision ? { revision } : {}),
+                humanReviewRequired: true,
+              },
               phrasesOfPkg(pkg),
             ),
           )
