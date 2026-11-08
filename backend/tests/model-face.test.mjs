@@ -290,6 +290,19 @@ test('渲染助手全冒烟：draft/capabilities 结果可读且分层齐', () =
     rejected: [{ index: 1, reason: 'bad confidence' }],
   })
   assert.ok(text.includes('dc-1') && text.includes('拒收'))
+  // E3-1：入队回执附同批物化提示（一次点头一次 apply，勿逐条）
+  assert.ok(text.includes('同批物化提示'), 'draft_elements 回执须附同批物化提示')
+  assert.ok(text.includes('apply_draft'), '提示须点名 apply_draft 批量路径')
+})
+
+test('E3-1：draft_elements 零入队时不刷同批物化提示', () => {
+  const text = renderDraftResult({
+    package: 'aml-analysis@1.0.0',
+    turnId: 'turn-2',
+    added: [],
+    rejected: [{ index: 0, reason: 'bad' }],
+  })
+  assert.ok(!text.includes('同批物化提示'), '无入队不应刷批量提示')
 })
 
 /* ── E1-1：invoke_expert 执行前自动召回经验（只提示不改分） ────────────── */

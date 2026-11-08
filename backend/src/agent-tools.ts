@@ -1333,6 +1333,9 @@ export function renderDraftResult(v: {
   const rejected = v.rejected ?? []
   const lines = [`包 ${v.package ?? ''} · 轮次 ${v.turnId ?? ''}：入队 ${added.length} 条`]
   if (v.sourceId) lines.push(`CONVERSATION 原料：${v.sourceId}`)
+  if (added.length > 0) {
+    lines.push('同批物化提示：用户一次点头后 apply_draft 传入全部 candidateIds 同批物化（勿逐条）；画布节点内嵌 ✓ 亦可直接人审')
+  }
   for (const a of added) {
     lines.push(`+ [${a.targetKind}] ${a.name}（${a.id}）${a.forcedReview ? ' · 强制人审' : ''}`)
   }

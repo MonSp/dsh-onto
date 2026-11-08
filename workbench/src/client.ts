@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
       // 对话式建模（conversational-modeling P1/P3）
       canvasView: '图谱画布',
       listView: '清单视图',
-      draftHint: '虚线 = 待审草案。建模请在主对话口述（AI 起草、画布自动生长）；人审动作在节点检视器。',
+      draftHint: '虚线 = 待审草案。建模请在主对话口述（AI 起草、画布自动生长）；人审点节点内嵌 ✓/✕，或在检视器批准/驳回。',
       skeleton: '骨架',
       skelNone: '未建骨架（物化门未启用）',
       skelUnconfirmed: '骨架未确认（物化门已锁）',
@@ -242,6 +242,7 @@ window.__ModuleLoader__.load({
       skelCode: '域码',
       skelSave: '保存骨架',
       approveMat: '批准并物化',
+      approveAll: '批准全部并物化',
       prov: '溯源',
       pkgIssues: '包级问题',
       nodeIssues: '节点问题',
@@ -426,7 +427,7 @@ window.__ModuleLoader__.load({
       // conversational modeling (P1/P3)
       canvasView: 'Graph canvas',
       listView: 'List view',
-      draftHint: 'Dashed = pending draft. Describe modeling in the main chat (AI drafts, canvas grows); review actions in the node inspector.',
+      draftHint: 'Dashed = pending draft. Describe modeling in the main chat (AI drafts, canvas grows); review via the inline ✓/✕ on the node or the inspector.',
       skeleton: 'Skeleton',
       skelNone: 'No skeleton (materialize gate inactive)',
       skelUnconfirmed: 'Skeleton unconfirmed (gate locked)',
@@ -436,6 +437,7 @@ window.__ModuleLoader__.load({
       skelCode: 'Domain code',
       skelSave: 'Save skeleton',
       approveMat: 'Approve & materialize',
+      approveAll: 'Approve & materialize all',
       prov: 'Provenance',
       pkgIssues: 'Package-level issues',
       nodeIssues: 'Node issues',
@@ -588,6 +590,8 @@ window.__ModuleLoader__.load({
       '.ogc-node:hover text{text-decoration:underline;}',
       '.ogc-lbl{font-size:10px;fill:var(--dsw-alias-label-primary,#1c2333);pointer-events:none;}',
       '.ogc-edge{stroke-width:1;fill:none;opacity:.65;}',
+      '.ogc-act{cursor:pointer;}',
+      '.ogc-act.off{cursor:default;}',
       '@media (max-width:900px){.ogc-grid{grid-template-columns:1fr;}}',
     ].join('\n')
 
@@ -1326,14 +1330,24 @@ window.__ModuleLoader__.load({
               p.x += (d.x / mag) * step
               p.y += (d.y / mag) * step
               p.x = Math.max(52, Math.min(OG_W - 52, p.x))
-              p.y = Math.max(24, Math.min(OG_H - 24, p.y))
+              // 底边留 34px：草案节点下方内嵌 ✓/✕（E3-1）不被 viewBox 裁掉
+              p.y = Math.max(24, Math.min(OG_H - 34, p.y))
             }
           }
           return pos
         }
 
-        function GraphCanvas(props: { graph: OgGraph; selected: string | null; onSelect: (id: string) => void }) {
-          const { graph, selected, onSelect } = props
+        function GraphCanvas(props: {
+          t: (k: string) => string
+          graph: OgGraph
+          selected: string | null
+          onSelect: (id: string) => void
+          /** E3-1：草案节点内嵌人审动作（批准/驳回），免进检视器。 */
+          onDraftAction?: (id: string, action: 'approve' | 'reject') => void
+          /** 批处理中/ISSUED 只读：内嵌按钮置灰。 */
+          actionOff?: boolean
+        }) {
+          const { t, graph, selected, onSelect, onDraftAction, actionOff } = props
           const pos = useMemo(() => layoutGraph(graph), [graph])
           return h(
             'svg',
@@ -1375,6 +1389,41 @@ window.__ModuleLoader__.load({
                     ? '#d97706'
                     : OG_STROKE[nd.layer] ?? '#9aa3b2'
               const isSel = selected === nd.id
+              // 内嵌人审按钮（E3-1）：草案节点下方 ✓/✕，点选即走 draftAction（stopPropagation 不触发选中）。
+              const actOff = actionOff === true || !onDraftAction
+              const bw = 18
+              const gap = 4
+              const bx = (w - (bw * 2 + gap)) / 2
+              const actBtn = (dx: number, ch: string, action: 'approve' | 'reject', fill: string, fg: string, tip: string): ReactNode =>
+                h(
+                  'g',
+                  {
+                    key: action,
+                    className: actOff ? 'ogc-act off' : 'ogc-act',
+                    transform: `translate(${bx + dx},32)`,
+                    onClick: actOff
+                      ? undefined
+                      : (e: { stopPropagation: () => void }) => {
+                          e.stopPropagation()
+                          onDraftAction?.(nd.id, action)
+                        },
+                  },
+                  h('title', null, tip),
+                  h('rect', {
+                    width: bw,
+                    height: 14,
+                    rx: 4,
+                    fill,
+                    stroke: fg,
+                    strokeWidth: 1,
+                    opacity: actOff ? 0.45 : 1,
+                  }),
+                  h(
+                    'text',
+                    { x: bw / 2, y: 10.5, textAnchor: 'middle', style: { fontSize: '10px', fill: fg, pointerEvents: 'none' } },
+                    ch,
+                  ),
+                )
               return h(
                 'g',
                 {
@@ -1395,6 +1444,12 @@ window.__ModuleLoader__.load({
                   strokeDasharray: nd.draft ? '5 3' : undefined,
                 }),
                 h('text', { className: 'ogc-lbl', x: w / 2, y: 18, textAnchor: 'middle' }, label),
+                ...(nd.draft
+                  ? [
+                      actBtn(0, '✓', 'approve', '#e9f7ef', '#3d9970', t('approveMat')),
+                      actBtn(bw + gap, '✕', 'reject', '#fee2e2', '#dc2626', t('reject')),
+                    ]
+                  : []),
               )
             }),
           )
@@ -1591,7 +1646,11 @@ window.__ModuleLoader__.load({
               setError('')
               setInfo('')
               try {
-                unwrap(await kApi.reviewCandidate({ id, action }))
+                // 已 approved 未物化（画布仍虚线）→ 跳过 review 直接物化，防 CANDIDATE_FINALIZED 打断
+                const cur = candidates.find((c) => String(c['id']) === id)
+                if (!(action === 'approve' && cur?.['status'] === 'approved')) {
+                  unwrap(await kApi.reviewCandidate({ id, action }))
+                }
                 if (action === 'approve') {
                   const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
                     await kApi.materialize({ name: selected.name, version: selected.version, ids: [id] }),
@@ -1604,6 +1663,43 @@ window.__ModuleLoader__.load({
                 } else {
                   setInfo(`✓ ${t('reject')}`)
                 }
+                await loadGraph()
+                onChanged?.()
+              } catch (e) {
+                setError(errText(e))
+                void loadGraph()
+              } finally {
+                setBusy('')
+              }
+            })()
+          }
+
+          /** E3-1 批量人审：画布全部虚线节点一次批准 + 单次 materialize 同批物化（权重归一批语义）。 */
+          const batchApprove = (): void => {
+            if (!selected || readOnly || !kApi || !graph) return
+            void (async () => {
+              setBusy('batch')
+              setError('')
+              setInfo('')
+              try {
+                const ids = graph.nodes.filter((nd) => nd.draft).map((nd) => nd.id)
+                if (ids.length === 0) {
+                  setInfo(t('empty'))
+                  return
+                }
+                const byId = new Map(candidates.map((c) => [String(c['id']), c]))
+                for (const id of ids) {
+                  if (byId.get(id)?.['status'] === 'pending') {
+                    unwrap(await kApi.reviewCandidate({ id, action: 'approve' }))
+                  }
+                }
+                const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
+                  await kApi.materialize({ name: selected.name, version: selected.version, ids }),
+                )
+                setInfo(
+                  `✓ ${t('approveAll')}：${res.applied.length}/${ids.length}`
+                    + (res.skipped.length > 0 ? ` · ${res.skipped.map((s) => s.reason).join('; ')}` : ''),
+                )
                 await loadGraph()
                 onChanged?.()
               } catch (e) {
@@ -1728,7 +1824,14 @@ window.__ModuleLoader__.load({
                 ? h(
                     'div',
                     { className: 'ogc-box' },
-                    h(GraphCanvas, { graph, selected: selNode, onSelect: setSelNode }),
+                    h(GraphCanvas, {
+                      t,
+                      graph,
+                      selected: selNode,
+                      onSelect: setSelNode,
+                      onDraftAction: draftAction,
+                      actionOff: !!busy || readOnly,
+                    }),
                     h(
                       'div',
                       { className: 'ogc-legend' },
@@ -1777,6 +1880,13 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ow-row' },
               h('span', { className: 'ow-stat' }, `${t('draftCount')} ${draftCount}`),
+              !readOnly && draftCount > 0
+                ? h('button', {
+                    className: 'ow-btn',
+                    disabled: !!busy,
+                    onClick: batchApprove,
+                  }, busy === 'batch' ? t('busy') : t('approveAll'))
+                : null,
               graph ? h('span', { className: 'ow-stat' }, `${t('revision')} ${graph.revision}`) : null,
               h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => void loadGraph() }, t('refresh')),
             ),

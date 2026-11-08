@@ -18,6 +18,7 @@ import {
   locatorInWorkspace,
   parseSkillLocator,
   pickSkillSources,
+  renderModelingGuideBody,
   renderSkillBody,
   skillNameFromId,
 } from '../dist/agent-skills.js'
@@ -215,6 +216,18 @@ test('版本比较：非数字段不猜 0（1.x.0 ≠ 1.0.0，确定性回退串
   assert.notEqual(compareVersions('1.x.0', '1.0.0'), 0)
   assert.notEqual(compareVersions('1.x.0', '1.y.0'), 0)
   assert.equal(compareVersions('1.x.0', '1.x.0'), 0)
+})
+
+// ── E3-1：攒批点头（NL 建模对话点头次数减少的工具面杠杆） ──
+
+test('E3-1：引导正文攒批点头——分片不逐片索要批准、一次点头一次 apply 同批物化', () => {
+  const body = renderModelingGuideBody()
+  assert.ok(body.includes('不逐片索要批准'), '引导正文须告知分片起草期间不逐片索要批准')
+  assert.ok(body.includes('一次点头一次 apply'), '引导正文须告知一次点头一次 apply 同批物化')
+  assert.ok(body.includes('一次传入 candidateIds 同批物化'), '引导正文须保留 candidateIds 同批语义')
+  assert.ok(body.includes('画布节点内嵌'), '引导正文须指路画布内嵌人审动作')
+  // 人审契约不回退：humanApproved 语义仍在
+  assert.ok(body.includes('humanApproved'), 'humanApproved 人审契约不得被改写削弱')
 })
 
 test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文要点）', async () => {
