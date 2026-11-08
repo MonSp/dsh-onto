@@ -457,3 +457,36 @@ test('E1-1 源断言：召回只附包络不进引擎，experience 过 value/ren
   const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
   assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
 })
+
+test('P3-2：invoke_expert 经验提示失败降级冷启动，不阻断 runScenario', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  assert.ok(src.includes('P3-2：提示段失败降级冷启动'), '须有 P3-2 降级注释')
+  assert.ok(src.includes('try {') && src.includes('experienceHintOf('), 'experienceHintOf 须包在 try 内')
+  assert.ok(
+    src.includes("advice: '冷启动：无相似经验（不硬迁移，走全量执行）'"),
+    '降级须给出冷启动不硬迁移话术',
+  )
+  // catch 块内不得出现 runScenario——降级路径只填 experience，不跳过执行
+  const tryIdx = src.indexOf('P3-2：提示段失败降级冷启动')
+  const catchIdx = src.indexOf('} catch {', tryIdx)
+  const afterCatch = src.slice(catchIdx, src.indexOf('const result = runScenario', catchIdx))
+  assert.ok(!afterCatch.includes('return'), '降级 catch 不得提前 return 跳过执行')
+})
+
+test('P2-2/P3-3 源断言：materialize derive 失败回滚 + SkillTemplate wire notes 上墙', () => {
+  const coreSrc = readFileSync(join(REPO, 'core', 'src', 'knowledge.ts'), 'utf8')
+  assert.ok(coreSrc.includes('DERIVE_FAILED'), 'materialize 须有 DERIVE_FAILED 受控错误码')
+  assert.ok(coreSrc.includes('restorePkg(pkg, originalSnap)'), 'derive 失败须回滚物化前源快照')
+  assert.ok(coreSrc.includes('delete c.appliedAs'), 'derive 失败须清 appliedAs 保持可重试')
+  assert.ok(coreSrc.includes('opts?.derive ?? derivePackage'), 'derive 须可注入（测试桩）')
+  assert.ok(coreSrc.includes('out.wire'), 'applyDraftToPackage 须回传 wire 接线结果')
+  assert.ok(coreSrc.includes('未接线 pipeline.skillRefs'), '多场景未接线须有结构位 reason')
+
+  const atSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(atSrc.includes('res.notes'), 'apply_draft 须透传 materialize notes')
+  assert.ok(atSrc.includes('注意：${n}'), 'apply_draft render 须上墙 notes')
+  assert.ok(
+    atSrc.includes('直接复用且不覆盖 payload'),
+    'skillBodyUpdateEntry JSDoc 须与实现一致（不覆盖在途 payload）',
+  )
+})

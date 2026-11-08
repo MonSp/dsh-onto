@@ -243,6 +243,8 @@ window.__ModuleLoader__.load({
       skelSave: '保存骨架',
       approveMat: '批准并物化',
       approveAll: '批准全部并物化',
+      approveAllConfirm: '确认批准并物化全部待审草案？',
+      approveReviewFail: '批准失败',
       prov: '溯源',
       pkgIssues: '包级问题',
       nodeIssues: '节点问题',
@@ -438,6 +440,8 @@ window.__ModuleLoader__.load({
       skelSave: 'Save skeleton',
       approveMat: 'Approve & materialize',
       approveAll: 'Approve & materialize all',
+      approveAllConfirm: 'Approve and materialize all pending drafts?',
+      approveReviewFail: 'Review failed',
       prov: 'Provenance',
       pkgIssues: 'Package-level issues',
       nodeIssues: 'Node issues',
@@ -1674,32 +1678,44 @@ window.__ModuleLoader__.load({
             })()
           }
 
-          /** E3-1 批量人审：画布全部虚线节点一次批准 + 单次 materialize 同批物化（权重归一批语义）。 */
+          /**
+           * E3-1 批量人审：画布全部虚线节点一次批准 + 单次 materialize 同批物化（权重归一批语义）。
+           * P2-1：① 批量前 window.confirm（防误触整包写入）；② 逐条 review 失败不中断
+           * （CONCLUSION_BLOCKED 等单条拒绝不拖死整批），失败项汇总进回执。
+           */
           const batchApprove = (): void => {
             if (!selected || readOnly || !kApi || !graph) return
+            const ids = graph.nodes.filter((nd) => nd.draft).map((nd) => nd.id)
+            if (ids.length === 0) {
+              setInfo(t('empty'))
+              return
+            }
+            if (!window.confirm(`${t('approveAllConfirm')}\n${ids.length}`)) return
             void (async () => {
               setBusy('batch')
               setError('')
               setInfo('')
               try {
-                const ids = graph.nodes.filter((nd) => nd.draft).map((nd) => nd.id)
-                if (ids.length === 0) {
-                  setInfo(t('empty'))
-                  return
-                }
                 const byId = new Map(candidates.map((c) => [String(c['id']), c]))
+                const reviewFailed: string[] = []
                 for (const id of ids) {
                   if (byId.get(id)?.['status'] === 'pending') {
-                    unwrap(await kApi.reviewCandidate({ id, action: 'approve' }))
+                    try {
+                      unwrap(await kApi.reviewCandidate({ id, action: 'approve' }))
+                    } catch (e) {
+                      reviewFailed.push(`${id}: ${errText(e)}`)
+                    }
                   }
                 }
                 const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
                   await kApi.materialize({ name: selected.name, version: selected.version, ids }),
                 )
-                setInfo(
-                  `✓ ${t('approveAll')}：${res.applied.length}/${ids.length}`
-                    + (res.skipped.length > 0 ? ` · ${res.skipped.map((s) => s.reason).join('; ')}` : ''),
-                )
+                const parts = [`✓ ${t('approveAll')}：${res.applied.length}/${ids.length}`]
+                if (res.skipped.length > 0) parts.push(res.skipped.map((s) => s.reason).join('; '))
+                if (reviewFailed.length > 0) {
+                  parts.push(`${t('approveReviewFail')} ${reviewFailed.length}: ${reviewFailed.join('; ')}`)
+                }
+                setInfo(parts.join(' · '))
                 await loadGraph()
                 onChanged?.()
               } catch (e) {

@@ -1001,8 +1001,9 @@ function pickSkillBodyPayload(payload: Record<string, unknown>): Record<string, 
 /**
  * D13：SkillTemplate 簇命中已物化（merged）草案 → 正文更新通道。
  * 比对包内元素正文与最新簇载荷：一致 → 回执 bodyUpToDate（诚实状态，消落差）；
- * 过期 → 入队 op=update 正文更新草案（在途 pending/approved 直接复用，pending 载荷刷新到最新簇；
- * 上一代已物化则按 `#N` 换代重提，绕开 update 幂等键防死锁）。元素定位不到 → null（走原 merged 回执）。
+ * 过期 → 入队 op=update 正文更新草案。在途 pending/approved **直接复用且不覆盖 payload**
+ * （人审可能已编辑；载荷落后时物化后下轮重抽象按 `#N` 换代重提，自愈）；
+ * 上一代已物化则按 `#N` 换代重提，绕开 update 幂等键防死锁。元素定位不到 → null（走原 merged 回执）。
  * 只入队不直写包（I1）；物化必经 apply_draft。经验只提示不改分。
  */
 export function skillBodyUpdateEntry(
@@ -2224,6 +2225,7 @@ export function apply(ctx: Context): void {
             results: { type: 'array', required: true, items: { type: 'json' } },
             materialized: { type: 'array', required: true, items: { type: 'string' } },
             skipped: { type: 'array', required: true, items: { type: 'json' } },
+            notes: { type: 'array', items: { type: 'string' } },
           },
         },
         render: (_args, value) => {
@@ -2231,11 +2233,13 @@ export function apply(ctx: Context): void {
             results: Array<{ candidateId: string; status: string; appliedAs: string | null }>
             materialized: string[]
             skipped: Array<{ id: string; reason: string }>
+            notes?: string[]
           }
           const lines = v.results.map((r) => `- ${r.candidateId} → ${r.status}${r.appliedAs ? `（${r.appliedAs}）` : ''}`)
           const head = `同批 ${v.results.length} 条，物化 ${v.materialized.length}：`
           const skips = v.skipped.map((s) => `跳过 ${s.id}：${s.reason}`)
-          return textBlock([head, ...lines, ...skips].join('\n'))
+          const notes = (v.notes ?? []).map((n) => `注意：${n}`)
+          return textBlock([head, ...lines, ...skips, ...notes].join('\n'))
         },
       },
       execute: toolExecute(
@@ -2274,7 +2278,14 @@ export function apply(ctx: Context): void {
           const materialized = results.flatMap((r) => (r.appliedAs !== null ? [r.appliedAs] : []))
           return toolOut(
             enforceOutputPolicy(
-              { approved: true, results, materialized, skipped: res.skipped },
+              {
+                approved: true,
+                results,
+                materialized,
+                skipped: res.skipped,
+                // P3-3：接线等结构位回执（多场景未接线等），不静默吞掉
+                ...(res.notes && res.notes.length > 0 ? { notes: res.notes } : {}),
+              },
               phrasesOfPkg(pkg),
             ),
           )

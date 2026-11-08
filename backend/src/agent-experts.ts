@@ -364,17 +364,27 @@ export function registerExpertTools(
           assertDatasetGranted(dataset, contracts)
 
           // E1-1：执行前只读召回（经验只提示不改分——不进 runScenario、不碰 rules.ts）。
-          const experience = await experienceHintOf({
-            root: ws.root,
-            pkg,
-            scenarioId: scenario.id,
-            datasetSummary: {
-              objects: dataset.objects.length,
-              relations: dataset.relations.length,
-              behaviors: dataset.behaviors?.length ?? 0,
-              candidates: dataset.candidates.length,
-            },
-          })
+          // P3-2：提示段失败降级冷启动——只读提示不得阻断场景执行。
+          let experience: ExperienceHint
+          try {
+            experience = await experienceHintOf({
+              root: ws.root,
+              pkg,
+              scenarioId: scenario.id,
+              datasetSummary: {
+                objects: dataset.objects.length,
+                relations: dataset.relations.length,
+                behaviors: dataset.behaviors?.length ?? 0,
+                candidates: dataset.candidates.length,
+              },
+            })
+          } catch {
+            experience = {
+              coldStart: true,
+              hits: [],
+              advice: '冷启动：无相似经验（不硬迁移，走全量执行）',
+            }
+          }
 
           const result = runScenario(versionDir, scenario.id, dataset)
           assertRunContract(result)

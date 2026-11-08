@@ -748,6 +748,126 @@ test('E1-3 多场景无 scenarioId 不猜接线；单场景缺省接线', () => 
   assert.ok(refs.includes('SKL-TST-EXP-S'))
 })
 
+/* ── P3-3：SkillTemplate 接线结果经 materialize notes 上墙 ── */
+
+test('P3-3：多场景无 scenarioId 物化回执 notes 提示未接线；带 scenarioId 则接线且无 notes', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg({
+    scenarios: (() => {
+      const base = minimalPkg().scenarios[0]
+      const sc2 = JSON.parse(JSON.stringify(base))
+      sc2.id = 'SCN-TST-2'
+      sc2.name = '第二场景'
+      return [base, sc2]
+    })(),
+  })
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([
+      {
+        id: 'dc-skl-nowire',
+        packageId: 'test-pkg',
+        sourceId: '',
+        layer: 'O2',
+        targetKind: 'SkillTemplate',
+        name: '未接线模板',
+        payload: { id: 'SKL-TST-NOWIRE', weights: { 'RULE-TST-S1': 1 } },
+        confidence: 0.9,
+        rationale: '',
+        status: 'approved',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+      {
+        id: 'dc-skl-wired',
+        packageId: 'test-pkg',
+        sourceId: '',
+        layer: 'O2',
+        targetKind: 'SkillTemplate',
+        name: '已接线模板',
+        payload: { id: 'SKL-TST-WIRED', scenarioId: 'SCN-TST-1', weights: { 'RULE-TST-S1': 1 } },
+        confidence: 0.9,
+        rationale: '',
+        status: 'approved',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+    ], null, 2))
+    const r1 = store.materialize(dir, ['dc-skl-nowire'])
+    assert.deepEqual(r1.applied, ['dc-skl-nowire'])
+    assert.ok(Array.isArray(r1.notes) && r1.notes.length === 1, `须有未接线 notes: ${JSON.stringify(r1.notes)}`)
+    assert.match(r1.notes[0], /未接线/)
+    assert.match(r1.notes[0], /SCN-TST-1|scenarioId/)
+
+    const r2 = store.materialize(dir, ['dc-skl-wired'])
+    assert.deepEqual(r2.applied, ['dc-skl-wired'])
+    assert.equal(r2.notes, undefined, '已接线不得带 notes')
+    const pkg = loadPackage(dir)
+    const wired = pkg.skillTemplates.find((s) => s.id === 'SKL-TST-WIRED')
+    assert.ok(wired)
+    const refs = pkg.scenarios.find((s) => s.id === 'SCN-TST-1').pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(refs.includes('SKL-TST-WIRED'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── P2-2：物化后重派生失败 → 回滚源与候选，可重试 ── */
+
+test('P2-2：derive 失败回滚包源、清 appliedAs、候选保持 approved（可重试不 DUP_ID）', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    derivePackage(dir)
+    assert.equal(verifyDerived(dir).ok, true)
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-derive-fail',
+      packageId: 'test-pkg',
+      sourceId: '',
+      layer: 'O2',
+      targetKind: 'ScoreRule',
+      name: '派生失败规则',
+      payload: { id: 'RULE-TST-DERIVE-FAIL', weight: 0.5, expression: '1', threshold: 0.5 },
+      confidence: 0.9,
+      rationale: '',
+      status: 'approved',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    }], null, 2))
+
+    const beforePkg = JSON.stringify(loadPackage(dir))
+    assert.throws(
+      () => store.materialize(dir, ['dc-derive-fail'], { derive: () => { throw new Error('inject derive boom') } }),
+      (e) => e?.code === 'DERIVE_FAILED' && /inject derive boom/.test(e.message),
+      '须抛 DERIVE_FAILED 且含原因',
+    )
+
+    // 包源回滚：无新规则、与物化前一致
+    const afterPkg = loadPackage(dir)
+    assert.ok(!afterPkg.scoreRules.some((r) => r.id === 'RULE-TST-DERIVE-FAIL'), 'derive 失败须回滚新规则')
+    assert.equal(JSON.stringify(afterPkg), beforePkg, '包源须回到物化前快照')
+
+    // 候选：approved、无 appliedAs、未 merged —— 可重试
+    const c = store.getCandidate('dc-derive-fail')
+    assert.equal(c.status, 'approved')
+    assert.equal(c.appliedAs, undefined)
+
+    // 恢复 derive 后重试成功（不撞 DUP_ID）
+    const retry = store.materialize(dir, ['dc-derive-fail'])
+    assert.deepEqual(retry.applied, ['dc-derive-fail'])
+    assert.equal(store.getCandidate('dc-derive-fail').status, 'merged')
+    assert.equal(verifyDerived(dir).ok, true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('字典 ID 自动生成加盐：同名 CJK 字典同批可共存；显式 payload.id 撞车仍拒绝', async () => {
   const { ws, dir, root } = mkWorkspaceWithPkg()
   try {
