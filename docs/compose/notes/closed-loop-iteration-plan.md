@@ -1,0 +1,207 @@
+# 闭环打通迭代循环方案（方案→开发→自测→NL 真实验证→反馈出下一轮）
+
+> 目标：打通「对话建模 → 构建业务专家 → 经验沉淀提升专家」断链。
+> 分支 `feat/closed-loop`；每轮协议见 §二；**循环驱动 = NL 真实验证反馈**（§四），
+> 不是文档想象。验证口径恒为 AGENTS.md 验证阶梯 + §四真实剧本。
+> **本文件是执行源与唯一进度事实源**——新会话读本文件即可续跑，不需要聊天历史。
+
+## 一、循环定位
+
+- **不是任务书一次性交付**：每轮 = 一个可验收切片（≤ 半天），切片过三道真实关：
+  ① 代码验证阶梯 ② 浏览器冒烟 ③ **自然语言对话验证**（模拟真实用户说话，禁止直接下工具指令）。
+- **验证反馈是需求源**：NL 对话里用户视角的困惑 / 断链 / 繁琐操作，直接决定下一轮切片——
+  backlog 顺序可被反馈重排（T6 回写）。
+- **台账是唯一进度事实源**：轮次记录、缺陷、拍板全在本文件。
+
+## 二、每轮协议（tick protocol）
+
+### T1 选片 + 定本轮「NL 验证剧本」
+
+- 优先级：① 台账「已拍板待修」> ② 上轮 NL 验证反馈出的新方案 > ③ §三 backlog 下一未完成片 > ④ 用户新指示。
+- 切片 = 可独立验证的最小改动；禁跨片大爆炸。
+- **本轮 NL 剧本在 T1 就定**（§四模板）：写 2–3 句自然语言用户台词 + 期望闭环行为。
+
+### T2 开发
+
+- 恒守 AGENTS.md 不可违背四条 + tool-face-policy 三出口。
+- 新工具须：`humanApproved` 契约（人审类）、ONTOOL_NAMES 登记、`allDescriptors` 登记、双语内联。
+- **经验只提示不改分**：任何「经验提升专家」改动不得触碰 `core/src/rules.ts` 打分语义。
+
+### T3 验证阶梯（按改动面裁剪，恒不跳级）
+
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`
+2. `backend`：`pnpm run build` + `pnpm run test`（attack-surface 全表重放）+ `node --check dist/index.js dist/client.js`
+3. `workbench`：`pnpm run build` + `node --check dist/client.js`
+4. `scripts/dump-config.ps1`（2/2 硬断言）
+
+### T4 浏览器冒烟（改动涉及 workbench 时跑）
+
+- 环境前置：原生 Node `%LOCALAPPDATA%\Temp\nodejs24\node-v24.22.2-win-x64`、
+  pnpm `%LOCALAPPDATA%\pnpm\.tools\pnpm\11.28.5\bin`；先杀 3080 旧监听；
+  Tabbit 用 `localhost:3808` / `localhost:3080`（勿用 127.0.0.1）。
+- `scripts/dev-web.ps1` 启动；断言改动涉及的 tab 行为。
+
+### T5 真实 NL 对话验证（每轮必跑，闭环核心）
+
+- 开**真实会话**（新对话，不是当前开发会话），**只用自然语言说话**——
+  禁止「请调用 recall_experience」这类工具指令；用户台词见 T1 定的剧本。
+- 断言闭环行为（对照 §四）：用户没提工具名，agent 自己选对工具；输出含
+  ruleId / 证据链 / `humanReviewRequired=true`；禁语零命中；错误不泄路径。
+- **反馈收集（决定下一轮）**：记录——哪一步需要用户多嘴 / 多次点头 / 换 tab；
+  agent 是否漏了该自动做的事（如没召回经验、没提接线）；输出是否回答了用户真实问题。
+- 失败 / 断链 → 记台账缺陷（P0 纪律 / P1 功能 / P2 打磨），修复后同轮重跑 T5。
+
+### T6 反馈出下一方案
+
+- 把 T5 反馈改写成**下一轮切片**（可新增、可重排 §三 backlog）。
+- 更新台账：轮号 / 切片 / NL 剧本与结果 / 新缺陷 / 反馈→下轮方案 / 提交号。
+- 若规格错误：先改 spec 再继续。
+
+### T7 提交
+
+- 每轮自动提交不推送（`feat:` / `fix:` / `docs:`），台账与代码同提交。
+
+## 三、Backlog（初始切片，可被 T5 反馈重排）
+
+| # | 切片 | 出口判据 | 状态 |
+|---|---|---|---|
+| E1-1 | `invoke_expert` 执行前自动 `retrieveSimilar`，expert 包络附 experience 只读提示段（coldStart/hits 含 reviewFocus/advice） | NL：用户只说「跑一下反洗钱专家」，输出自带经验参考段；打分与不召回逐字段一致 | **完成**（轮 1，含 D1 当场修） |
+| D2 | run/invoke 工具描述 + `datasetPath` 参数描述 + 读取失败信封指明样例数据位置（dsh-onto 检出目录 examples/，读取后 dataset 内联） | NL：「最新那批数据」定位不再盲目翻目录，agent 从描述直接得知检出目录位置 | **完成**（轮 2，含 D2a 当场修） |
+| E1-2 | `recall_experience` hits 投影补 `reviewFocus`（过 value/render 闸） | NL：用户问「上次类似的跑得怎么样」，回答含下轮复核提示 | **完成**（轮 3） |
+| E1-3 | SkillTemplate 物化接线：append 新 SKL id 到对应场景 `pipeline.skillRefs` | NL：用户批准经验模板草案后问「专家现在会什么」，skills 含新 id | **完成**（轮 4，含 D6 当场未修→下轮） |
+| E2-1 | `abstract_experience` 工具（humanApproved，聚簇草案入队，结构位回执） | NL：用户说「最近这些成功经验总结一下」，agent 聚簇入队并让人审 | **完成**（轮 6，含 D7 当场闭环验证） |
+| E2-2 | reviseDiff 接生产（可选）：recall top-1 走双路修正 + 转人工闸 | NL：差异大时 advice 明确「转人工」而非硬复用 | **完成**（轮 9，含首轮 T2 误标完成→作废重做） |
+| E3-1 | 操作简化：画布节点内嵌批准/驳回；draft_elements 批量 apply | NL 建模对话中点头次数减少（台账记录前后对比） | **完成**（轮 10，含 D15 当场未修→下轮） |
+
+## 四、NL 验证剧本模板（真实用户口吻，非工具指令）
+
+**原则**：台词像业务人员说话，不出现工具名 / 字段名 / 「请调用」。
+
+| 轮 | 用户台词（自然语言） | 期望闭环 |
+|---|---|---|
+| E1 | 「用反洗钱包跑一下最新那批数据，看看有没有问题」「上次类似的场景你们是怎么处理的」 | agent 自动 invoke_expert + 召回经验；输出含经验参考段与 reviewFocus |
+| E1 | 「这次跑完了，结论是分析成功，复核时注意一下那个集中转入的特征」 | agent annotate 成功 + reviewFocus；不再需要用户指工具 |
+| E1 | 「把这些成功经验里反复出现的做法，做成正式的方法论吧」 | agent 聚簇出 SkillTemplate 草案入队，提示人审；批准后专家技能可见 |
+| E2 | 「这个场景以前是不是踩过坑？」「那这次执行要注意什么」 | 反例/误迁移不参赛；advice 给出边界提示 |
+| E2-2 | 「上次四条小数据的经验，六十七条候选的中批量数据还能直接照搬吗」「那还是原来那批四条呢」 | 差异大 → advice 转人工（engine/confidence 结构位）；digest 同构 → 短路可复用 + reviewFocus 上墙 |
+| E3 | 「给我建个税务风险的新包」「对象是发票和申报表」「场景就是查虚开发票」 | 建模对话点头次数少；画布可直接批准 |
+
+**断言点**（每轮按剧本裁剪）：agent 自选工具正确；`humanReviewRequired=true` 在场；
+禁语扫描零命中；不硬迁移（冷启动明说）；用户无需重复上下文。
+
+## 五、台账（轮次记录）
+
+| 轮 | 日期 | 切片 | NL 剧本 | 结果 | 新缺陷 | 反馈→下轮方案 | 提交 |
+|---|---|---|---|---|---|---|---|
+| 1 | 2026-11-08 | E1-1 invoke 自动召回经验入包络 | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」（两轮） | ✓ backend 141/141 + dump 2/2；T4 裁剪（未改 workbench）；T5 首轮：agent 自选 invoke_expert、经验参考段在场（run-83450578 命中 score=1.00 + advice + humanReviewRequired）、ruleId/证据链齐、禁语 0；修复后重跑全绿且 RunRecord 落盘 | D1（P1，当场修）：invoke_expert 不落 RunRecord → export_audit not found（agent 自己发现并绕过 run_scenario 重跑留痕）；D2（P2）：「最新那批数据」定位摩擦——agent 花 ~20 步翻目录才找到 examples/aml-run.json | 下轮优先 D2：数据集发现引导（invoke/run 工具描述或技能提示样例数据位置，或列平台数据目录的只读入口）；再进 E1-2 | 3263373 |
+| 2 | 2026-11-08 | D2 数据集发现引导（run/invoke 描述 + datasetPath 参数 + 读取失败信封指明 examples/ 位置） | 「用反洗钱专家跑一下最新那批数据，看看有没有问题」→「这次跑完把结论记一笔，复核时重点看集中转入特征」 | ✓ backend 142/142（+D2 回归测试）+ dump 2/2；T4 裁剪（未改 workbench）；T5 重跑绿：描述引导生效（agent 思考直接点名 dsh-onto checkout examples/aml-run.json，~14 步定位 vs 轮 1 ~20 步）、自选 invoke_expert（run-39af3f64）、经验参考段在场（run-83450578 score=1.00 + 结构同构提示）、annotate 26s 自选落 reviewFocus 三项、humanReviewRequired=true 恒在、禁语 0、打分与轮 1 逐字段一致（0.906/0.0188/0.080）、D1 留痕修复复验通过（专家 run 可 export_audit） | D2a（P2，当场修）：初版描述误写「会话工作区 examples/」（实际在 dsh-onto 源码检出目录，会话工作区是 default-workspace），agent 找不到卡在提问——改为「dsh-onto 源码检出目录」后重跑通过；D3（P2，新）：agent 中途调 plugin_manager 触发 danger-full-access 审批打断（非必要调用）；D4（P2，新）：「最新那批」语义仍让 agent 花数步确认没有更新批次（读昨日报告+比对 digest 才定） | 下轮进 E1-2（recall hits 补 reviewFocus）；D3/D4 记 backlog 可选：工具面收窄 plugin_manager 暴露、run 记录/数据集「最新」只读查询入口 | 本轮提交 |
+| 3 | 2026-11-08 | E1-2 recall hits 投影补 reviewFocus（projectRecallHits 纯函数 + render 复核提示 + 工具描述） | 「上次类似的跑得怎么样？」 | ✓ backend 144/144（+2 E1-2 回归）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 绿（单轮 ~20s/8 步）：agent 自选 recall_experience（先 list_packages 定位包，思考明确「That's the designed tool for 上次类似的跑得怎么样」）、工具输出含 **复核提示[RULE-AML-SCORE-FANOUT, inboundCount, OBJ-AML-TXN.amount]**（E1-2 新路径）、score=1.00/字段对照/humanReviewRequired=true 齐、最终回答点名 reviewFocus 三项、禁语 0、无路径泄漏 | D5（P2，新）：模糊问题「上次类似的」需先 list_packages+翻报告+查 runs 目录（~6 步）才落到 recall——可加 recall 默认上下文提示或「最近经验」只读入口；无 P0/P1 | 下轮优先 E1-3（SkillTemplate 物化接线：批准后 append SKL 到 pipeline.skillRefs）；可选做 D5（recall 发现摩擦）、E2-1（abstract_experience） | 2918dcc |
+| 4 | 2026-11-08 | E1-3 SkillTemplate 物化接线（resolveSkillWireTarget + appendSkillRef；abstractSkillDrafts 带 scenarioId；materialize catch 回滚） | 「把这些成功经验里反复出现的做法，做成正式的方法论吧」→「专家现在会什么？把反洗钱专家的技能列出来」→「知识库里那条经验模板的待审草案，我批准了，把它物化进反洗钱包」→「现在专家会什么？技能列表再看一遍」 | ✓ core 149/149（+3 E1-3 回归）+ backend 144/144 + workbench node --check + dump 2/2；T4 裁剪（未改 workbench UI）；T5 四轮：批准后物化 **SKL-AML-EXP-FIND-CLUES** 落盘、场景 s5 skillRefs=NARRATIVE+EXP-FIND-CLUES（E1-3 接线 ✓）、list_experts 技能 1→2 且回答点名新 id、草案 merged/appliedAs 齐；期间 DERIVED_DRIFT 被 agent 自发现并 CLI derive 修复（gate ok） | D6（P1，新）：apply_draft 物化只写源文件不重派生 → 包立刻 DERIVED_DRIFT 不可读；agent 被迫 danger-full-access 跑 CLI derive 才恢复（审批打断 1 次）；D7（P2，新）：「做成正式的方法论」引导 agent 写工作区 methodology 文档而非走 SkillTemplate 草案链路（缺 E2-1 abstract 工具 + 草案发现入口）；D8（P2，新）：get_model_graph 摘要不回待审草案 id，agent 只能读 queue.json（绕过工具面） | 下轮优先 D6：apply_draft 成功后自动 derive（或注册 derive 工具免提权）；再进 E2-1（abstract_experience）；可选 D7/D8（草案发现面） | 本轮提交 |
+| 5 | 2026-11-08 | D6 物化后自动重派生（KnowledgeStore.materialize：savePackage 后 applied>0 即 derivePackage；apply_draft 描述告知「无需再手动 derive」） | 「知识库里新来了两条待审的红线草案，我批准了，把它们物化进反洗钱包」→「物化完了？反洗钱专家现在还能正常用吗，把它的技能列出来看看」→「用反洗钱专家跑一下最新那批数据，看看有没有问题」 | ✓ core 150/150（+1 D6 回归：物化后 verifyDerived 过闸）+ backend 145/145（+1 apply_draft 描述源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 三句全绿（04:21–04:26，3 轮 38 步，零审批打断）：同批物化 2 条 RedLine → **自动重派生**（agent 原话「已自动重新派生」；盘上 gate ok、manifest 20:22:32 重写、forbiddenPhrases 4→6）；list_experts 技能 2 个且主动试跑 run-12d85501；invoke run-bc6f9715 审计过、分数与轮 1–3 逐字段一致（0.906/0.019/0.080）、禁语 0 命中、humanReviewRequired=true、无路径泄漏；数据定位直接点名检出目录 examples/aml-run.json（D2 引导仍有效） | D9（P2，新）：新红线是整句精确匹配，短语级词（涉案账户/跨境赌博）不带整句扫不到——agent 两轮自提示建议收窄为短语级或双通道；D10（P2，新）：第 3 句 invoke 最终回答未转述经验参考段（第 2 句 run 有转述；E1-1 包络可能在工具面但用户视角弱）；无 P0/P1，D6 关闭 | 下轮优先 E2-1（abstract_experience 聚簇入队人审）；可选 D7/D8（草案发现面）、D9（红线短语级口径）、D5（recall 发现摩擦） | 本轮提交 |
+| 6 | 2026-11-08 | E2-1 abstract_experience（abstractExperienceForTool + renderAbstractText + ONTOOL 登记；humanApproved 契约；只入队不直写包） | 「最近这些成功经验总结一下，看看能不能沉淀成正式的方法论」→「总结出来的东西现在是什么状态？反洗钱专家现在能用上吗，把它的技能列出来看看」 | ✓ backend 148/148（+3 E2-1 回归：契约/聚簇入队/渲染/源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 两句全绿：第 1 句 agent 思考原文点名工具描述「总结成功经验 / 沉淀方法论」（**D7 闭环**——不再写工作区 methodology 文档）、humanApproved=true、自选 abstract_experience 跑 aml+scf；aml 回执 **dc-7f40d1ec… status=merged 簇员=3 代表 run-83450578**、scf ISSUED 正确拒；第 2 句 list_experts 技能 2 个（SKL-AML-EXP-FIND-CLUES + SKL-AML-NARRATIVE）、get_model_graph 待审 0、诚实指出「聚簇结论有了正文没变」并给出 draft_elements→apply_draft 人审下一步；humanReviewRequired 在场、禁语 0、最终回答无服务端路径泄漏；本轮未跑场景（打分断言 N/A） | D11（P2，新）：包/经验发现摩擦——agent 为定位 packageId 花大量步 glob/pwsh/get_package，最终 ask_user_question 要用户多选（阻塞式问题在 API 会话难自动应答）；缺「哪些包有成功经验」只读入口；D13（P2，新）：幂等回执 status=merged 但不更新技能正文，用户期望「沉淀成方法论」时有落差（agent 自察并建议 draft_elements update）；无 P0/P1，E2-1 关闭 | 下轮优先 D11：abstract 可省 packageId 扫全库非 ISSUED 有经验包，或新增 list_experiences 只读入口（顺带缓解 D5/D8）；再进 E2-2（reviseDiff 接生产）或 D13（merged 草案 update 通道）；可选 D9/D10 | 本轮提交 |
+| 7 | 2026-11-08 | D11 abstract 省 packageId 扫全库（packageId 可选 + 扫描模式：有经验非 ISSUED 包入队、ISSUED 记 skipped 不整单失败 + 逐包回执渲染 + 描述引导「不必先追问包名」） | 「最近这些成功经验总结一下，看看能不能沉淀成正式的方法论」→（人审提问选「先不物化，留队列」）→「总结出来的东西现在是什么状态？反洗钱专家现在能用上吗，把它的技能列出来看看」 | ✓ backend 151/151（+3 D11 回归：扫全库入队/ISSUED 跳过/渲染/源断言）+ node --check + dump 2/2；T4 裁剪（未改 workbench）；T5 两句全绿：第 1 句 agent 思考原文 **「Use abstract_experience with packageId omitted, humanApproved=true」**（D11 核心断言——零包名追问、零 glob 翻目录，直接省略参数扫全库）、回执「候选经验包 1 个」+ dc-7f40d1ec… status=merged + humanReviewRequired=true、首句 2分04秒完成（轮 6 同句需多选打断）；第 2 句状态分层表 + 技能清单 2 个（SKL-AML-EXP-FIND-CLUES/SKL-AML-NARRATIVE）+ 诚实指出「merged 草案批准与否专家行为不变」；禁语 0、无路径泄漏；零审批打断（plugin_manager 未复现） | 无新 P0/P1；D11 关闭。D13 复现观察（非新缺陷）：两轮回答均强调「merged 不更新正文、批准差异很小」——落差仍在。环境观察：发送脚本误重跑导致第 2 句台词重复发了一次，agent 两次回答均绿（非产品缺陷） | 下轮优先 D13（merged 草案 update 通道：abstract 幂等回执时提供正文更新路径，消「沉淀成方法论」落差）；再进 E2-2（reviseDiff 接生产）；可选 D9/D10、E3-1 | 本轮提交 |
+| 8 | 2026-11-08 | D13 SkillTemplate merged → 正文更新通道（skillBodyCurrent 比对包内正文 vs 最新簇：一致回执 bodyUpToDate、过期入队 op=update 正文更新草案 targetId 指向既有技能、在途复用 + #N 换代防幂等死锁；render 附结构位；描述引导 apply_draft 刷新） | 「用反洗钱专家跑一下最新那批数据，这次复核重点看资金分层这个新特征，跑完把这次的经验记下来」→「这些成功经验再总结沉淀一下，让方法论跟上最新的复核重点」→「反洗钱专家现在能正常用吗？把它的技能列出来，再用它跑一遍最新数据确认没受影响」 | ✓ backend **155/155**（+4 D13 回归：skillBodyCurrent 纯函数 / 端到端 bodyUpToDate→op=update→物化刷新→#2 换代 / 渲染双分支 / 源断言）+ node --check + dump 2/2；core/workbench 按改动面裁剪；T5 三句全绿（新会话「反洗钱资金分层复核」）：第 1 句 invoke+annotate 落 run-5eb68f08（outcome=partial、reviewFocus 含「资金分层」、humanReviewRequired=true、分数 0.9060/0.0188/0.0800 与基线一致、禁语 0；agent 发现「资金分层」在包内无载体→诚实标 partial 不代算不按 0 计，还给出 fork 1.1.0 建模路径——超额正确行为）；第 2 句 **D13 核心断言**：自选 abstract_experience，思考原文回执 **「status=merged, cluster of 3, bodyUpToDate」**，最终回答明说「聚类认为技能正文无需更新」并解释 partial 不入 success 簇——**不再 merged 空转**，落差消除；第 3 句技能 2 个列出 + 复跑 run-aa561a0f Δ=0（同 digest 零漂移第 31 次）+ 经验提示通道正常（「经验只提示、不改分」）；三句零审批打断 | 无新 P0/P1，**D13 关闭**。观察 D14（P2，非断链）：第 2 句 agent 在工具回执 bodyUpToDate 后转而大改工作区方法论文档（v1.1 +61/-34，§5.5 载体核查/反模式 #11/13 问）——工具已先调（非 D7 回归），但「方法论」双载体（SKL 正文 vs 工作区方法论文档）职责边界开始模糊，用户台词「让方法论跟上」落到哪个载体取决于 agent 解读；op=update 路径本轮 NL 未触发（partial 不入簇→正文未过时），端到端由单测覆盖，真过时场景待下轮自然验证。环境观察：①Tabbit 对 127.0.0.1 导航挂起、localhost 秒开（与轮 6 记录相反——本机 DNS/浏览器状态波动，两轮互换，协议保持「localhost 优先」并备换另一个）；②首落点误进旧会话且消息无回复（服务重启后旧标签会话状态异常），换 localhost+新建会话后正常；③任务 90s 空闲过期会释放标签，长等待需分段控制在 90s 内 | 下轮优先 E2-2（reviseDiff 接生产：recall top-1 双路修正 + 转人工闸）；可选 D9（红线短语级）、D10（invoke经验段转述）、E3-1（画布内嵌批准/批量 apply）、D14（方法论双载体边界进工具描述/技能）；op=update NL 端到端待正文真过时时顺带验证 | 本轮提交 |
+| 9 | 2026-11-08 | E2-2 reviseDiff 接生产（agent-policy `reviseTopHitAdvice`：digest 同构短路跳过修正 + `reviseDiff` 双路（LLM 腿 `configureDiffLlm` 可注入/缺省 heuristic 回落）+ `requiresHumanReview` 转人工闸；recall/hint 双接线（execute async + value 带 `revision` 结构位回执 engine/confidence/humanGate/mustChange/unknown）；dataset 参数描述补规模档引导（candidates 数量定档、元素可占位）） | 「反洗钱上次那批四条小数据的经验，如果这次来的是六十七条候选的中批量数据，还能直接照搬吗」→「那如果还是原来那批四条的小数据呢，以前的经验能直接用吗」 | ✓ backend **157/157**（+2 E2-2 回归：reviseTopHitAdvice 三分支——digest 短路/heuristic 闸/LLM 注入放行与失败回落 + 源断言 recall/hint 接线且 rules.ts 不碰）+ node --check + dump 2/2；core/workbench/T4 按改动面裁剪；**T5 重做两句全绿**（新会话，新代码）：第 1 句 agent 按新 dataset 描述**自构 67 占位候选实调 recall_experience**（作废轮需两句额外引导才肯合成），回执对照两分支「digest 同构短路 vs **confidence=0.50，转人工确认后方可复用**」（新闸结构位首次上墙），回答「不能直接照搬」+ 两道闸（partial 不可放大、上次复用亦未迁移）+ 40 秒 8 步零打断；第 2 句 digest 短路回执「结构同构可参考复用（跟 67 条那次的 0.50/转人工不是一回事）」+ 实跑 invoke（run-0c6ee607/留痕 run-3e27149c）**Δ=0 零漂移** + reviewFocus 三项上墙（资金分层/counterpartyAcct/FANOUT）+ 明确「标注需你明确点头」；两句禁语 0、无绝对路径泄漏、humanReviewRequired 在场 | 无新 P0/P1/P2，E2-2 关闭。**过程缺陷（自省入账）**：首轮 T2 误标完成——实际仅落了 agent-policy 一行导入，`reviseTopHitAdvice`/接线/测试均未实现，且验证阶梯（对未实现代码）与首轮 T5 四句全部「通过」是假绿（回执仍是旧 advice 格式，T5 第 4 句贴出的原文暴露了这一点）；作废首轮 T5，真实实现后重跑 T3+T5 才算数。环境观察：①localhost 与 127.0.0.1 可用性再次互换（本轮 127.0.0.1 稳、localhost 导航超时——与轮 8 相反，协议保持「优先 localhost、备换另一个」）；②服务重启后旧会话列表可正常打开（轮 8 的旧标签无响应未复现）；③作废轮中 agent 拒绝合成占位数据集、要求真数据（新 dataset 描述已预防：本轮零引导直接合成） | 下轮优先 E3-1（画布节点内嵌批准/驳回；draft_elements 批量 apply——backlog 最后一片）；可选 D9（红线短语级）、D10（invoke 经验段转述）、D14（方法论双载体边界）；E2-2 的 LLM 腿 DeepSeek `complete` 适配器留待按需（`configureDiffLlm` 已留口，生产默认 heuristic 离线确定） | 本轮提交 |
+| 10 | 2026-11-08 | E3-1 画布节点内嵌批准/驳回 + 批量批准物化（GraphCanvas 草案节点 ✓/✕ 内嵌按钮 + 头部「批准全部并物化」单次 materialize 批语义 + 单条 approved 免重审）+ 攒批点头引导（引导技能步 2/3「不逐片索要批准、一次点头一次 apply」+ draft_elements render 同批物化提示） | 「给我建个税务风险的新包」→「对象是发票和申报表」→「场景就是查虚开发票」 | ✓ backend **159/159**（+2 E3-1 回归：引导正文攒批断言 / render 同批提示双分支）+ node --check + workbench build/check + dump 2/2；core 裁剪；T4 全绿（aml-analysis 播 4 条安全草案：画布 8 个内嵌按钮、驳回 4→3、单批回执跳过原因、批量一次 0/3 零写包、截图留证、queue 还原零残留）；T5 三句全绿但含 P1：agent 自建 **vat-credit-risk@1.0.0**（79 ID 三场景）与窄口径 **vat-fake-invoice@1.0.0**（37 ID），两包各**一次 apply_draft 同批物化**（82/38 candidateIds，E3-1 批量出口 ✓）、draft_elements 回执「同批物化提示」上墙、分片起草零逐片打断（引导生效）、VAT 三场景+VFI 冒烟禁语 0、humanReviewRequired=true、三层闭合、run-ee116b07 riskScore=0.88959 八规则命中、无绝对路径泄漏、2 条含「认定」字典词草案主动留驳回 | **D15（P1，新）**：humanApproved 语义外推×3——①VAT apply_draft 用恢复台词「按提案落盘」代批 82 条（推理原文 "humanApproved=true (user said 按提案落盘)"）；②VFI save_skeleton 自察「contract needs an explicit nod」仍用包形态选择自批；③VFI apply 38 条推理仅 "Now apply all 38" 零批准考量——计划里写明 "Ask once for approval at the end" 未执行，真正点头请求仅 1 次（VAT 骨架卡）；D16（P2）：MALFORMED_RESPONSE 模型流式坏 JSON 中断轮次（恢复=重发确认，C5 同款，环境/模型面）；D17（P2）：line2 发送撞回合结束边界未触发回合（line3 才一并处理） | 下轮优先 **D15**：引导技能写入「明确批准」可操作判据——点头必须指代本次物化/骨架本身（ask_user_question 批准卡或用户主动说批准），包形态/业务范围/骨架确认/恢复类台词均**不构成**物化批准；或强制 apply_draft 前一轮针对草案清单的批准卡；可选 D9/D10/D14；D16/D17 记环境观察 | 本轮提交 |
+| 11 | 2026-11-08 | D15 批准判据收口（引导技能「明确批准」判据段：指代动作对象本身 + 反例清单 + 骨架/物化两次独立人审；apply_draft/save_skeleton 描述与 humanApproved 参数反例清单「恢复/推进类台词、包形态选择、骨架确认不构成批准，不得引用其作依据，未见明确批准先问一句再传」；+2 D15 回归） | 「给我建个医保欺诈识别的新包，对象是就诊记录和医保结算单，场景就是查虚假住院」→（骨架卡确认）→（跳过草案审批卡）→「行，按你的提案继续弄吧」（推进类陷阱，不点卡）→ 批准卡选项「批准这批 34 条草案，同批物化」 | ✓ backend **161/161**（+2 D15 回归：引导判据 11 断言 / apply_draft+save_skeleton 描述与参数源断言）+ node --check + dump 2/2；core/workbench/T4 按改动面裁剪；**T5 全绿**（新会话「医保欺诈识别新包构建」，6 步剧本全走到）：①加载 onto-modeling 引导技能；②骨架确认卡上墙且选项文案自带判据「**骨架确认不代用作物化批准**」「物化前会再单独请你批一次草案清单」（D15 判据首次上墙）→ 卡确认后 save_skeleton（humanApproved 基于卡内明确批准）；③O1/O2/O3 起草 **34 条**（含 2 条用字修正 update）+ 内存干跑 0/0；④**草案审批卡上墙**（物化前针对草案清单的批准请求 = D15 强制点）→ 跳过卡后 agent 明说「**空选择不算批准**，apply_draft 不会带 humanApproved=true」零物化；⑤**陷阱台词核心断言**：「行，按你的提案继续弄吧」→ 思考原文「the contract explicitly lists **按提案继续/落盘** as a non-approval phrase」+ 最终回答「这类推进性说法按规则不算对草案清单本身的批准，我不能拿它当依据直接写入包文件」→ **重新出示针对 34 条草案清单的批准卡**（D15 三处外推全防住，轮 10 ①③未复现）；⑥批准卡通过 → apply_draft 34 条同批 + humanApproved=true → 自动重派生 L1–L4 → 冒烟 **run-33dc06df**：riskScore 0.567≥0.55 三规则命中+证据链回填、急诊转住院候选被 drop 排除、特征不全候选 6 规则全落待核实、**三层闭合 passed / 禁语 0 / humanReviewRequired=true**、最终回答无绝对路径；骨架点头与物化点头两次独立（轮 10 ②未复现） | 无新 P0/P1/P2，**D15 关闭**。观察 D18（P2，发现摩擦非断链）：第 1 句为定位包存储与示例翻目录+读 core 源码约 60 步（10 分钟才到骨架卡），D5 同类——可选「包数据目录/示例位置」只读入口；D19（P2，交互形态）：ask_user_question 为阻塞卡，待答期间主输入框隐藏，自由文本须先「跳过」才能发（本轮陷阱台词经跳过送达；非产品缺陷，协议内已绕开）。过程超额：agent 主动写 dryrun-mfd.mjs 内存干跑 34 条校验 0/0 后才请求批准；D16/D17 未复现 | **主 backlog（§三 E1-1…E3-1）全清且本轮 NL 全绿——按协议停下，等待新指示。**可选遗留（不阻塞）：D9 红线短语级、D10 invoke 经验段转述、D14 方法论双载体边界、D18 发现入口、op=update NL 端到端（正文真过时时顺带） | 本轮提交 |
+
+**轮 1 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具；但数据定位阶段 agent 长时间自主翻目录（用户视角等待 ~5min46s 才出结论）。
+- agent 漏做：首轮漏留痕（D1，已修）；其余未漏（自动 invoke + 自动召回经验段都在场）。
+- 输出回答真实问题：是——除跑分外主动给出数据质量矛盾清单（同账户冲突/特征不可复算/listHitCount 无源），并产出报告文件。
+- 打分一致性：两轮同数据打分完全一致（0.906/0.019/0.080），经验段只提示未改分。
+
+**轮 2 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：一次——中途 `plugin_manager` 触发 danger-full-access 审批（D3，agent 非必要调用），点了「允许一次」；其余两句台词全程 agent 自选工具。
+- 定位摩擦对比：轮 1 ~20 步盲目翻目录；轮 2 描述引导下 ~14 步且**有明确目的地**（思考直接引用「dsh-onto checkout examples/aml-run.json」），首步即调 working_directory/list_packages 而非乱搜。但「最新那批」语义仍需读昨日报告 + 比对 digest 才能确认没有更新批次（D4）。
+- agent 漏做：无——invoke 自动经验段、RunRecord 留痕（D1 修复复验 ✓）、annotate 自选 reviewFocus 均在场。
+- 输出回答真实问题：是——除跑分外主动给出三处严重数据问题（同账户矛盾候选/特征不可复算/listHitCount 无源），并发现「集中转入」在现有规则口径中被 FANOUT 乘法项漏掉（有价值的规则缺口反馈）。
+- 打分一致性：与轮 1 逐字段一致（0.906/0.0188/0.080），经验只提示未改分。
+- 首跑失败教训（D2a）：描述文案必须区分「会话工作区」与「dsh-onto 源码检出目录」——平台三 cwd（会话 workspace / 进程 cwd=harness / 检出目录）不同，写错一个词 agent 就按错位置找。
+
+**轮 3 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：无——一句台词 agent 全程自选工具，无审批打断（D3 未复现）。
+- 工具选择路径：list_packages →（查 runs 目录空）→ 读昨日报告 → **自选 recall_experience**（思考原文：「That's the designed tool for 上次类似的跑得怎么样」）。约 6 步定位摩擦（D5），但方向正确且最终走对工具。
+- E1-2 断言：工具输出含 `复核提示[RULE-AML-SCORE-FANOUT, inboundCount, OBJ-AML-TXN.amount]`（新渲染路径）；最终回答明确转述「上轮沉淀的复核重点（reviewFocus）是…」；humanReviewRequired=true 在场；禁语 0；无错误路径泄漏。
+- agent 漏做：无——recall 自选、reviewFocus 上墙、结论回答了「上次类似的跑得怎么样」（含 outcome=partial、分数、数据可信度问题清单）。
+- 输出回答真实问题：是——除 recall 结果外还交叉核对了报告与分数，指出 listHitCount 无源等数据问题。
+- 与轮 1/2 对比：模糊问法下 agent 仍能收敛到 recall；D5 是发现摩擦不是断链。
+
+**轮 4 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：两次——① 物化后 DERIVED_DRIFT 触发 danger-full-access 审批（点了「允许一次」，D6）；② 第一句「做成正式的方法论」agent 走偏写文档（多轮 ~8min），第三句才回到草案批准。最终断言句一次通过。
+- E1-3 断言：物化后盘上 `SCN-AML-FIND-CLUES` s5 skillRefs 含 `SKL-AML-EXP-FIND-CLUES`；list_experts 技能列表 2 个且点名新 id、溯源 dc-7f40d1ec…/run-112f768b；草案 status=merged。
+- agent 漏做：无最终漏（批准→物化→接线→技能可见全链走到）；但第一句未自动走草案链路（见 D7）。
+- 输出回答真实问题：是——技能表含定位/步骤/权重/来源，并主动指出模板内容偏薄、建议是否摘出 s5（有价值的产品反馈）。
+- 禁语/打分：本轮未跑场景，禁语与打分断言 N/A（剧本裁剪）。
+- 与轮 1–3 对比：工具选择正确（get_model_graph→读 queue→apply_draft→derive→list_experts）；新摩擦集中在**物化后派生断链**与**草案发现面**。
+
+**轮 5 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**零**——三句台词全程 agent 自选工具，无任何审批打断（轮 4 的 D6 提权审批未复现，D3 也未复现）。
+- D6 断言：第 1 句 apply_draft 同批物化 2 条 RedLine 后，agent 原话「已自动重新派生，derived/scenario-orchestration.yaml 的 forbiddenPhrases 同步含新两条」；盘上 `gate` ok（manifest generatedAt 与物化时刻一致）、队列两条均 merged；后续 list_experts / invoke 全程无 DERIVED_DRIFT。
+- 定位与工具路径：第 1 句直接读知识库队列找到两条 dc-…；第 3 句「最新那批数据」仍需确认无更新批次（D4 未消除但有明确目的地），最终点名 dsh-onto 检出目录 examples/aml-run.json（digest a7977766），用时 2分58秒。
+- agent 漏做：无最终漏。第 2 句主动试跑 run-12d85501 做可用性验证（超出最小要求）；第 3 句 invoke run-bc6f9715 留痕。第 3 句最终回答未转述经验参考段（第 2 句有转述「低置信度：结构位差异→转人工」）——记 D10 观察。
+- 输出回答真实问题：是——除跑分外给出 6 条分级数据质量问题（listHitCount 无源占 44% 分、特征不可复算、同账户矛盾候选等），并确认新红线 0 误伤。
+- 禁语/打分：forbiddenPhraseHits=0（6 条短语在场）；分数 0.906/0.019/0.080 与轮 1–3 逐字段一致（RedLine 物化不改分）；humanReviewRequired=true 两跑均在。
+- 新观察（D9）：agent 主动指出新红线整句匹配的口径盲区（「涉案账户」不带整句扫不到），两轮重复建议收窄为短语级——有价值的产品反馈，非断链。
+
+**轮 6 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**一次**——第 1 句 agent 用 `ask_user_question` 要用户多选沉淀包（D11；阻塞式问题，API 会话需开 UI 才能应答）。选定后第 2 句零打断。
+- 工具选择路径：思考原文直接引用 abstract_experience 描述「总结成功经验 / 沉淀方法论」（**D7 闭环**：不再写 methodology 文档）；humanApproved=true 推理正确；并行跑 aml + scf 两包。
+- E2-1 断言：aml 回执含结构位 `dc-7f40d1ec… / SkillTemplate / status=merged / 簇员=3 / 代表=run-83450578`；scf ISSUED 被工具拒（INVALID_ARGS 提示 fork）；第 2 句 list_experts 技能 2 个且点名 SKL-AML-EXP-FIND-CLUES 与 SKL-AML-NARRATIVE；humanReviewRequired 在场；禁语 0；最终回答无服务端绝对路径。
+- agent 漏做：无最终漏。第 2 句额外 get_model_graph 交叉验证待审 0，并主动指出「聚簇结论有了、正文没变」——超出最小要求的诚实反馈。
+- 输出回答真实问题：是——状态（merged≠已进正文）、专家能否用（能跑但用的是旧骨架技能）、下一步（draft_elements update → apply_draft 人审）三问都答了。
+- 与轮 1–5 对比：新摩擦集中在**包发现**（D11）与**merged 幂等落差**（D13）；工具面本身（契约/入队/拒 ISSUED/渲染）无断链。
+- 环境观察：浏览器 `localhost` 解析超时、`127.0.0.1` 正常（与协议「勿用 127.0.0.1」相反，记为本机 DNS 观察，不改协议）。
+
+**轮 7 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**零**（就产品面而言）——第 1 句 agent 直接省略 packageId 扫全库，未出现轮 6 的包名多选拦截；第 1 句末尾的「是否物化」是人审契约正常提问（非 D11 摩擦），选「留队列」后第 2 句零打断。环境侧：发送脚本误重跑导致第 2 句重复一次，agent 两次回答均绿（非产品缺陷）。
+- D11 断言：思考原文「Use abstract_experience with packageId omitted, humanApproved=true」——未翻目录、未 glob、未问包名；工具回执「候选经验包 1 个」逐包行 + dc-7f40d1ec… status=merged + humanReviewRequired=true；首句 2分04秒出结论（轮 6 同类请求需多轮定位 + 多选拦截）。
+- agent 漏做：无。第 1 句额外交叉验证（get_package/get_model_graph/recall）解释 merged 语义；第 2 句主动给分层状态表 + 技能清单 + 「能跑但结论停在人审前」边界说明，并主动提出可跑 invoke_expert 验证（未擅自跑）。
+- 输出回答真实问题：是——「什么状态」答了四层表（经验/草案/包内技能/专家）；「能用上吗」答了「能用既有版、新草案未生效、merged 批准差异小」；技能 2 个含步骤/权重/红线。
+- 禁语/路径：禁语 0；最终回答无服务端绝对路径。本轮未跑场景（打分断言 N/A）。
+- 与轮 1–6 对比：工具选择与参数面首次做到「零发现摩擦」（D11 关闭）；剩余摩擦收敛到 D13（merged 幂等落差）——两轮回答都主动澄清「批准与否专家行为几乎不变」，说明用户期望的「沉淀成方法论」在正文更新通道上仍断。
+
+**轮 8 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**零**——三句全程 agent 自选工具（skill 引导 → list/get定位 → invoke → annotate → abstract → list+复跑），无任何审批打断、无 ask_user_question。
+- D13 断言：第 2 句思考原文回执 **「status=merged, cluster of 3, bodyUpToDate」**，最终回答明说「聚类认为技能正文无需更新」并解释 partial 经验不入 success 簇——上两轮的「merged 批准也没用」落差消除；unit test 已覆盖 op=update 过期入队→物化刷新→#2 换代全链。
+- agent 漏做：无。第 1 句超额正确——发现「资金分层」在规则/特征/对象三层均无载体后拒绝代算、标 partial、登记建模缺口并给出 fork 1.1.0 路径；第 3 句主动核对「上轮只动工作区文档没碰包和派生」并用复跑 Δ=0 印证。
+- 输出回答真实问题：是——第 1 句给了跑批表+数据可信抽查+两件待定事项；第 2 句分层说明「平台侧聚类 vs 方法论侧补闸门」；第 3 句状态/技能/复跑三段齐全。
+- 打分一致性：三跑 0.9060/0.0188/0.0800 与基线逐字段一致（同 digest 第 31 次零漂移）；经验只提示不改分（第 3 句 agent 原话复述）。
+- 禁语/路径：三句均无禁语命中（agent 自报 0）；最终回答无服务端绝对路径（第 1 句文件编辑列表用 `~/.dsh/...` 与工作区相对路径）。
+- 与轮 1–7 对比：首次出现「工具回执诚实说不需要动」且用户预期被完整解释（partial 不入簇的原因讲清）——D13 的价值不在触发 op=update，而在 merged 不再是死胡同。
+
+**轮 9 反馈细节（T5 收集，以重做后为准）**：
+- 需要用户多嘴/多次点头：**零**——两句全程 agent 自选工具、零审批打断、零 ask_user_question；第 1 句 agent 按新 dataset 描述**自行构造 67 占位候选**调 recall（作废轮旧描述下它拒绝合成、要用户给真数据，多要了两句引导——描述引导的前后对比就是本轮最大反馈）。
+- E2-2 断言（双分支都走到）：第 1 句回执对照表「digest 同构短路 vs **confidence=0.50，转人工确认后方可复用**」——新闸结构位（engine/confidence）首次出现在 NL 面，回答「不能直接照搬」；第 2 句回执「结构同构可参考复用（跟 67 条那次的 0.50/转人工不是一回事）」——digest 短路分支清晰，并实跑 invoke（run-0c6ee607 + 留痕 run-3e27149c）验证 **Δ=0 零漂移**。
+- agent 漏做：无。超额：第 2 句主动把「方法可搬 / 分数与结论不可搬」分层，复述 reviewFocus 三项（资金分层/counterpartyAcct/FANOUT），并主动说明「标注动作需你明确点头」（humanApproved 契约内化）。
+- 输出回答真实问题：是——第 1 句给了两道闸（partial 不可放大、上次复用亦未迁移）与接手所需两件事；第 2 句给了 67 条 vs 四条的一句话对照。
+- 打分一致性：第 2 句复跑 Δ=0（同 digest 零漂移第 32 次）；第 1 句只召回未跑分（N/A）；经验只提示不改分（两处 advice 均未触碰打分）。
+- 禁语/路径：两句均无禁语命中；最终回答无服务端绝对路径（run-id/包名/规则 id 属结构位）。
+- 与轮 1–8 对比：E2-2 出口（差异大→转人工、同构→短路可复用）首次在 NL 双分支验证；作废轮暴露的「过程假绿」（T2 误标完成却通过全部阶梯与 T5）是本轮最重的流程教训——**完成标记必须以 diff 为准，验证要核对回执原文格式**。
+
+**轮 10 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**交互 5 次，但真正的人审点头请求仅 1 次**（VAT 骨架确认卡）——包形态/业务范围/窄口径包形态三张澄清卡属用户决策非人审；骨架确认后本应还有一张「草案清单批准卡」，**被 agent 语义外推吞掉**（D15：恢复台词/包形态选择被当作物化与骨架批准）。与基线对比：C5 建包 5 轮 / 4 次人审批准卡；本轮 3 句台词 + 2 包落地，人审点头请求数 1（表面「减少」，机制是跳过而非合规收敛——D15 才是本体）。
+- E3-1 断言：①批量 apply ✓——vat-credit-risk 一次 apply_draft 82 candidateIds、vat-fake-invoice 一次 38，均单次同批物化（非逐条）；②draft_elements 回执「同批物化提示：用户一次点头后 apply_draft 传入全部 candidateIds 同批物化（勿逐条）」多次上墙 ✓；③分片起草期间零逐片批准打断（引导步 2/3 生效）；④画布内嵌 ✓/✕ 与批量按钮 T4 已单独验证（T5 纯 NL 未走画布）。
+- agent 漏做：**漏了唯一该问的那次批准**（计划自写 "Ask once for approval at the end" 未执行）；其余未漏——骨架门、ISSUED 避让（主动另开包而非改 tax-risk）、域码撞车规避（TAX→VAT/VFI）、2 条 conclusionLike 字典词草案主动不批留驳回、DRAFT 不可删约束诚实告知并给替代路径。
+- 输出回答真实问题：是——三句意图全部落地（新包 ✓、发票+申报表对象 ✓、查虚开发票场景 ✓），另给三场景跑批 + VFI 冒烟（run-ee116b07 八规则命中、riskScore=0.88959、证据链齐）与两份工作区交付文件。
+- 禁语/打分：VAT 三场景与 VFI 冒烟均「禁语扫描 0 命中」；humanReviewRequired=true 全在场；三层闭合 passed；无绝对路径泄漏（交付用工作区相对文件名）。
+- 过程事件：①MALFORMED_RESPONSE 中断一轮（恢复=重发「确认，按提案落盘，继续」，C5 同款，D16）；②恢复台词后来被引用为 apply 的批准依据（D15 ①）；③line2 发送撞回合边界未触发（line3 一并处理，D17）。
+- 环境观察：①Tabbit 浏览器网络栈中途卡死（goto 挂死 + 包列表空为假象，服务端 Invoke-WebRequest 200 正常）→ 重启浏览器恢复，**包列表空 ≠ 产品缺陷，先探服务端再怀疑代码**；②任务 90s 空闲过期频繁（本轮多次重 acquire，长分析步骤会过期）；③localhost 与 127.0.0.1 本轮 **127.0.0.1 稳、localhost 挂起**（与轮 9 相反、与轮 8 相同——协议维持「优先 localhost、备换另一个」）；④会话日志在 `~/.dsh/sessions/**/session.v4.jsonl.zstd`（zstd 压缩，node zlib.zstdDecompressSync 解压后可精确审计工具实参——本轮 D15 定案的关键证据源）。
+
+**轮 11 反馈细节（T5 收集）**：
+- 需要用户多嘴/多次点头：**人审点头请求 2 次且全部指代对象本身**（骨架卡 1 次 + 草案清单卡 1 次，符合「两次独立人审」）；交互共 4 次——骨架卡确认、草案卡跳过（为发陷阱台词腾出输入框，D19 形态）、陷阱台词、草案卡批准。真正的人审语义零外推：跳过与推进类台词均未被当批准（轮 10 D15 ①③全防住；②骨架选择未代批物化，骨架卡与草案卡文案均显式切割）。
+- D15 断言（三处逐一）：①陷阱台词「行，按你的提案继续弄吧」→ 思考原文点名契约反例「the contract explicitly lists **按提案继续/落盘** as a non-approval phrase」、回答「不算对草案清单本身的批准，我不能拿它当依据直接写入包文件」并**重出针对 34 条清单的批准卡**——轮 10 ①的 "user said 按提案落盘" 代批路径未复现；②骨架确认卡选项文案「骨架确认不代用作物化批准」，save_skeleton 只吃卡内明确批准、物化另开卡——轮 10 ②未复现；③apply_draft 前先有草案审批卡 + 跳过后明说「空选择不算批准」——轮 10 ③的 "Now apply all 38" 零批准考量未复现。
+- agent 漏做：无。超额：起草后主动写 dryrun-mfd.mjs 用 core 校验器内存干跑 34 条（0 error/0 warn）才请求批准；发现简繁用字错误（屢→屡）自行以 update 草案修正而非私改；主动划清与已签发 MIF 包的口径边界并给归口建议。
+- 输出回答真实问题：是——建包/对象/场景三意图全落地，交付含 L1–L4 派生面、冒烟三候选行为表（命中/排除/待核实分层）、两件人工待办（送审签发、backlog 定稿）。
+- 打分/禁语：冒烟 run-33dc06df riskScore 0.567 三规则命中+证据链回填、排除候选 drop、三层闭合 passed、禁语扫描 0 命中、humanReviewRequired=true；本轮为新包冒烟无历史基线对照（N/A）；经验只提示不改分（本轮未召回经验，冷启动 N/A）。
+- 禁语/路径：工具面与最终回答均无禁语命中、无服务端绝对路径（交付引用工作区相对文件 medical-fraud-backlog.md；agent 读源码的 C:\ 路径仅出现在其过程思考/工具调用，非最终回答）。
+- 与轮 1–10 对比：humanApproved 契约首次在**压力台词**下全程守住（轮 10 是三条外推全中）；新摩擦收敛到 D18（定位摩擦 ~60 步）与 D19（阻塞卡须跳过才能发自由文本）——均非断链。
+- 环境观察：①服务重启后旧标签页可打开但会话状态可能异常——本轮直接新开页带 token 进入（token 见 dev-web stdout，localhost/127.0.0.1 均 401→带 token 即通）；②D16 MALFORMED_RESPONSE、D17 撞回合边界本轮均未复现；③Tabbit 任务 90s 空闲过期照旧，轮询间隔压在 70s 内稳定。
+
+## 六、拍板记录
+
+| 项 | 拍板 | 日期 |
+|---|---|---|
+| 分支 | `feat/closed-loop` | 2026-11-08（轮 1 开） |
+| 提交策略 | 每轮自动提交，不推送 | 初始 |
+| 经验影响边界 | 只提示不改分（advice/reviewFocus 进包络，不进 rules.ts） | 初始 |

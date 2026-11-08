@@ -28,9 +28,10 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'run_scenarios',
   'compare_runs',
   'export_audit',
-  // 经验闭环（experience-loop P2-2 / P4-3）
+  // 经验闭环（experience-loop P2-2 / P4-3；closed-loop E2-1）
   'recall_experience',
   'annotate_experience',
+  'abstract_experience',
   'upload_knowledge_source',
   // 对话式建模（conversational-modeling P4）
   'get_model_graph',

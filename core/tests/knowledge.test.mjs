@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, draftCandidateId, knowledgeSourceId, loadPackage, savePackage, readPackageMeta, validateDraftItem } from '../dist/index.js'
+import { KnowledgeStore, HeuristicLlm, applyDraftToPackage, draftCandidateId, knowledgeSourceId, loadPackage, savePackage, readPackageMeta, validateDraftItem, derivePackage, verifyDerived, readManifest } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, mkWorkspace } from './helpers.mjs'
 
 const llm = new HeuristicLlm()
@@ -657,6 +657,217 @@ test('物化侧数值兜底：reviewGate.threshold/weight 的 NaN 不入库，�
   assert.equal(rule.threshold, undefined)
 })
 
+test('E1-3 SkillTemplate 物化接线：append SKL 到对应场景 pipeline.skillRefs', () => {
+  const pkg = minimalPkg()
+  const before = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(!before.includes('SKL-TST-EXP-1'))
+  const id = applyDraftToPackage(pkg, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '经验模板',
+    payload: {
+      id: 'SKL-TST-EXP-1',
+      scenarioId: 'SCN-TST-1',
+      weights: { 'RULE-TST-S1': 1 },
+      steps: ['候选 {candidateId}'],
+    },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.equal(id, 'SKL-TST-EXP-1')
+  const after = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(after.includes('SKL-TST-EXP-1'), `skillRefs 应含新 SKL: ${after.join(',')}`)
+  // 已有 SKILL_RUN 步上追加，不新建步（duties 对齐不破）
+  const skillSteps = pkg.scenarios[0].pipeline.filter((s) => s.stepType === 'SKILL_RUN')
+  assert.equal(skillSteps.length, 1)
+  assert.deepEqual(skillSteps[0].skillRefs, ['SKL-TST-N', 'SKL-TST-EXP-1'])
+  // 显式错误 scenarioId → fail-loud（resolve 在 push 前，不得留下半成品）
+  assert.throws(
+    () => applyDraftToPackage(pkg, {
+      layer: 'O2', targetKind: 'SkillTemplate', name: '坏接线',
+      payload: { id: 'SKL-TST-EXP-2', scenarioId: 'SCN-NOPE', weights: {} },
+      confidence: 0.9, rationale: '', conclusionLike: false,
+    }),
+    /WIRE_SCENARIO_NOT_FOUND|接线场景不存在/,
+  )
+  assert.ok(!pkg.skillTemplates.some((s) => s.id === 'SKL-TST-EXP-2'), '失败接线不得留下模板')
+})
+
+test('E1-3 materialize 接线失败回滚：模板与 skillRefs 均不落盘', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-skl-wire-fail',
+      packageId: 'test-pkg',
+      sourceId: 'src-x',
+      layer: 'O2',
+      targetKind: 'SkillTemplate',
+      name: '坏接线模板',
+      payload: { id: 'SKL-TST-WIRE-FAIL', scenarioId: 'SCN-GHOST', weights: {} },
+      confidence: 0.9,
+      rationale: '',
+      status: 'approved',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    }], null, 2))
+    const r = store.materialize(dir, ['dc-skl-wire-fail'])
+    assert.equal(r.applied.length, 0)
+    assert.ok(r.skipped.some((s) => /接线场景不存在/.test(s.reason)))
+    const pkg = loadPackage(dir)
+    assert.ok(!pkg.skillTemplates.some((s) => s.id === 'SKL-TST-WIRE-FAIL'))
+    const refs = pkg.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(!refs.includes('SKL-TST-WIRE-FAIL'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('E1-3 多场景无 scenarioId 不猜接线；单场景缺省接线', () => {
+  const base = minimalPkg()
+  const sc2 = JSON.parse(JSON.stringify(base.scenarios[0]))
+  sc2.id = 'SCN-TST-2'
+  sc2.name = '第二场景'
+  const multi = minimalPkg({ scenarios: [base.scenarios[0], sc2] })
+  applyDraftToPackage(multi, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '无目标',
+    payload: { id: 'SKL-TST-EXP-M', weights: {} },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  for (const sc of multi.scenarios) {
+    const refs = sc.pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(!refs.includes('SKL-TST-EXP-M'), `多场景无 scenarioId 不应接线到 ${sc.id}`)
+  }
+  const single = minimalPkg()
+  applyDraftToPackage(single, {
+    layer: 'O2', targetKind: 'SkillTemplate', name: '单场景缺省',
+    payload: { id: 'SKL-TST-EXP-S', weights: {} },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  const refs = single.scenarios[0].pipeline.flatMap((s) => s.skillRefs ?? [])
+  assert.ok(refs.includes('SKL-TST-EXP-S'))
+})
+
+/* ── P3-3：SkillTemplate 接线结果经 materialize notes 上墙 ── */
+
+test('P3-3：多场景无 scenarioId 物化回执 notes 提示未接线；带 scenarioId 则接线且无 notes', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg({
+    scenarios: (() => {
+      const base = minimalPkg().scenarios[0]
+      const sc2 = JSON.parse(JSON.stringify(base))
+      sc2.id = 'SCN-TST-2'
+      sc2.name = '第二场景'
+      return [base, sc2]
+    })(),
+  })
+  try {
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([
+      {
+        id: 'dc-skl-nowire',
+        packageId: 'test-pkg',
+        sourceId: '',
+        layer: 'O2',
+        targetKind: 'SkillTemplate',
+        name: '未接线模板',
+        payload: { id: 'SKL-TST-NOWIRE', weights: { 'RULE-TST-S1': 1 } },
+        confidence: 0.9,
+        rationale: '',
+        status: 'approved',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+      {
+        id: 'dc-skl-wired',
+        packageId: 'test-pkg',
+        sourceId: '',
+        layer: 'O2',
+        targetKind: 'SkillTemplate',
+        name: '已接线模板',
+        payload: { id: 'SKL-TST-WIRED', scenarioId: 'SCN-TST-1', weights: { 'RULE-TST-S1': 1 } },
+        confidence: 0.9,
+        rationale: '',
+        status: 'approved',
+        forcedReview: false,
+        conclusionLike: false,
+        createdAt: now,
+      },
+    ], null, 2))
+    const r1 = store.materialize(dir, ['dc-skl-nowire'])
+    assert.deepEqual(r1.applied, ['dc-skl-nowire'])
+    assert.ok(Array.isArray(r1.notes) && r1.notes.length === 1, `须有未接线 notes: ${JSON.stringify(r1.notes)}`)
+    assert.match(r1.notes[0], /未接线/)
+    assert.match(r1.notes[0], /SCN-TST-1|scenarioId/)
+
+    const r2 = store.materialize(dir, ['dc-skl-wired'])
+    assert.deepEqual(r2.applied, ['dc-skl-wired'])
+    assert.equal(r2.notes, undefined, '已接线不得带 notes')
+    const pkg = loadPackage(dir)
+    const wired = pkg.skillTemplates.find((s) => s.id === 'SKL-TST-WIRED')
+    assert.ok(wired)
+    const refs = pkg.scenarios.find((s) => s.id === 'SCN-TST-1').pipeline.flatMap((s) => s.skillRefs ?? [])
+    assert.ok(refs.includes('SKL-TST-WIRED'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── P2-2：物化后重派生失败 → 回滚源与候选，可重试 ── */
+
+test('P2-2：derive 失败回滚包源、清 appliedAs、候选保持 approved（可重试不 DUP_ID）', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    derivePackage(dir)
+    assert.equal(verifyDerived(dir).ok, true)
+    const store = new KnowledgeStore(ws.root)
+    const now = new Date().toISOString()
+    const queuePath = join(store.root, 'queue.json')
+    writeFileSync(queuePath, JSON.stringify([{
+      id: 'dc-derive-fail',
+      packageId: 'test-pkg',
+      sourceId: '',
+      layer: 'O2',
+      targetKind: 'ScoreRule',
+      name: '派生失败规则',
+      payload: { id: 'RULE-TST-DERIVE-FAIL', weight: 0.5, expression: '1', threshold: 0.5 },
+      confidence: 0.9,
+      rationale: '',
+      status: 'approved',
+      forcedReview: false,
+      conclusionLike: false,
+      createdAt: now,
+    }], null, 2))
+
+    const beforePkg = JSON.stringify(loadPackage(dir))
+    assert.throws(
+      () => store.materialize(dir, ['dc-derive-fail'], { derive: () => { throw new Error('inject derive boom') } }),
+      (e) => e?.code === 'DERIVE_FAILED' && /inject derive boom/.test(e.message),
+      '须抛 DERIVE_FAILED 且含原因',
+    )
+
+    // 包源回滚：无新规则、与物化前一致
+    const afterPkg = loadPackage(dir)
+    assert.ok(!afterPkg.scoreRules.some((r) => r.id === 'RULE-TST-DERIVE-FAIL'), 'derive 失败须回滚新规则')
+    assert.equal(JSON.stringify(afterPkg), beforePkg, '包源须回到物化前快照')
+
+    // 候选：approved、无 appliedAs、未 merged —— 可重试
+    const c = store.getCandidate('dc-derive-fail')
+    assert.equal(c.status, 'approved')
+    assert.equal(c.appliedAs, undefined)
+
+    // 恢复 derive 后重试成功（不撞 DUP_ID）
+    const retry = store.materialize(dir, ['dc-derive-fail'])
+    assert.deepEqual(retry.applied, ['dc-derive-fail'])
+    assert.equal(store.getCandidate('dc-derive-fail').status, 'merged')
+    assert.equal(verifyDerived(dir).ok, true)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('字典 ID 自动生成加盐：同名 CJK 字典同批可共存；显式 payload.id 撞车仍拒绝', async () => {
   const { ws, dir, root } = mkWorkspaceWithPkg()
   try {
@@ -880,4 +1091,41 @@ test('D5：CONCLUSION_BLOCKED 出口内联 RedLine 正确路径（targetKind + p
     check,
     'update 物化拒绝须内联 RedLine 正确路径',
   )
+})
+
+/* ── D6 物化后自动重派生（闭环轮 5） ── */
+
+test('D6：物化成功即自动重派生，loadgate 不再 DERIVED_DRIFT；未物化不重派生', async () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    derivePackage(dir)
+    assert.equal(verifyDerived(dir).ok, true)
+    const store = new KnowledgeStore(ws.root)
+    const src = store.uploadSource({
+      packageId: 'test-pkg',
+      sourceType: 'LEGACY_SYS',
+      name: 'algo',
+      content: '夜间交易权重 0.2。',
+    })
+    const { added } = await store.parseSource(src.id, llm)
+    const scoreDraft = added.find((c) => c.targetKind === 'ScoreRule')
+    assert.ok(scoreDraft)
+    // pending 物化：无写入 → 不重派生，既有 manifest 仍绿
+    store.materialize(dir, [scoreDraft.id])
+    assert.equal(verifyDerived(dir).ok, true)
+    // approve → 物化改写源 → 自动重派生（修复前此处 DERIVED_DRIFT）
+    store.reviewCandidate(scoreDraft.id, 'approve')
+    const res = store.materialize(dir, [scoreDraft.id])
+    assert.deepEqual(res.applied, [scoreDraft.id])
+    const gate = verifyDerived(dir)
+    assert.equal(gate.ok, true, `物化后须自动重派生过闸: ${JSON.stringify(gate)}`)
+    const manifest = readManifest(dir)
+    assert.ok(manifest, '重派生须落 manifest')
+    assert.ok(
+      manifest.sources.some((e) => e.path.includes('scoreRules') || e.path.includes('rules/')),
+      '新源文件须进 manifest 指纹',
+    )
+  } finally {
+    rmWorkspace(root)
+  }
 })

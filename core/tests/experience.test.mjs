@@ -434,6 +434,7 @@ test('abstractSkillDrafts：成功同构聚簇 ≥2 → SkillTemplate 草案；�
     assert.equal(a.draft.targetKind, 'SkillTemplate')
     assert.equal(a.draft.layer, 'O2')
     assert.equal(a.draft.payload.id, 'SKL-TST-EXP-1')
+    assert.equal(a.draft.payload.scenarioId, 'SCN-TST-1', 'E1-3：草案须带 scenarioId 供物化接线')
     assert.deepEqual(a.draft.payload.weights, { 'RULE-TST-S1': 1 })
     assert.ok(a.draft.payload.steps.includes('候选 {candidateId}'))
     assert.ok(a.draft.payload.steps.includes('f1'))

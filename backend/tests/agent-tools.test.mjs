@@ -13,8 +13,10 @@ import {
   assertNoForbiddenPhrases,
   assertRunContract,
   asToolError,
+  configureDiffLlm,
   enforceOutputPolicy,
   renderRunText,
+  reviseTopHitAdvice,
 } from '../dist/agent-policy.js'
 import {
   assertDatasetGranted,
@@ -29,9 +31,13 @@ import {
   loadDatasetFromArgs,
   loadToolPackage,
   projectPackageList,
+  projectRecallHits,
   renderRecallText,
   renderAnnotateText,
+  renderAbstractText,
   annotateExperienceForTool,
+  abstractExperienceForTool,
+  skillBodyCurrent,
   renderScenarioList,
   assertHumanApproved,
   createPackageForPkg,
@@ -242,13 +248,13 @@ test('只读查询投影：摘要/口径/场景清单字段齐全', () => {
   assert.match(renderScenarioList(catalog.scenarios), /SCN-AML-FIND-CLUES/)
 })
 
-test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬迁；差异转人工', () => {
+test('recall_experience 渲染（N4/P4-5/E1-2）：字段级对照；冷启动不硬迁；差异转人工；reviewFocus 上墙', () => {
   // 冷启动：不硬迁移话术
   const cold = renderRecallText({ coldStart: true, hits: [], advice: 'x' })
   assert.match(cold, /冷启动/)
   assert.match(cold, /不硬迁移/)
 
-  // 命中：打分行 + 字段级对照行 + 低置信度转人工
+  // 命中：打分行 + 字段级对照行 + 低置信度转人工 + 下轮复核提示
   const hit = renderRecallText({
     coldStart: false,
     hits: [{
@@ -266,6 +272,7 @@ test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬�
         'skillRefs 共有1/新独有0/源独有0',
         'inputShape 同（taxpayerId:string）',
       ],
+      reviewFocus: ['listHitCount', '集中转入'],
     }],
     advice: '低置信度：结构位差异（ruleRefs）→ 转人工确认后方可复用',
   })
@@ -277,8 +284,25 @@ test('recall_experience 渲染（N4/P4-5）：字段级对照；冷启动不硬�
   assert.match(hit, /ruleRefs 共有5\/新独有0\/源独有0/)
   assert.match(hit, /Jaccard=1\.00/)
   assert.match(hit, /转人工/)
+  // E1-2：下轮复核提示随命中上墙
+  assert.match(hit, /复核提示\[listHitCount, 集中转入\]/)
   // 无自由流程描述（不出现步骤编造词）
   assert.doesNotMatch(hit, /执行流程|步骤图|自由/)
+
+  // reviewFocus 为空则不出现复核提示段（不渲染空括号）
+  const noFocus = renderRecallText({
+    coldStart: false,
+    hits: [{
+      runId: 'run-empty01',
+      score: 0.8,
+      outcome: 'success',
+      counterexample: false,
+      reasons: ['同 scenarioId'],
+      reviewFocus: [],
+    }],
+    advice: 'x',
+  })
+  assert.ok(!noFocus.includes('复核提示'), `空 reviewFocus 不得渲染复核提示: ${noFocus}`)
 })
 
 test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () => {
@@ -287,6 +311,64 @@ test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () 
   const coreSrc = readFileSync(join(REPO, 'core', 'src', 'experience.ts'), 'utf8')
   assert.ok(coreSrc.includes('signatureFieldReasons'), 'core 须导出 signatureFieldReasons')
   assert.ok(coreSrc.includes('reasons.push(...signatureFieldReasons'), 'retrieveSimilar 须挂字段级理由')
+})
+
+test('E1-2：recall execute 投影 reviewFocus，render 上墙复核提示（源断言）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const recallIdx = src.indexOf("name: 'recall_experience'")
+  const annotateIdx = src.indexOf("name: 'annotate_experience'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
+  const recallSlice = src.slice(recallIdx, annotateIdx)
+  // execute：命中投影走 projectRecallHits（带 note.reviewFocus ?? []）
+  assert.ok(recallSlice.includes('projectRecallHits'), 'recall execute 须走 projectRecallHits')
+  const projIdx = src.indexOf('export function projectRecallHits')
+  assert.ok(projIdx > 0, '须导出 projectRecallHits 纯函数')
+  assert.ok(
+    src.includes('reviewFocus: h.note.reviewFocus ?? []'),
+    'projectRecallHits 须投影 h.note.reviewFocus ?? []',
+  )
+  // render：复核提示上墙且挂 retreatRenderText 兜底
+  assert.ok(recallSlice.includes('renderRecallText'), 'recall render 须走 renderRecallText')
+  assert.ok(src.includes('复核提示['), 'renderRecallText 须渲染复核提示')
+  assert.ok(src.includes('retreatRenderText'), 'renderRecallText 须挂 retreatRenderText 兜底')
+  // 描述须声明 reviewFocus 可发现
+  assert.ok(recallSlice.includes('reviewFocus'), '工具描述须声明 reviewFocus')
+  // 打分语义不碰：rules.ts 不得引用 experience
+  const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
+  assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
+})
+
+test('E1-2：projectRecallHits 纯函数——reviewFocus 缺省 []，score 两位小数', () => {
+  const hits = projectRecallHits([
+    {
+      note: {
+        runId: 'run-e12a',
+        outcome: 'success',
+        counterexample: false,
+        reviewFocus: ['listHitCount'],
+      },
+      score: 0.906,
+      reasons: ['digest 同构'],
+    },
+    {
+      note: {
+        runId: 'run-e12b',
+        outcome: 'partial',
+        counterexample: true,
+      },
+      score: 0.7,
+      reasons: ['同 scenarioId'],
+    },
+  ])
+  assert.equal(hits.length, 2)
+  assert.deepEqual(hits[0].reviewFocus, ['listHitCount'])
+  assert.equal(hits[0].score, 0.91)
+  assert.deepEqual(hits[1].reviewFocus, [], '缺省 reviewFocus 须为 []')
+  assert.equal(hits[1].score, 0.7)
+  assert.equal(hits[1].counterexample, true)
+  assert.equal(hits[0].reasons[0], 'digest 同构')
+  // 打分语义不碰：投影只透传 score，不重算
+  assert.equal(hits[0].score, Number((0.906).toFixed(2)))
 })
 
 test('知识上传回执不回显 content', () => {
@@ -443,6 +525,37 @@ test('人审契约：apply_draft/reject_draft 的 humanApproved 必须显式为 
     expectCode(() => assertHumanApproved(v, '批准'), 'INVALID_ARGS')
     expectCode(() => assertHumanApproved(v, '驳回'), 'INVALID_ARGS')
   }
+})
+
+test('D6：apply_draft 描述明示物化后自动重派生（防回退到手动 derive 提权）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const at = src.indexOf("name: 'apply_draft'")
+  assert.ok(at >= 0, 'apply_draft 工具须在源中登记')
+  const window = src.slice(at, at + 900)
+  assert.ok(
+    window.includes('物化成功后自动重派生'),
+    'apply_draft 描述须告知物化后自动重派生（D6）',
+  )
+})
+
+test('D15：apply_draft/save_skeleton 描述与参数收口——非批准信号不得引用', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  // apply_draft：描述 + humanApproved 参数
+  const at = src.indexOf("name: 'apply_draft'")
+  assert.ok(at >= 0, 'apply_draft 须在源中登记')
+  const window = src.slice(at, at + 1400)
+  assert.ok(window.includes('恢复/推进类台词'), 'apply_draft 描述须列恢复/推进类台词反例（D15 ①）')
+  assert.ok(window.includes('骨架确认均不构成批准'), 'apply_draft 描述须声明骨架确认不构成物化批准（D15 ②）')
+  assert.ok(window.includes('不得引用其作为 humanApproved 依据'), 'apply_draft 描述须禁引用非批准信号')
+  assert.ok(window.includes('先问一句再传'), 'apply_draft 描述须要求未见明确批准先问再传（D15 ③）')
+  // save_skeleton：点头指代 ID 清单 + 不互代
+  const sk = src.indexOf("name: 'save_skeleton'")
+  assert.ok(sk >= 0, 'save_skeleton 须在源中登记')
+  const skWindow = src.slice(sk, sk + 1400)
+  assert.ok(skWindow.includes('指代**这份 ID 清单本身**'), 'save_skeleton 点头须指代 ID 清单本身')
+  assert.ok(skWindow.includes('不构成骨架确认'), 'save_skeleton 描述须列非骨架确认反例')
+  assert.ok(skWindow.includes('代用作后续 apply_draft'), '骨架点头不得代用作物化批准')
+  assert.ok(skWindow.includes('包形态/范围选择'), 'save_skeleton humanApproved 参数须列包形态选择反例')
 })
 
 test('list_packages 输出投影：不回显 dir 等服务端路径', () => {
@@ -659,6 +772,35 @@ test('D1 方案 B：相对路径读取失败给出可复制 dataset 内联示例
   const example = JSON.parse(caught.message.slice(caught.message.indexOf('{"objects"')))
   assert.doesNotThrow(() => validateDatasetShape(example))
   // 错误面不回显 resolve 后绝对路径（含 cwd 盘符路径）
+  assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
+})
+
+test('D2 数据集发现引导：run/invoke 工具描述与读取失败信封均指明 examples/ 样例位置', () => {
+  // 1) 源断言：三个执行工具的描述/参数描述含样例目录引导（防文案回退）
+  const toolsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const expertsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  for (const [label, src] of [['agent-tools', toolsSrc], ['agent-experts', expertsSrc]]) {
+    const hits = src.split('examples/').length - 1
+    assert.ok(hits >= 2, `${label} 至少两处 examples/ 样例引导（描述 + 参数/信封），实际 ${hits}`)
+    assert.ok(src.includes('aml-run.json'), `${label} 须点名 aml-run.json 样例`)
+    assert.ok(src.includes('dataset 内联'), `${label} 须给出 dataset 内联恢复路径`)
+  }
+  // run_scenario / run_scenarios / invoke_expert 三工具均被覆盖
+  assert.ok(toolsSrc.includes("name: 'run_scenario'") && toolsSrc.includes("name: 'run_scenarios'"))
+  assert.ok(expertsSrc.includes("name: 'invoke_expert'"))
+
+  // 2) 错误信封在场：读取失败时引导至 examples/ 样例 + 内联
+  let caught
+  try {
+    loadDatasetFromArgs({ datasetPath: 'no-such-d2-relative-dataset.json' })
+    assert.fail('期望 INVALID_ARGS')
+  } catch (e) {
+    caught = e
+  }
+  assert.ok(caught instanceof AgentToolError, `期望 AgentToolError，得到 ${caught}`)
+  assert.ok(caught.message.includes('examples/'), `读取失败信封须指明样例目录: ${caught.message}`)
+  assert.ok(caught.message.includes('aml-run.json'), `读取失败信封须点名样例文件: ${caught.message}`)
+  // 信封仍不泄漏绝对路径（D1 不变量不回退）
   assert.ok(!/^[A-Za-z]:\\/.test(caught.message.split(': ').pop()), `不得泄漏绝对路径: ${caught.message}`)
 })
 
@@ -1422,6 +1564,444 @@ test('annotate_experience 渲染（N5）：结构位回执、无自由流程、h
   assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
 })
 
+/* ── E2-1 abstract_experience ── */
+
+function mkAbstractFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'onto-abs-'))
+  const ws = new PackageWorkspace(join(root, 'workspace'))
+  const dir = ws.versionDir('aml-analysis', '1.0.0')
+  cpSync(AML_DIR, dir, { recursive: true })
+  derivePackage(dir)
+  const knowledge = new KnowledgeStore(root)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  const mkRun = () => {
+    const result = runScenario(dir, 'SCN-AML-FIND-CLUES', dataset)
+    const rec = buildRunRecord({
+      package: { name: 'aml-analysis', version: '1.0.0' },
+      dataset,
+      result,
+      redlines: [],
+    })
+    saveRunRecord(ws.root, rec)
+    annotateExperienceForTool(ws, {
+      runId: rec.runId,
+      outcome: 'success',
+      outcomeReason: '三层闭合',
+      reviewFocus: ['listHitCount'],
+      humanApproved: true,
+    })
+    return rec.runId
+  }
+  return { root, ws, knowledge, mkRun }
+}
+
+test('abstract_experience：humanApproved 契约 + 聚簇入队结构位回执（E2-1）', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    // 未点头 → 人审契约拒绝
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0' }),
+      'INVALID_ARGS',
+    )
+    // 单条经验不足簇 → 空回执（不硬凑）
+    mkRun()
+    const empty = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(empty.queued.length, 0)
+    assert.equal(empty.skills, 0)
+    assert.equal(empty.humanReviewRequired, true)
+
+    // 第二条成功同构 → SkillTemplate 草案入队 pending
+    mkRun()
+    const abs = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(abs.package, 'aml-analysis@1.0.0')
+    assert.equal(abs.skills, 1)
+    assert.equal(abs.queued.length, 1)
+    const q = abs.queued[0]
+    assert.equal(q.targetKind, 'SkillTemplate')
+    assert.equal(q.status, 'pending')
+    assert.equal(q.members, 2)
+    assert.ok(q.id.startsWith('dc-'))
+    assert.equal(abs.humanReviewRequired, true)
+    // 只入队：草案在知识库队列，不直写包
+    const cands = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(cands.length, 1)
+    assert.equal(cands[0].id, q.id)
+
+    // 幂等：同簇再抽象返回同一条 live 草案
+    const again = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.0.0',
+      humanApproved: true,
+    })
+    assert.equal(again.queued[0].id, q.id)
+
+    // minCluster 非法
+    expectCode(
+      () =>
+        abstractExperienceForTool(ws, knowledge, {
+          packageId: 'aml-analysis@1.0.0',
+          minCluster: 0,
+          humanApproved: true,
+        }),
+      'INVALID_ARGS',
+    )
+
+    // ISSUED 拒绝（package.yaml 平铺 meta；只写 meta 不动派生）
+    const pkgPath = ws.versionDir('aml-analysis', '1.0.0')
+    const pkg = loadPackage(pkgPath)
+    pkg.meta.status = 'ISSUED'
+    writeFileSync(join(pkgPath, 'package.yaml'), dumpYaml(pkg.meta), 'utf8')
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('abstract_experience 渲染（E2-1）：结构位回执、空簇说明、humanReviewRequired 在场', () => {
+  const text = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(text, /aml-analysis@1\.0\.0/)
+  assert.match(text, /入队 1 条/)
+  assert.match(text, /SkillTemplate/)
+  assert.match(text, /dc-abc123/)
+  assert.match(text, /status=pending/)
+  assert.match(text, /簇员=3/)
+  assert.match(text, /humanReviewRequired=true/)
+  assert.match(text, /apply_draft/)
+  assert.doesNotMatch(text, /执行流程|步骤图|D:\\|workspace\//)
+
+  const cold = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [],
+    skills: 0,
+    counters: 0,
+  })
+  assert.match(cold, /无可入队簇/)
+  assert.match(cold, /humanReviewRequired=true/)
+})
+
+test('E2-1 源断言：abstract_experience 注册 + ONTOOL_NAMES + 描述引导方法论链路', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0, 'abstract_experience 须注册')
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 4000)
+  assert.ok(slice.includes('abstractExperienceForTool'), 'execute 须走纯函数')
+  assert.ok(slice.includes('humanApproved'), 'humanApproved 契约在场')
+  assert.ok(slice.includes('总结成功经验') || slice.includes('方法论'), '描述须引导方法论链路（D7）')
+  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  assert.ok(grants.includes("'abstract_experience'"), 'ONTOOL_NAMES 须登记')
+})
+
+/* ── D11 abstract_experience 省 packageId 扫全库 ── */
+
+test('D11：省 packageId 扫全库——有经验非 ISSUED 包入队，ISSUED 跳过不整单失败', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    // humanApproved 契约与 packageId 无关（省略 packageId 也要点头）
+    expectCode(() => abstractExperienceForTool(ws, knowledge, {}), 'INVALID_ARGS')
+
+    // 无任何经验 → 空扫描回执（不抛、不硬凑）
+    const cold = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    assert.equal(cold.package, '全库')
+    assert.deepEqual(cold.scanned, [])
+    assert.equal(cold.queued.length, 0)
+    assert.equal(cold.humanReviewRequired, true)
+
+    // 两条同构成功经验 → 扫描模式入队，queued 带包归属
+    mkRun()
+    mkRun()
+    const scan = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    assert.equal(scan.package, '全库')
+    assert.ok(Array.isArray(scan.scanned))
+    const entry = scan.scanned.find((s) => s.package === 'aml-analysis@1.0.0')
+    assert.ok(entry, '有经验包须进 scanned')
+    assert.equal(entry.skipped, undefined)
+    assert.equal(entry.queued, 1)
+    assert.equal(scan.queued.length, 1)
+    assert.equal(scan.queued[0].package, 'aml-analysis@1.0.0')
+    assert.equal(scan.queued[0].targetKind, 'SkillTemplate')
+    assert.equal(scan.skills, 1)
+    assert.equal(scan.humanReviewRequired, true)
+
+    // ISSUED → 记入 skipped，不整单失败（发现面不被单个只读包打断）
+    const pkgPath = ws.versionDir('aml-analysis', '1.0.0')
+    const pkg = loadPackage(pkgPath)
+    pkg.meta.status = 'ISSUED'
+    writeFileSync(join(pkgPath, 'package.yaml'), dumpYaml(pkg.meta), 'utf8')
+    const skippedScan = abstractExperienceForTool(ws, knowledge, { humanApproved: true })
+    const skipped = skippedScan.scanned.find((s) => s.package === 'aml-analysis@1.0.0')
+    assert.ok(skipped, 'ISSUED 包仍须出现在 scanned')
+    assert.match(skipped.skipped, /ISSUED|签发只读/)
+    assert.equal(skippedScan.queued.length, 0)
+    assert.equal(skippedScan.humanReviewRequired, true)
+    // 显式传 packageId 的单包路径仍硬拒（E2-1 契约不回退）
+    expectCode(
+      () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('D11 渲染：全库扫描回执逐包一行（含跳过原因）+ 草案带包归属 + humanReviewRequired', () => {
+  const text = renderAbstractText({
+    package: '全库',
+    scanned: [
+      { package: 'aml-analysis@1.0.0', queued: 1, skills: 1, counters: 0 },
+      { package: 'tax-analysis@1.0.0', skipped: '已签发只读：请 fork 新版本（P1）', queued: 0, skills: 0, counters: 0 },
+    ],
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+        package: 'aml-analysis@1.0.0',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(text, /全库扫描/)
+  assert.match(text, /候选经验包 2 个/)
+  assert.match(text, /aml-analysis@1\.0\.0：入队 1 条/)
+  assert.match(text, /tax-analysis@1\.0\.0：跳过（已签发只读/)
+  assert.match(text, /@aml-analysis@1\.0\.0/)
+  assert.match(text, /dc-abc123/)
+  assert.match(text, /humanReviewRequired=true/)
+  assert.doesNotMatch(text, /D:\\|workspace\//)
+
+  const empty = renderAbstractText({ package: '全库', scanned: [], queued: [], skills: 0, counters: 0 })
+  assert.match(empty, /候选经验包 0 个/)
+  assert.match(empty, /无可入队簇/)
+  assert.match(empty, /humanReviewRequired=true/)
+})
+
+test('D11 源断言：packageId 可省略 + 描述引导「不必先追问包名」', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0)
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 5000)
+  // 参数声明不得再 required: true
+  const paramBlock = slice.slice(slice.indexOf('parameters:'), slice.indexOf('output:'))
+  assert.ok(!/packageId:\s*\{[^}]*required:\s*true/.test(paramBlock), 'packageId 不得 required')
+  assert.ok(slice.includes('可省略'), '描述须声明 packageId 可省略（D11）')
+  assert.ok(slice.includes('扫描全库'), '描述须引导扫全库（D11）')
+  assert.ok(slice.includes('不必先追问包名') || slice.includes('不要为此翻目录'), '描述须阻止追问包名摩擦（D11）')
+})
+
+/* ── D13 SkillTemplate merged → 正文更新通道 ── */
+
+test('D13 skillBodyCurrent：steps/outputTemplate 精确比对、weights 键序无关', () => {
+  const el = { steps: ['候选 {candidateId}', 'listHitCount'], weights: { 'RULE-A': 0.6, 'RULE-B': 0.4 }, outputTemplate: '摘要：{riskScore}' }
+  // 完全一致（weights 键序不同也算一致）
+  assert.equal(
+    skillBodyCurrent(el, {
+      steps: ['候选 {candidateId}', 'listHitCount'],
+      weights: { 'RULE-B': 0.4, 'RULE-A': 0.6 },
+      outputTemplate: '摘要：{riskScore}',
+    }),
+    true,
+  )
+  // steps 少一项 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: ['候选 {candidateId}'], weights: el.weights, outputTemplate: el.outputTemplate }), false)
+  // steps 多一项（新 reviewFocus 入簇）→ 过期
+  assert.equal(
+    skillBodyCurrent(el, { steps: [...el.steps, '关联集中度'], weights: el.weights, outputTemplate: el.outputTemplate }),
+    false,
+  )
+  // outputTemplate 变 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: el.steps, weights: el.weights, outputTemplate: '别的' }), false)
+  // weights 数值变 → 过期
+  assert.equal(skillBodyCurrent(el, { steps: el.steps, weights: { 'RULE-A': 0.5, 'RULE-B': 0.5 }, outputTemplate: el.outputTemplate }), false)
+})
+
+test('D13：SkillTemplate 已物化后再抽象——正文一致回执 bodyUpToDate；正文过期入队 op=update', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    const dir = ws.versionDir('aml-analysis', '1.0.0')
+    const pkgId = 'aml-analysis@1.0.0'
+
+    mkRun()
+    mkRun()
+    // 第一次抽象：create 草案 pending
+    const first = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(first.queued[0].status, 'pending')
+    assert.equal(first.queued[0].op, undefined, '未物化不走正文更新通道')
+    const createId = first.queued[0].id
+
+    // 人审批准 + 物化（同 apply_draft 路径）
+    knowledge.reviewCandidate(createId, 'approve')
+    const applied = knowledge.materialize(dir, [createId])
+    assert.deepEqual(applied.applied, [createId])
+    const el0 = loadPackage(dir).skillTemplates.find((s) => s.name === first.queued[0].name)
+    assert.ok(el0, '物化后技能元素须在包内')
+
+    // 第二次抽象（无新经验）→ 正文与最新簇一致 → bodyUpToDate，不入新草案
+    const second = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(second.queued[0].status, 'merged')
+    assert.equal(second.queued[0].bodyUpToDate, true, '正文一致须回执 bodyUpToDate')
+    assert.equal(second.queued[0].targetId, el0.id)
+    const pendingAfterUpToDate = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(pendingAfterUpToDate.length, 0, 'bodyUpToDate 不得入队新草案')
+
+    // 新 reviewFocus 入簇 → 正文过期 → 入队 op=update 正文更新草案
+    const runIds = first.queued[0].runId // 任取其一；再补一条新 focus 的经验
+    annotateExperienceForTool(ws, {
+      runId: runIds,
+      reviewFocus: ['listHitCount', '关联集中度'],
+      humanApproved: true,
+    })
+    const third = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    const updEntry = third.queued[0]
+    assert.equal(updEntry.op, 'update', '正文过期须回执 op=update')
+    assert.equal(updEntry.targetId, el0.id)
+    assert.equal(updEntry.status, 'pending')
+    assert.equal(updEntry.targetKind, 'SkillTemplate')
+    assert.notEqual(updEntry.id, createId, 'update 草案须是新候选，不得复用 merged create')
+
+    // 幂等：在途 update 再抽象返回同一条，不重复入队
+    const thirdAgain = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(thirdAgain.queued[0].id, updEntry.id, '在途 update 须幂等复用')
+    const updates = knowledge
+      .listCandidates({ packageId: 'aml-analysis' })
+      .filter((c) => c.op === 'update' && c.targetKind === 'SkillTemplate')
+    assert.equal(updates.length, 1, '不得重复入队 update')
+
+    // 批准 + 物化 update → 正文刷新
+    knowledge.reviewCandidate(updEntry.id, 'approve')
+    const appliedUpd = knowledge.materialize(dir, [updEntry.id])
+    assert.deepEqual(appliedUpd.applied, [updEntry.id])
+    const el1 = loadPackage(dir).skillTemplates.find((s) => s.id === el0.id)
+    assert.ok(el1.steps.includes('关联集中度'), `物化后 steps 须含新 focus: ${JSON.stringify(el1.steps)}`)
+
+    // 第三次抽象（无再变）→ bodyUpToDate
+    const fourth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    assert.equal(fourth.queued[0].bodyUpToDate, true)
+
+    // 又一批新 focus 入簇 → 上一代 update 已 merged → 按 #N 换代重提，不撞幂等
+    annotateExperienceForTool(ws, {
+      runId: runIds,
+      reviewFocus: ['listHitCount', '关联集中度', '资金分层'],
+      humanApproved: true,
+    })
+    const fifth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
+    const gen2 = fifth.queued[0]
+    assert.equal(gen2.op, 'update')
+    assert.equal(gen2.status, 'pending')
+    assert.match(gen2.name, /#2$/, `上一代 merged 后须换代重提: ${gen2.name}`)
+    assert.notEqual(gen2.id, updEntry.id)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('D13 渲染：op=update/targetId 与 bodyUpToDate 结构位 + 无路径泄漏', () => {
+  const stale = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-upd001',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'pending',
+        members: 3,
+        runId: 'run-abc12345',
+        op: 'update',
+        targetId: 'SKL-AML-EXP-FIND-CLUES',
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(stale, /op=update targetId=SKL-AML-EXP-FIND-CLUES/)
+  assert.match(stale, /正文过时/)
+  assert.match(stale, /humanReviewRequired=true/)
+  assert.doesNotMatch(stale, /D:\\|workspace\//)
+
+  const current = renderAbstractText({
+    package: 'aml-analysis@1.0.0',
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'merged',
+        members: 3,
+        runId: 'run-abc12345',
+        targetId: 'SKL-AML-EXP-FIND-CLUES',
+        bodyUpToDate: true,
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(current, /bodyUpToDate/)
+  assert.match(current, /正文已与最新簇一致/)
+  assert.doesNotMatch(current, /op=update/, 'bodyUpToDate 不得误报 update')
+
+  // 扫全库路径同样带正文状态位
+  const scanned = renderAbstractText({
+    package: '全库',
+    scanned: [{ package: 'aml-analysis@1.0.0', queued: 1, skills: 1, counters: 0 }],
+    queued: [
+      {
+        id: 'dc-abc123',
+        name: '可疑交易线索检索经验模板',
+        targetKind: 'SkillTemplate',
+        status: 'merged',
+        members: 3,
+        runId: 'run-abc12345',
+        package: 'aml-analysis@1.0.0',
+        bodyUpToDate: true,
+      },
+    ],
+    skills: 1,
+    counters: 0,
+  })
+  assert.match(scanned, /@aml-analysis@1\.0\.0 status=merged/)
+  assert.match(scanned, /bodyUpToDate/)
+})
+
+test('D13 源断言：描述引导正文更新通道（op=update / bodyUpToDate）', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const idx = src.indexOf("name: 'abstract_experience'")
+  assert.ok(idx > 0)
+  const next = src.indexOf("name: '", idx + 10)
+  const slice = src.slice(idx, next > 0 ? next : idx + 6000)
+  assert.ok(slice.includes('正文更新通道'), '描述须声明 D13 正文更新通道')
+  assert.ok(slice.includes('op=update'), '描述须引导 op=update 正文更新草案')
+  assert.ok(slice.includes('bodyUpToDate'), '描述须声明 bodyUpToDate 诚实回执')
+  assert.ok(slice.includes('apply_draft'), '描述须指明刷新路径是 apply_draft')
+})
+
+
 /* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */
 
 test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记', () => {
@@ -1434,6 +2014,7 @@ test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记',
       outcome: 'success',
       counterexample: false,
       reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`, '同 scenarioId'],
+      reviewFocus: [],
     }],
     advice: '结构同构可参考复用',
   })
@@ -1446,6 +2027,7 @@ test('I1 recall 渲染拼接后兜底：短语命中 → 整段退避为标记',
       outcome: 'success',
       counterexample: false,
       reasons: [`goalClass 源=「${phrase}」→ 新=「识别线索」`],
+      reviewFocus: [],
     }],
     advice: 'x',
   }, [phrase])
@@ -1590,6 +2172,7 @@ test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏',
         'scenarioId 同（SCN-AML-FIND-CLUES）',
         'digest 同构',
       ],
+      reviewFocus: [],
     }],
     advice: 'x',
   })
@@ -1600,4 +2183,85 @@ test('L5 recall 字段分栏：stepShape 同 / goalClass 同落字段对照栏',
   assert.ok(fieldLine.includes('scenarioId 同（'), '带括号形态在字段对照栏')
   assert.ok(scoreLine.includes('同 scenarioId'), '检索打分理由留在打分栏')
   assert.ok(scoreLine.includes('Jaccard'), 'Jaccard 留在打分栏')
+})
+
+/* ── E2-2：reviseTopHitAdvice 接生产（digest 短路 + reviseDiff 双路 + 转人工闸） ── */
+
+test('E2-2：reviseTopHitAdvice——digest 短路 / heuristic 转人工闸 / LLM 腿注入与回落', async () => {
+  const pkg = loadPackage(AML_DIR)
+  const sigS = buildTaskSignature({
+    pkg,
+    scenarioId: 'SCN-AML-FIND-CLUES',
+    datasetSummary: { objects: 4, relations: 4, behaviors: 0, candidates: 4 },
+  })
+  const sigM = buildTaskSignature({
+    pkg,
+    scenarioId: 'SCN-AML-FIND-CLUES',
+    datasetSummary: { objects: 4, relations: 4, behaviors: 0, candidates: 67 },
+  })
+  configureDiffLlm(null)
+  try {
+    // digest 同构 → 短路跳过修正
+    const same = await reviseTopHitAdvice(sigS, sigS)
+    assert.equal(same.revision.engine, 'digest')
+    assert.equal(same.revision.humanGate, false)
+    assert.match(same.advice, /结构同构可参考复用/)
+    assert.match(same.advice, /digest 同构短路/)
+    assert.deepEqual(same.revision.unknown, [])
+
+    // 非同构 + 默认 null 端口 → heuristic 腿：人工闸恒触发（confidence 0.50 < 0.75）
+    const gated = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(gated.revision.engine, 'heuristic')
+    assert.equal(gated.revision.humanGate, true)
+    assert.match(gated.advice, /转人工/)
+    assert.match(gated.advice, /engine=heuristic/)
+    assert.match(gated.advice, /confidence=0\.50/)
+    assert.ok(gated.revision.mustChange.includes('dataBand'), 'S→M 须落 mustChange')
+    assert.ok(gated.revision.unknown.includes('scenarioId'), 'heuristic 不背书项落 unknown')
+
+    // LLM 腿注入：高置信 + unknown 空 → 闸放行
+    configureDiffLlm({
+      complete: async () =>
+        JSON.stringify({
+          reusable: [{ item: 'stepShape', note: '同' }],
+          mustChange: [{ item: 'dataBand', why: 'S→M' }],
+          unknown: [],
+          confidence: 0.92,
+        }),
+    })
+    const ok = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(ok.revision.engine, 'llm')
+    assert.equal(ok.revision.humanGate, false)
+    assert.match(ok.advice, /修正后可参考复用/)
+    assert.match(ok.advice, /engine=llm/)
+    assert.match(ok.advice, /dataBand/, '放行仍须列出差异表调整项')
+
+    // LLM 腿失败 → reviseDiff 回落 heuristic（双路语义）
+    configureDiffLlm({ complete: async () => { throw new Error('net down') } })
+    const fb = await reviseTopHitAdvice(sigM, sigS)
+    assert.equal(fb.revision.engine, 'heuristic')
+    assert.equal(fb.revision.humanGate, true)
+    assert.match(fb.advice, /转人工/)
+  } finally {
+    configureDiffLlm(null)
+  }
+})
+
+test('E2-2 源断言：recall/hint 接 reviseTopHitAdvice（双路+人工闸）；rules.ts 不碰', () => {
+  const atSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const recallIdx = atSrc.indexOf("name: 'recall_experience'")
+  const annotateIdx = atSrc.indexOf("name: 'annotate_experience'")
+  assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
+  const recallSlice = atSrc.slice(recallIdx, annotateIdx)
+  assert.ok(recallSlice.includes('reviseTopHitAdvice'), 'recall execute 须走 reviseTopHitAdvice')
+  assert.ok(recallSlice.includes('revision'), 'recall value 须带 revision 结构位回执')
+  assert.ok(recallSlice.includes('engine/confidence'), '工具描述须声明 engine/confidence 结构位')
+  const aeSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  assert.ok(aeSrc.includes('await reviseTopHitAdvice') || aeSrc.includes('reviseTopHitAdvice('), 'hint 须接 reviseTopHitAdvice')
+  assert.ok(/await experienceHintOf\(/.test(aeSrc), 'hint 调用点须 await（async 接线）')
+  const policySrc = readFileSync(join(REPO, 'backend', 'src', 'agent-policy.ts'), 'utf8')
+  assert.ok(policySrc.includes('requiresHumanReview'), '闸门须用 requiresHumanReview')
+  assert.ok(policySrc.includes('reviseDiff'), '须接 reviseDiff 双路')
+  const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
+  assert.ok(!rulesSrc.includes('experience'), 'rules.ts 不得引用 experience（经验只提示不改分）')
 })

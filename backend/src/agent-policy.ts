@@ -8,7 +8,15 @@
  * core/wire 人审面不经过本模块。
  * @module @dsh-onto/backend/agent-policy
  */
-import type { RunDiff, ScenarioRunResult } from '@dsh-onto/core'
+import {
+  buildDiffTable,
+  requiresHumanReview,
+  reviseDiff,
+  type DiffLlmPort,
+  type RunDiff,
+  type ScenarioRunResult,
+  type TaskSignature,
+} from '@dsh-onto/core'
 
 /* ───────────────────────── 错误面（P2.4） ───────────────────────── */
 
@@ -152,6 +160,65 @@ export function recallPhrases(runId: string): string[] | undefined {
   if (hit !== undefined) return hit
   const loaded = phraseRecall?.(runId)
   return loaded === undefined ? undefined : [...new Set(loaded.filter((p) => typeof p === 'string' && p !== ''))]
+}
+
+/* ───────────────────────── E2-2：top-1 差异修正接生产（reviseDiff 双路 + 转人工闸） ───────────────────────── */
+
+/** 差异修正 LLM 端口（默认 null → heuristic 离线腿；configureDiffLlm 可注入以启用 LLM 腿）。 */
+let diffLlm: DiffLlmPort | null = null
+
+export function configureDiffLlm(port: DiffLlmPort | null): void {
+  diffLlm = port
+}
+
+/** recall/invoke top-1 修正回执（结构位：引擎/置信度/人工闸/差异项）。 */
+export interface TopHitRevision {
+  advice: string
+  revision: {
+    engine: 'llm' | 'heuristic' | 'digest'
+    confidence: number
+    humanGate: boolean
+    mustChange: string[]
+    unknown: string[]
+  }
+}
+
+/**
+ * top-1 差异修正 + 转人工闸（E2-2，spec experience-loop S5.1/S5.2）：
+ * - digest 同构 → 短路跳过修正（S5.1），advice 直接可参考复用；
+ * - 否则 buildDiffTable 初稿 → reviseDiff 双路（LLM 腿可注入，失败/缺省回落 heuristic）
+ *   → requiresHumanReview 闸（unknown 非空或置信度 <0.75 → 转人工）；
+ * - advice 携带 engine/confidence 结构位；unknown/mustChange 回执供测试与人审定位。
+ * 经验只提示不改分——本函数不触碰打分语义。
+ */
+export async function reviseTopHitAdvice(
+  query: TaskSignature,
+  source: TaskSignature,
+): Promise<TopHitRevision> {
+  if (query.digest === source.digest) {
+    return {
+      advice: '结构同构可参考复用（digest 同构短路跳过差异修正；仍须过验证闸门，humanReviewRequired=true）',
+      revision: { engine: 'digest', confidence: 1, humanGate: false, mustChange: [], unknown: [] },
+    }
+  }
+  const draft = buildDiffTable(query, source)
+  const rev = await reviseDiff(diffLlm, { query, source, draft })
+  const humanGate = requiresHumanReview(rev)
+  const mustChange = rev.diff.mustChange.map((m) => m.item)
+  const unknown = rev.diff.unknown.map((u) => u.item)
+  const conf = rev.confidence.toFixed(2)
+  const parts: string[] = []
+  if (mustChange.length > 0) parts.push(`结构位差异（${mustChange.join(', ')}）`)
+  if (unknown.length > 0) parts.push(`待确认（${unknown.join(', ')}）`)
+  const detail = parts.length > 0 ? `${parts.join('；')} → ` : ''
+  const advice = humanGate
+    ? `低置信度：${detail}转人工确认后方可复用（engine=${rev.engine}, confidence=${conf}）`
+    : `修正后可参考复用${mustChange.length > 0 ? `（需按差异表调整：${mustChange.join(', ')}）` : ''}`
+      + `（engine=${rev.engine}, confidence=${conf}；仍须过验证闸门，humanReviewRequired=true）`
+  return {
+    advice,
+    revision: { engine: rev.engine, confidence: rev.confidence, humanGate, mustChange, unknown },
+  }
 }
 
 /** 脱敏占位标记候选（首选用「禁语已脱敏」，与既有测试/文案一致）。 */

@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { derivePackage } from './derive.js'
 import { draftCandidateId, knowledgeSourceId, isValidId } from './ids.js'
 import { isConclusionLike, parseWithFallback } from './llm.js'
 import { assertWritable, loadPackage, readPackageMeta, savePackage } from './store.js'
@@ -505,12 +506,23 @@ export class KnowledgeStore {
    * - 只物化 status=approved 的候选（pending/forcedReview 未过人审的拒绝）
    * - ISSUED 包拒绝写入（§3.4）
    * - 结论性表述只落 forbiddenPhrases 红线，绝不进输出契约（§5.3.2）
+   * - 物化改写源文件后自动重派生（D6）：否则包立刻 DERIVED_DRIFT 不可读，
+   *   逼 agent 走提权 CLI derive 才能恢复。
+   * - 重派生失败 → 回滚包源与候选 appliedAs（P2-2）：不留「源已改、派生未更、
+   *   重试 DUP_ID」的死锁；候选保持 approved 可重试。
+   * - `opts.derive` 可注入（测试桩）；缺省 derivePackage。
+   * - `notes`：结构位回执（如 SkillTemplate 多场景未接线提示），人审/模型面可读。
    */
-  materialize(versionDir: string, candidateIds: string[]): { applied: string[]; skipped: Array<{ id: string; reason: string }> } {
+  materialize(
+    versionDir: string,
+    candidateIds: string[],
+    opts?: { derive?: (dir: string) => unknown },
+  ): { applied: string[]; skipped: Array<{ id: string; reason: string }>; notes?: string[] } {
     const meta = readPackageMeta(versionDir)
     const queue = this.loadQueue()
     const applied: string[] = []
     const skipped: Array<{ id: string; reason: string }> = []
+    const notes: string[] = []
 
     const targets = candidateIds.map((id) => {
       const c = queue.find((x) => x.id === id)
@@ -558,13 +570,16 @@ export class KnowledgeStore {
     }
 
     const pkg = loadPackage(versionDir)
+    // P2-2：整批落盘前快照——derive 失败时回滚到物化前源状态，避免半写死锁。
+    const originalSnap = snapshotPkg(pkg)
     const weightTouched = new Set<string>()
     for (const c of eligible) {
       // 自动分配 ID 也必须在骨架内：先干跑应用，超界即回滚该条（I6 全覆盖）。
       // 口径：I6 只约束新增 Schema ID；update/属性/红线不新增 ID，按 ID 段对照骨架。
       const before = snapshotPkg(pkg)
+      const wireOut: { wire?: { wired: true; scenarioId: string } | { wired: false; reason: string } } = {}
       try {
-        c.appliedAs = applyDraftToPackage(pkg, c)
+        c.appliedAs = applyDraftToPackage(pkg, c, wireOut)
         const idSegment = c.appliedAs.split('.')[0]
         if (!inSkeleton(idSegment)) {
           restorePkg(pkg, before)
@@ -572,23 +587,53 @@ export class KnowledgeStore {
           skipped.push({ id: c.id, reason: `ID ${idSegment} 不在骨架内（I6）` })
           continue
         }
+        if (wireOut.wire && !wireOut.wire.wired) {
+          notes.push(`${c.appliedAs}: ${wireOut.wire.reason}`)
+        }
         if (c.op === 'update' && c.targetKind === 'ScoreRule' && 'weight' in (c.payload ?? {})) {
           weightTouched.add(c.appliedAs)
         }
         applied.push(c.id)
       } catch (e) {
+        // 半成品回滚（E1-3：接线失败不得留下已 push 的 skillTemplates）
+        restorePkg(pkg, before)
+        delete c.appliedAs
         skipped.push({ id: c.id, reason: e instanceof Error ? e.message : String(e) })
       }
     }
     // 权重联动归一（P3）：显式权重为准，未动规则吸收残差并同步技能模板——批量一次，避免互相打架。
     if (weightTouched.size > 0) renormalizeWeights(pkg, weightTouched)
     savePackage(versionDir, pkg)
+    // D6：源文件已变，同事务重派生，保持 loadgate 绿（未物化则源未变，不重派生）。
+    // P2-2：derive 失败 → 回滚源 + 清 appliedAs + 不标 merged，候选保持 approved 可重试。
+    if (applied.length > 0) {
+      const derive = opts?.derive ?? derivePackage
+      try {
+        derive(versionDir)
+      } catch (e) {
+        restorePkg(pkg, originalSnap)
+        try {
+          savePackage(versionDir, pkg)
+        } catch {
+          /* 回滚落盘失败仍继续清队列，错误面由下方 KnowledgeError 承载 */
+        }
+        for (const id of applied) {
+          const c = queue.find((x) => x.id === id)
+          if (c) delete c.appliedAs
+        }
+        this.saveQueue(queue)
+        throw new KnowledgeError(
+          'DERIVE_FAILED',
+          `物化后自动重派生失败，已回滚包源与候选状态（可重试）：${e instanceof Error ? e.message : String(e)}`,
+        )
+      }
+    }
 
     for (const c of queue) {
       if (applied.includes(c.id)) c.status = 'merged'
     }
     this.saveQueue(queue)
-    return { applied, skipped }
+    return { applied, skipped, ...(notes.length > 0 ? { notes } : {}) }
   }
 
   /**
@@ -949,8 +994,16 @@ function syncSkillWeights(pkg: OntologyPackage): void {
   for (const s of pkg.skillTemplates) s.weights = { ...map }
 }
 
-/** 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）；返回物化的元素 ID（溯源 I2）。 */
-export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
+/**
+ * 把一条 approved 草案应用到内存模型（RedLine 红线特殊路由）；返回物化的元素 ID（溯源 I2）。
+ * 可选 `out.wire`：SkillTemplate 接线结果（P3-3）——多场景且无 scenarioId 时 wired:false
+ * 不猜目标，由 materialize 回执 notes 上墙，避免静默不接线。
+ */
+export function applyDraftToPackage(
+  pkg: OntologyPackage,
+  c: DraftCandidate,
+  out?: { wire?: { wired: true; scenarioId: string } | { wired: false; reason: string } },
+): string {
   const p = c.payload ?? {}
   const tag = tagOf(pkg)
 
@@ -1071,6 +1124,8 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
     }
     case 'SkillTemplate': {
       const id = pickId(p, 'SKL', tag, pkg)
+      // 先解析接线目标再 push，避免 throw 后留下半成品模板
+      const wire = resolveSkillWireTarget(pkg, p)
       pkg.skillTemplates.push({
         id,
         name: String(p['name'] ?? c.name),
@@ -1078,6 +1133,15 @@ export function applyDraftToPackage(pkg: OntologyPackage, c: DraftCandidate): st
         steps: Array.isArray(p['steps']) ? (p['steps'] as string[]) : undefined,
         outputTemplate: typeof p['outputTemplate'] === 'string' ? p['outputTemplate'] : undefined,
       })
+      if (wire) {
+        appendSkillRef(wire, id)
+        if (out) out.wire = { wired: true, scenarioId: wire.id }
+      } else if (out) {
+        out.wire = {
+          wired: false,
+          reason: `SkillTemplate ${id} 未接线 pipeline.skillRefs：多场景且草案未提供 scenarioId（不猜目标场景）`,
+        }
+      }
       return id
     }
     case 'ScenarioCard': {
@@ -1169,6 +1233,42 @@ function idTaken(pkg: OntologyPackage, id: string): boolean {
     pkg.fieldMaps.some((x) => x.id === id) ||
     pkg.apiSources.some((x) => x.id === id)
   )
+}
+
+/**
+ * E1-3 SkillTemplate 物化接线：把新 SKL id append 到目标场景 pipeline.skillRefs。
+ * 目标场景 = payload.scenarioId；缺省且包内仅一场景时用之；多场景无 scenarioId 则不接线
+ * （不猜，避免错挂）。显式 scenarioId 不存在 → fail-loud（WIRE_SCENARIO_NOT_FOUND）。
+ */
+function resolveSkillWireTarget(
+  pkg: OntologyPackage,
+  p: Record<string, unknown>,
+): OntologyPackage['scenarios'][number] | null {
+  const explicit = typeof p['scenarioId'] === 'string' ? p['scenarioId'].trim() : ''
+  if (explicit) {
+    const sc = pkg.scenarios.find((s) => s.id === explicit)
+    if (!sc) throw new KnowledgeError('WIRE_SCENARIO_NOT_FOUND', `skillRefs 接线场景不存在: ${explicit}`)
+    return sc
+  }
+  if (pkg.scenarios.length === 1) return pkg.scenarios[0]
+  return null
+}
+
+/** 优先挂已有 SKILL_RUN 步，其次已有 skillRefs 的步，否则在 HUMAN_REVIEW 前插一步 SKILL_RUN。 */
+function appendSkillRef(scenario: OntologyPackage['scenarios'][number], skillId: string): void {
+  if (scenario.pipeline.some((step) => (step.skillRefs ?? []).includes(skillId))) return
+  let step = scenario.pipeline.find((s) => s.stepType === 'SKILL_RUN')
+  if (!step) step = scenario.pipeline.find((s) => (s.skillRefs?.length ?? 0) > 0)
+  if (!step) {
+    const humanIdx = scenario.pipeline.findIndex((s) => s.stepType === 'HUMAN_REVIEW')
+    const insertAt = humanIdx >= 0 ? humanIdx : scenario.pipeline.length
+    const used = new Set(scenario.pipeline.map((s) => s.stepId))
+    let n = 1
+    while (used.has(`s${n}`)) n += 1
+    step = { stepId: `s${n}`, stepType: 'SKILL_RUN' }
+    scenario.pipeline.splice(insertAt, 0, step)
+  }
+  step.skillRefs = [...(step.skillRefs ?? []), skillId]
 }
 
 function pickId(p: Record<string, unknown>, prefix: string, tag: string, pkg: OntologyPackage): string {

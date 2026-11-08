@@ -17,6 +17,8 @@ import {
   PackageStoreError,
   PackageWorkspace,
   SOURCE_TYPES,
+  abstractCounterexampleDrafts,
+  abstractSkillDrafts,
   buildDiffTable,
   buildRunRecord,
   buildTaskSignature,
@@ -25,6 +27,7 @@ import {
   isInsideDir,
   isValidId,
   isSafeRelPath,
+  listExperienceNotes,
   loadExperienceNote,
   loadPackage,
   loadRunRecord,
@@ -35,6 +38,7 @@ import {
   saveExperienceNote,
   saveRunRecord,
   verifyDerived,
+  type DraftCandidate,
   type DraftItem,
   type ExperienceNote,
   type ExperienceOutcome,
@@ -66,10 +70,12 @@ import {
   renderRunText,
   retreatPhraseEcho,
   retreatRenderText,
+  reviseTopHitAdvice,
   toolExecute,
   type BatchRunItem,
   type BatchRunOutput,
   type BatchRunSummary,
+  type TopHitRevision,
 } from './agent-policy.js'
 import {
   assertDatasetGranted,
@@ -198,6 +204,7 @@ export function loadDatasetFromArgs(
       throw new AgentToolError(
         'INVALID_ARGS',
         `无法读取 dataset 文件: ${raw} ——相对路径按平台进程工作目录解析，会话工作区或外部夹具请改用 dataset 内联，`
+          + '样例数据在 dsh-onto 源码检出目录的 examples/ 下（aml-run.json / med-run.json / tax-run.json），'
           + '可复制示例: {"objects":[],"relations":[],"candidates":[]}',
       )
     }
@@ -692,14 +699,22 @@ export function renderScenarioList(scenarios: unknown[]): string {
 }
 
 /**
- * recall_experience 渲染（N4 / P4-5）：只回结构位（runId/score/outcome/理由含字段级对照），
- * 无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
+ * recall_experience 渲染（N4 / P4-5 / E1-2）：只回结构位（runId/score/outcome/理由含字段级对照/
+ * reviewFocus 下轮复核提示），无自由流程；冷启动 → 不硬迁移话术；差异 mustChange 非空 → 低置信度转人工话术。
  * render 闸：拼接后兜底（retreatRenderText，P2.2 同口径）。
  */
 export function renderRecallText(
   v: {
     coldStart: boolean
-    hits: Array<{ runId: string; score: number; outcome: string; counterexample: boolean; reasons: string[] }>
+    hits: Array<{
+      runId: string
+      score: number
+      outcome: string
+      counterexample: boolean
+      reasons: string[]
+      /** 下轮复核提示（人审面沉淀的结构位条目，过 value/render 闸后上墙）。 */
+      reviewFocus: string[]
+    }>
     advice: string
   },
   phrases?: readonly string[],
@@ -715,8 +730,9 @@ export function renderRecallText(
     // 打分位 = 同 scenarioId / stepShape 一致 / Jaccard 等检索理由。
     const field = h.reasons.filter((r) => /源=|源≠|共有\d|同（| 同$/.test(r))
     const scoreBits = h.reasons.filter((r) => !field.includes(r))
+    const focus = h.reviewFocus.length > 0 ? ` 复核提示[${h.reviewFocus.join(', ')}]` : ''
     return [
-      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}`,
+      `- ${h.runId} score=${h.score.toFixed(2)} outcome=${h.outcome} 反例=${h.counterexample ? '是' : '否'}${focus}`,
       `  打分：${scoreBits.join('; ') || '—'}`,
       `  字段对照：${field.join('; ') || '—'}`,
     ].join('\n')
@@ -725,6 +741,39 @@ export function renderRecallText(
     [`命中 ${v.hits.length} 条：`, ...lines, v.advice, 'humanReviewRequired=true（认定出口只在人工复核）'].join('\n'),
     phrases ?? [],
   )
+}
+
+/**
+ * recall_experience 命中投影（E1-2）：结构位 + reviewFocus 下轮复核提示。
+ * 经验只提示不改分——本函数不触碰打分语义；reviewFocus 经 value 闸后上墙。
+ */
+export function projectRecallHits(
+  hits: ReadonlyArray<{
+    note: {
+      runId: string
+      outcome: string
+      counterexample: boolean
+      reviewFocus?: string[]
+    }
+    score: number
+    reasons: string[]
+  }>,
+): Array<{
+  runId: string
+  score: number
+  outcome: string
+  counterexample: boolean
+  reasons: string[]
+  reviewFocus: string[]
+}> {
+  return hits.map((h) => ({
+    runId: h.note.runId,
+    score: Number(h.score.toFixed(2)),
+    outcome: h.note.outcome,
+    counterexample: h.note.counterexample,
+    reasons: h.reasons,
+    reviewFocus: h.note.reviewFocus ?? [],
+  }))
 }
 
 /**
@@ -902,6 +951,359 @@ export function renderAnnotateText(
   return retreatRenderText(lines.join('\n'), phrases ?? [])
 }
 
+/**
+ * abstract_experience 回执行（D13）：merged 技能簇附正文状态/更新通道字段。
+ * - `op=update` + `targetId`：正文过期，已入队正文更新草案（批准后 apply_draft 刷新正文）。
+ * - `bodyUpToDate`：包内正文与最新簇一致，无需更新（消「批准也没用」落差）。
+ */
+export interface AbstractQueuedEntry {
+  id: string
+  name: string
+  targetKind: string
+  status: string
+  members: number
+  runId: string
+  package?: string
+  op?: 'update'
+  targetId?: string
+  bodyUpToDate?: true
+}
+
+/** D13：包内技能正文与最新簇载荷比对（steps/outputTemplate 精确、weights 键排序）。 */
+export function skillBodyCurrent(
+  el: { steps?: string[]; weights?: Record<string, number>; outputTemplate?: string },
+  payload: Record<string, unknown>,
+): boolean {
+  const steps = Array.isArray(payload['steps']) ? (payload['steps'] as unknown[]) : null
+  const w = payload['weights']
+  const weights = w !== null && typeof w === 'object' && !Array.isArray(w) ? (w as Record<string, unknown>) : null
+  const out = typeof payload['outputTemplate'] === 'string' ? payload['outputTemplate'] : null
+  const canon = (x: Record<string, unknown> | null): string =>
+    x === null ? 'null' : JSON.stringify(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+  return (
+    JSON.stringify(el.steps ?? null) === JSON.stringify(steps) &&
+    canon(el.weights ?? null) === canon(weights) &&
+    (el.outputTemplate ?? null) === out
+  )
+}
+
+/** D13：从簇载荷提取 SkillTemplate 可更新字段（id/scenarioId 在 update 白名单外，起草即拒——剥掉）。 */
+function pickSkillBodyPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (Array.isArray(payload['steps'])) out['steps'] = payload['steps']
+  if (payload['weights'] !== null && typeof payload['weights'] === 'object' && !Array.isArray(payload['weights'])) {
+    out['weights'] = payload['weights']
+  }
+  if (typeof payload['outputTemplate'] === 'string') out['outputTemplate'] = payload['outputTemplate']
+  return out
+}
+
+/**
+ * D13：SkillTemplate 簇命中已物化（merged）草案 → 正文更新通道。
+ * 比对包内元素正文与最新簇载荷：一致 → 回执 bodyUpToDate（诚实状态，消落差）；
+ * 过期 → 入队 op=update 正文更新草案。在途 pending/approved **直接复用且不覆盖 payload**
+ * （人审可能已编辑；载荷落后时物化后下轮重抽象按 `#N` 换代重提，自愈）；
+ * 上一代已物化则按 `#N` 换代重提，绕开 update 幂等键防死锁。元素定位不到 → null（走原 merged 回执）。
+ * 只入队不直写包（I1）；物化必经 apply_draft。经验只提示不改分。
+ */
+export function skillBodyUpdateEntry(
+  knowledge: KnowledgeStore,
+  pkg: OntologyPackage,
+  packageName: string,
+  a: { draft: DraftItem; memberRunIds: string[] },
+  mergedCreate: DraftCandidate,
+  withPackage: boolean,
+): AbstractQueuedEntry | null {
+  const base = {
+    members: a.memberRunIds.length,
+    runId: a.memberRunIds[0],
+    ...(withPackage ? { package: `${pkg.meta.name}@${pkg.meta.version}` } : {}),
+  }
+  // 定位已物化元素：appliedAs → payload.id → 同名兜底
+  const hint =
+    typeof mergedCreate.appliedAs === 'string' && mergedCreate.appliedAs !== ''
+      ? mergedCreate.appliedAs
+      : typeof mergedCreate.payload['id'] === 'string'
+        ? (mergedCreate.payload['id'] as string)
+        : undefined
+  const el =
+    (hint !== undefined ? pkg.skillTemplates.find((s) => s.id === hint) : undefined) ??
+    pkg.skillTemplates.find((s) => s.name === a.draft.name)
+  if (!el) return null
+  const fresh = pickSkillBodyPayload(a.draft.payload)
+  if (skillBodyCurrent(el, a.draft.payload)) {
+    return {
+      id: mergedCreate.id,
+      name: mergedCreate.name,
+      targetKind: 'SkillTemplate',
+      status: 'merged',
+      ...base,
+      targetId: el.id,
+      bodyUpToDate: true,
+    }
+  }
+  // 在途 update（pending/approved）直接复用——不覆盖 payload（人审可能已编辑；载荷落后时
+  // 物化后下轮重抽象会按 #N 换代重提，自愈）
+  const baseName = a.draft.name
+  const prior = knowledge
+    .listCandidates({ packageId: packageName })
+    .filter(
+      (x) =>
+        x.op === 'update' &&
+        x.targetKind === 'SkillTemplate' &&
+        x.targetId === el.id &&
+        (x.name === baseName || x.name.startsWith(`${baseName}#`)) &&
+        x.status !== 'rejected',
+    )
+  const inflight = prior.find((x) => x.status === 'pending' || x.status === 'approved')
+  if (inflight) {
+    return {
+      id: inflight.id,
+      name: inflight.name,
+      targetKind: 'SkillTemplate',
+      status: inflight.status,
+      ...base,
+      op: 'update',
+      targetId: el.id,
+    }
+  }
+  // 无在途 → 新一代 update：上一代已 merged 时按计数换名，绕开同键幂等返回旧草案
+  const name = prior.length === 0 ? baseName : `${baseName}#${prior.length + 1}`
+  const upd = knowledge.addDraft({
+    packageId: packageName,
+    item: {
+      layer: 'O2',
+      op: 'update',
+      targetKind: 'SkillTemplate',
+      targetId: el.id,
+      name,
+      payload: fresh,
+      confidence: a.draft.confidence,
+      rationale: a.draft.rationale,
+    },
+    provenance: { runId: a.memberRunIds[0] },
+  })
+  return {
+    id: upd.id,
+    name: upd.name,
+    targetKind: 'SkillTemplate',
+    status: upd.status,
+    ...base,
+    op: 'update',
+    targetId: el.id,
+  }
+}
+
+/**
+ * abstract_experience 纯函数（闭环 E2-1；D11 扫全库）：成功/反例经验按结构签名聚簇 →
+ * SkillTemplate / RedLine / ExclusionRule 草案入知识库人审队列（pending）。
+ * 只入队、永不直写包（I1）；物化必经 apply_draft（humanApproved 人审契约）。
+ * 经验只提示不改分——本函数不触碰 core/src/rules.ts 打分语义。
+ *
+ * packageId 省略（D11）→ 扫描全库：只处理「有经验记录且非 ISSUED」的包；
+ * ISSUED 记入 skipped 不整单失败（扫全库是发现面，不该被单个只读包打断）。
+ */
+export function abstractExperienceForTool(
+  ws: PackageWorkspace,
+  knowledge: KnowledgeStore,
+  args: {
+    packageId?: string
+    minCluster?: number
+    humanApproved?: unknown
+  },
+): {
+  package: string
+  scanned?: Array<{
+    package: string
+    skipped?: string
+    queued: number
+    skills: number
+    counters: number
+  }>
+  queued: AbstractQueuedEntry[]
+  skills: number
+  counters: number
+  humanReviewRequired: true
+} {
+  assertHumanApproved(args.humanApproved, '总结经验')
+  let minCluster: number | undefined
+  if (args.minCluster !== undefined) {
+    if (typeof args.minCluster !== 'number' || !Number.isInteger(args.minCluster) || args.minCluster < 1) {
+      throw new AgentToolError('INVALID_ARGS', 'minCluster 必须是 ≥1 的整数')
+    }
+    minCluster = args.minCluster
+  }
+
+  const queueOne = (
+    pkg: OntologyPackage,
+    packageName: string,
+    withPackage: boolean,
+  ): {
+    queued: AbstractQueuedEntry[]
+    skills: number
+    counters: number
+  } => {
+    const abs = abstractSkillDrafts(ws.root, { pkg, minCluster })
+    const counters = abstractCounterexampleDrafts(ws.root, { pkg, minCluster })
+    const queued: AbstractQueuedEntry[] = []
+    for (const a of [...abs, ...counters]) {
+      const c = knowledge.addDraft({
+        packageId: packageName,
+        item: a.draft,
+        provenance: { runId: a.memberRunIds[0] },
+      })
+      // D13：SkillTemplate 已物化（merged）→ 正文更新通道（一致回执 bodyUpToDate；过期入队 op=update）
+      if (c.status === 'merged' && a.draft.targetKind === 'SkillTemplate') {
+        const entry = skillBodyUpdateEntry(knowledge, pkg, packageName, a, c, withPackage)
+        if (entry !== null) {
+          queued.push(entry)
+          continue
+        }
+      }
+      queued.push({
+        id: c.id,
+        name: c.name,
+        targetKind: c.targetKind,
+        status: c.status,
+        members: a.memberRunIds.length,
+        runId: a.memberRunIds[0],
+        ...(withPackage ? { package: `${pkg.meta.name}@${pkg.meta.version}` } : {}),
+      })
+    }
+    return { queued, skills: abs.length, counters: counters.length }
+  }
+
+  if (args.packageId !== undefined) {
+    const packageName = requireExistingPackage(ws.listVersions(), args.packageId)
+    const version = args.packageId.slice(args.packageId.lastIndexOf('@') + 1)
+    const dir = ws.versionDir(packageName, version)
+    let pkg: OntologyPackage
+    try {
+      pkg = loadPackage(dir)
+    } catch {
+      throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.packageId}`)
+    }
+    if (pkg.meta.status === 'ISSUED') {
+      throw new AgentToolError('INVALID_ARGS', `${packageName}@${version} 已签发只读：请 fork 新版本（P1）`)
+    }
+    const one = queueOne(pkg, packageName, false)
+    return {
+      package: `${packageName}@${version}`,
+      queued: one.queued,
+      skills: one.skills,
+      counters: one.counters,
+      humanReviewRequired: true,
+    }
+  }
+
+  // D11 扫全库：只扫「有经验记录」的包（无经验包不进回执——发现面要的是「哪里能沉淀」）。
+  const scopes = new Set(listExperienceNotes(ws.root).map((n) => n.signature.packageScope))
+  const scanned: Array<{
+    package: string
+    skipped?: string
+    queued: number
+    skills: number
+    counters: number
+  }> = []
+  const queued: AbstractQueuedEntry[] = []
+  let skills = 0
+  let countersTotal = 0
+  for (const v of ws.listVersions()) {
+    const scope = `${v.name}@${v.version}`
+    if (!scopes.has(scope)) continue
+    if (v.status === 'ISSUED') {
+      scanned.push({ package: scope, skipped: '已签发只读：请 fork 新版本（P1）', queued: 0, skills: 0, counters: 0 })
+      continue
+    }
+    let pkg: OntologyPackage
+    try {
+      pkg = loadPackage(v.dir)
+    } catch {
+      scanned.push({ package: scope, skipped: '包不存在或无法加载', queued: 0, skills: 0, counters: 0 })
+      continue
+    }
+    const one = queueOne(pkg, v.name, true)
+    scanned.push({ package: scope, queued: one.queued.length, skills: one.skills, counters: one.counters })
+    queued.push(...one.queued)
+    skills += one.skills
+    countersTotal += one.counters
+  }
+  return {
+    package: '全库',
+    scanned,
+    queued,
+    skills,
+    counters: countersTotal,
+    humanReviewRequired: true,
+  }
+}
+
+/** abstract_experience 渲染（E2-1/D11/D13）：结构位回执（草案 id/kind/簇员/status + 正文更新通道），无服务端路径。 */
+export function renderAbstractText(
+  v: {
+    package: string
+    scanned?: Array<{
+      package: string
+      skipped?: string
+      queued: number
+      skills: number
+      counters: number
+    }>
+    queued: AbstractQueuedEntry[]
+    skills: number
+    counters: number
+  },
+  phrases?: readonly string[],
+): string {
+  // D13：merged 技能簇行附正文状态——op=update（过期已入队更新草案）/ bodyUpToDate（一致无需更新）
+  const entryLine = (q: AbstractQueuedEntry): string => {
+    const at = v.scanned !== undefined ? `@${q.package ?? ''} ` : ' '
+    const body =
+      q.op === 'update' && q.targetId !== undefined
+        ? ` op=update targetId=${q.targetId}（正文过时：批准后 apply_draft 刷新技能正文）`
+        : q.bodyUpToDate === true
+          ? ' bodyUpToDate（正文已与最新簇一致，无需更新）'
+          : ''
+    return `+ [${q.targetKind}] ${q.name}（${q.id}）${at}status=${q.status} 簇员=${q.members} 代表=${q.runId}${body}`
+  }
+  if (v.scanned !== undefined) {
+    // D11 扫全库回执：逐包一行（含跳过原因），草案行带包归属。
+    const lines = [
+      `全库扫描：候选经验包 ${v.scanned.length} 个，入队合计 ${v.queued.length} 条（技能 ${v.skills} · 反例 ${v.counters}）`,
+      ...v.scanned.map((s) =>
+        s.skipped !== undefined
+          ? `- ${s.package}：跳过（${s.skipped}）`
+          : `- ${s.package}：入队 ${s.queued} 条（技能 ${s.skills} · 反例 ${s.counters}）`,
+      ),
+      ...v.queued.map(entryLine),
+      'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
+    ]
+    if (v.queued.length === 0) {
+      lines.splice(
+        1 + v.scanned.length,
+        0,
+        '无可入队簇（成功同构/反例簇员需 ≥minCluster，缺省 2；当前不足或无参聚经验）',
+      )
+    }
+    return retreatRenderText(lines.join('\n'), phrases ?? [])
+  }
+  if (v.queued.length === 0) {
+    return retreatRenderText(
+      [
+        `包 ${v.package}：无可入队簇（成功同构/反例簇员需 ≥minCluster，缺省 2；当前不足或无参聚经验）`,
+        'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
+      ].join('\n'),
+      phrases ?? [],
+    )
+  }
+  const lines = [
+    `包 ${v.package}：经验抽象入队 ${v.queued.length} 条（技能 ${v.skills} · 反例 ${v.counters}）`,
+    ...v.queued.map(entryLine),
+    'humanReviewRequired=true（物化必经 apply_draft 人审；只入队不直写包）',
+  ]
+  return retreatRenderText(lines.join('\n'), phrases ?? [])
+}
+
 /** get_model_graph 渲染：概览 + issues 精选（info 之外最多 10 条）。 */
 export function renderGraphSummary(g: ModelGraph): string {
   const draftCount = g.nodes.filter((n) => n.draft).length
@@ -932,6 +1334,9 @@ export function renderDraftResult(v: {
   const rejected = v.rejected ?? []
   const lines = [`包 ${v.package ?? ''} · 轮次 ${v.turnId ?? ''}：入队 ${added.length} 条`]
   if (v.sourceId) lines.push(`CONVERSATION 原料：${v.sourceId}`)
+  if (added.length > 0) {
+    lines.push('同批物化提示：用户一次点头后 apply_draft 传入全部 candidateIds 同批物化（勿逐条）；画布节点内嵌 ✓ 亦可直接人审')
+  }
   for (const a of added) {
     lines.push(`+ [${a.targetKind}] ${a.name}（${a.id}）${a.forcedReview ? ' · 强制人审' : ''}`)
   }
@@ -1131,7 +1536,11 @@ export function apply(ctx: Context): void {
       description:
         '执行一个业务本体场景（规则引擎判定，认定出口只在人工）。数据输入二选一：datasetPath（JSON 文件，'
         + '仅限平台进程工作目录内，外部/会话工作区夹具用 dataset 内联）'
-        + '或 dataset（内联 RuntimeDataset）。返回候选风险分、命中规则 ID、证据链、待核实点、'
+        + '或 dataset（内联 RuntimeDataset）。样例数据在 dsh-onto 源码检出目录的 examples/ 下'
+        + '（aml-run.json / med-run.json / tax-run.json）——不在会话工作区、也不在平台进程工作目录，'
+        + '相对 datasetPath 按平台进程工作目录解析会读不到；请先定位 dsh-onto 检出目录并读取文件内容，'
+        + '再用 dataset 内联传入。'
+        + '返回候选风险分、命中规则 ID、证据链、待核实点、'
         + 'humanReviewRequired=true 与禁语扫描结果。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
@@ -1139,7 +1548,8 @@ export function apply(ctx: Context): void {
         scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
         datasetPath: {
           type: 'string',
-          description: 'RuntimeDataset JSON 文件路径——仅限平台进程工作目录内的路径（围栏防穿越，越界拒绝）；会话工作区或外部夹具请改用 dataset 内联',
+          description: 'RuntimeDataset JSON 文件路径——仅限平台进程工作目录内的路径（围栏防穿越，越界拒绝）；'
+            + '样例在 dsh-onto 检出目录 examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: { type: 'json', description: '内联 RuntimeDataset（objects/relations/candidates）' },
       },
@@ -1261,7 +1671,8 @@ export function apply(ctx: Context): void {
         },
         datasetPath: {
           type: 'string',
-          description: '数据集 JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内的路径，外部夹具请用 dataset 内联）',
+          description: '数据集 JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内的路径，外部夹具请用 dataset 内联）。'
+            + '样例在 dsh-onto 检出目录 examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: {
           type: 'json',
@@ -1352,13 +1763,21 @@ export function apply(ctx: Context): void {
       description:
         '按任务结构签名召回相似历史经验（结构检索，非关键词匹配）。只读。'
         + '命中理由含字段级 signature 新旧对照（scenarioId/ruleRefs/skillRefs/dataBand 等源→新），不止 Jaccard 数字。'
-        + '冷启动（无相似经验）或低置信度（差异含结构位变更）时不得硬迁移——'
-        + '结果仅含结构位（runId/score/outcome/签名字段）与转人工提示，不含自由流程描述。',
+        + '命中含 reviewFocus（下轮复核提示，人审面沉淀的结构位条目）。'
+        + 'top-1 走差异修正双路（LLM 腿可注入/启发式回落）与人工闸：unknown 非空或置信度<0.75 → advice 明确转人工'
+        + '（附 engine/confidence 结构位）；digest 同构短路直接可参考复用。'
+        + '冷启动（无相似经验）或低置信度时不得硬迁移——'
+        + '结果仅含结构位（runId/score/outcome/签名字段/reviewFocus/修正回执）与转人工提示，不含自由流程描述。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
         scenarioId: { type: 'string', required: true, description: '场景 ID，如 SCN-AML-FIND-CLUES' },
-        dataset: { type: 'json', description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集）' },
+        dataset: {
+          type: 'json',
+          description: '内联 RuntimeDataset（用于结构签名的规模档；缺省按空集=S 档）。'
+            + '规模档只看 candidates 数量（S<50/M<500/L≥500）——用户提到数据量时按其数量构造 candidates 数组即可'
+            + '（元素可为占位对象，objects/relations 可为空数组）',
+        },
       },
       output: {
         schema: {
@@ -1368,13 +1787,14 @@ export function apply(ctx: Context): void {
             coldStart: { type: 'boolean', required: true },
             hits: { type: 'array', required: true, items: { type: 'json' } },
             advice: { type: 'string', required: true },
+            revision: { type: 'json' },
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
         render: (args, value) => textBlock(renderRecallText(value as never, redlines(args))),
       },
       execute: toolExecute(
-        (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
+        async (args: { name: string; version: string; scenarioId: string; dataset?: unknown }) => {
           const pkg = load(args.name, args.version)
           const raw = (args.dataset ?? {}) as Partial<RuntimeDataset>
           const dataset: RuntimeDataset = {
@@ -1397,27 +1817,27 @@ export function apply(ctx: Context): void {
             signature,
             externalRefs: pkg.meta.externalRefs,
           })
-          const hits = result.hits.map((h) => ({
-            runId: h.note.runId,
-            score: Number(h.score.toFixed(2)),
-            outcome: h.note.outcome,
-            counterexample: h.note.counterexample,
-            reasons: h.reasons,
-          }))
+          const hits = projectRecallHits(result.hits)
           let advice: string
+          let revision: TopHitRevision['revision'] | null = null
           if (result.coldStart || hits.length === 0) {
             advice = '冷启动：无相似经验（不硬迁移，走全量执行）'
           } else {
-            const draft = buildDiffTable(signature, result.hits[0].note.signature)
-            advice =
-              draft.mustChange.length > 0
-                ? `低置信度：结构位差异（${draft.mustChange.map((m) => m.item).join(', ')}）→ 转人工确认后方可复用`
-                : '结构同构可参考复用（仍须过验证闸门，humanReviewRequired=true）'
+            // E2-2：top-1 走 reviseDiff 双路修正 + 转人工闸（digest 同构由 helper 短路）。
+            const top = await reviseTopHitAdvice(signature, result.hits[0].note.signature)
+            advice = top.advice
+            revision = top.revision
           }
           // value 闸：包内全部场景红线（goalClass 等包自由文本可能撞红线）。
           return toolOut(
             enforceOutputPolicy(
-              { coldStart: result.coldStart, hits, advice, humanReviewRequired: true },
+              {
+                coldStart: result.coldStart,
+                hits,
+                advice,
+                ...(revision ? { revision } : {}),
+                humanReviewRequired: true,
+              },
               phrasesOfPkg(pkg),
             ),
           )
@@ -1511,6 +1931,85 @@ export function apply(ctx: Context): void {
         },
         [],
         (args) => redlinesForRuns(ws, args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'abstract_experience',
+      description:
+        '经验抽象巩固（E2-1）：把包内成功/反例经验按结构签名聚簇，产出 SkillTemplate/RedLine/ExclusionRule'
+        + '草案入知识库人审队列——只入队、永不直写包；物化必须走 apply_draft（humanApproved 人审）。'
+        + '用于「总结成功经验 / 沉淀方法论 / 反复出现的做法」类请求：不要再写工作区方法论文档代替本工具。'
+        + 'humanApproved 是人审契约：仅当用户明确要求总结/沉淀经验时传 true，agent 不得自行总结。'
+        + 'packageId 可省略：省略即扫描全库有经验的非 ISSUED 包（「最近这些成功经验」类请求不必先追问包名，'
+        + '也不要为此翻目录找包——直接不传 packageId）。'
+        + '反例/误迁移经验不参聚成功簇（反例只落红线或排除草案）；簇员不足回执说明、不硬凑。'
+        + 'D13 正文更新通道：技能簇已物化（merged）后重跑——回执 bodyUpToDate 表示正文已与最新簇一致；'
+        + '回执 op=update/targetId 表示正文过时、已入队正文更新草案，批准后 apply_draft 即刷新技能正文。'
+        + '返回结构位回执（草案 id/kind/status/簇员数），认定出口只在人工。',
+      parameters: {
+        packageId: {
+          type: 'string',
+          description: '包 ID（name@version，如 aml-analysis@1.0.0）；省略 = 扫描全库有经验的非 ISSUED 包',
+        },
+        minCluster: {
+          type: 'number',
+          description: '最小簇员数（缺省 2；≥1 整数）——低于该值不出草案',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确指示总结/沉淀经验时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            package: { type: 'string', required: true },
+            scanned: { type: 'array', items: { type: 'json' } },
+            queued: { type: 'array', required: true, items: { type: 'json' } },
+            skills: { type: 'number', required: true },
+            counters: { type: 'number', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) =>
+          textBlock(
+            renderAbstractText(
+              value as never,
+              isRecord(_args) && typeof _args.packageId === 'string' ? redlines(_args) : workspaceRedlines(ws),
+            ),
+          ),
+      },
+      execute: toolExecute(
+        (args: { packageId?: string; minCluster?: number; humanApproved: boolean }) => {
+          // 抽象只读 O 层源与 experiences/，不依赖派生门禁（与 draft_elements 同口径）。
+          const result = abstractExperienceForTool(ws, knowledge, {
+            packageId: args.packageId,
+            minCluster: args.minCluster,
+            humanApproved: args.humanApproved,
+          })
+          // value 闸：指定包用包内场景红线；扫全库用工作区全量（自由文本可能撞任一包红线）。
+          const phrases =
+            args.packageId !== undefined
+              ? phrasesOfPkg(
+                  loadPackage(
+                    ws.versionDir(
+                      requireExistingPackage(ws.listVersions(), args.packageId),
+                      args.packageId.slice(args.packageId.lastIndexOf('@') + 1),
+                    ),
+                  ),
+                )
+              : workspaceRedlines(ws)
+          return toolOut(enforceOutputPolicy(result, phrases))
+        },
+        [],
+        (args) =>
+          isRecord(args) && typeof args.packageId === 'string' ? redlines(args) : workspaceRedlines(ws),
       ),
     }),
   )
@@ -1700,7 +2199,11 @@ export function apply(ctx: Context): void {
         + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
         + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
         + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
-        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。',
+        + '「明确批准」须指代本批草案清单本身（用户主动批准/同意这批草案，或批准卡通过）；'
+        + '恢复/推进类台词（按提案落盘/继续弄）、包形态与业务范围选择、骨架确认均不构成批准，'
+        + '不得引用其作为 humanApproved 依据——未见明确批准先问一句再传。'
+        + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。'
+        + '物化成功后自动重派生（无需再手动 derive），包立刻过加载门禁可直接运行/列技能。',
       parameters: {
         candidateIds: { type: 'array', required: true, description: '草案 ID 数组（dc-…）；同批归一，多条权重更新务必一次传入' },
         name: { type: 'string', required: true, description: '包名' },
@@ -1708,7 +2211,9 @@ export function apply(ctx: Context): void {
         humanApproved: {
           type: 'boolean',
           required: true,
-          description: '人审契约：仅当用户明确指示批准时传 true；agent 不得自行批准',
+          description:
+            '人审契约：仅当用户明确批准本批草案时传 true；恢复/推进类台词、包形态选择、'
+            + '骨架确认均不构成批准，agent 不得自行批准',
         },
       },
       output: {
@@ -1720,6 +2225,7 @@ export function apply(ctx: Context): void {
             results: { type: 'array', required: true, items: { type: 'json' } },
             materialized: { type: 'array', required: true, items: { type: 'string' } },
             skipped: { type: 'array', required: true, items: { type: 'json' } },
+            notes: { type: 'array', items: { type: 'string' } },
           },
         },
         render: (_args, value) => {
@@ -1727,11 +2233,13 @@ export function apply(ctx: Context): void {
             results: Array<{ candidateId: string; status: string; appliedAs: string | null }>
             materialized: string[]
             skipped: Array<{ id: string; reason: string }>
+            notes?: string[]
           }
           const lines = v.results.map((r) => `- ${r.candidateId} → ${r.status}${r.appliedAs ? `（${r.appliedAs}）` : ''}`)
           const head = `同批 ${v.results.length} 条，物化 ${v.materialized.length}：`
           const skips = v.skipped.map((s) => `跳过 ${s.id}：${s.reason}`)
-          return textBlock([head, ...lines, ...skips].join('\n'))
+          const notes = (v.notes ?? []).map((n) => `注意：${n}`)
+          return textBlock([head, ...lines, ...skips, ...notes].join('\n'))
         },
       },
       execute: toolExecute(
@@ -1770,7 +2278,14 @@ export function apply(ctx: Context): void {
           const materialized = results.flatMap((r) => (r.appliedAs !== null ? [r.appliedAs] : []))
           return toolOut(
             enforceOutputPolicy(
-              { approved: true, results, materialized, skipped: res.skipped },
+              {
+                approved: true,
+                results,
+                materialized,
+                skipped: res.skipped,
+                // P3-3：接线等结构位回执（多场景未接线等），不静默吞掉
+                ...(res.notes && res.notes.length > 0 ? { notes: res.notes } : {}),
+              },
               phrasesOfPkg(pkg),
             ),
           )
@@ -1880,7 +2395,9 @@ export function apply(ctx: Context): void {
       description:
         '骨架落盘（D3，物化门 I6 前置）：保存全量 ID 清单与域码并置「已确认」。'
         + 'humanApproved 人审契约同 apply_draft：仅当用户在会话中明确确认骨架后才传 true，'
-        + 'agent 不得自行确认；ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
+        + 'agent 不得自行确认；点头须指代**这份 ID 清单本身**——包形态/业务范围/域码澄清选择、'
+        + '恢复/推进类台词均不构成骨架确认；骨架点头也不得代用作后续 apply_draft 的物化批准。'
+        + 'ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
         + '骨架是唯一能改名/新增 ID 的入口，确认前不得物化任何元素。',
       parameters: {
         packageId: { type: 'string', required: true, description: '目标包 name@version' },
@@ -1889,7 +2406,9 @@ export function apply(ctx: Context): void {
         humanApproved: {
           type: 'boolean',
           required: true,
-          description: '人审契约：仅当用户明确点头确认骨架时传 true；agent 不得自行确认',
+          description:
+            '人审契约：仅当用户明确点头确认这份 ID 清单时传 true；包形态/范围选择、'
+            + '恢复类台词均不算，agent 不得自行确认',
         },
       },
       output: {
