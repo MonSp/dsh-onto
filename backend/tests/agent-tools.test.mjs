@@ -538,6 +538,26 @@ test('D6：apply_draft 描述明示物化后自动重派生（防回退到手动
   )
 })
 
+test('D15：apply_draft/save_skeleton 描述与参数收口——非批准信号不得引用', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  // apply_draft：描述 + humanApproved 参数
+  const at = src.indexOf("name: 'apply_draft'")
+  assert.ok(at >= 0, 'apply_draft 须在源中登记')
+  const window = src.slice(at, at + 1400)
+  assert.ok(window.includes('恢复/推进类台词'), 'apply_draft 描述须列恢复/推进类台词反例（D15 ①）')
+  assert.ok(window.includes('骨架确认均不构成批准'), 'apply_draft 描述须声明骨架确认不构成物化批准（D15 ②）')
+  assert.ok(window.includes('不得引用其作为 humanApproved 依据'), 'apply_draft 描述须禁引用非批准信号')
+  assert.ok(window.includes('先问一句再传'), 'apply_draft 描述须要求未见明确批准先问再传（D15 ③）')
+  // save_skeleton：点头指代 ID 清单 + 不互代
+  const sk = src.indexOf("name: 'save_skeleton'")
+  assert.ok(sk >= 0, 'save_skeleton 须在源中登记')
+  const skWindow = src.slice(sk, sk + 1400)
+  assert.ok(skWindow.includes('指代**这份 ID 清单本身**'), 'save_skeleton 点头须指代 ID 清单本身')
+  assert.ok(skWindow.includes('不构成骨架确认'), 'save_skeleton 描述须列非骨架确认反例')
+  assert.ok(skWindow.includes('代用作后续 apply_draft'), '骨架点头不得代用作物化批准')
+  assert.ok(skWindow.includes('包形态/范围选择'), 'save_skeleton humanApproved 参数须列包形态选择反例')
+})
+
 test('list_packages 输出投影：不回显 dir 等服务端路径', () => {
   const projected = projectPackageList([
     {

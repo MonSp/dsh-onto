@@ -230,6 +230,23 @@ test('E3-1：引导正文攒批点头——分片不逐片索要批准、一次�
   assert.ok(body.includes('humanApproved'), 'humanApproved 人审契约不得被改写削弱')
 })
 
+// ── D15：humanApproved 语义外推收口——「明确批准」可操作判据 ──
+
+test('D15：引导正文「明确批准」判据——指代动作对象本身、反例清单、两次独立人审', () => {
+  const body = renderModelingGuideBody()
+  assert.ok(body.includes('「明确批准」'), '引导正文须给出「明确批准」判据标题')
+  assert.ok(body.includes('指代**本次动作对象本身**'), '批准须指代动作对象本身')
+  assert.ok(body.includes('这批草案清单'), '物化批准须指代这批草案清单')
+  assert.ok(body.includes('ask_user_question'), '批准卡（ask_user_question）为认可信号之一')
+  // D15 三处外推的反例必须显式列出
+  assert.ok(body.includes('包形态'), '包形态/范围选择不得构成批准')
+  assert.ok(body.includes('推进类台词'), '恢复/推进类台词不得构成批准')
+  assert.ok(body.includes('按提案继续/落盘'), '恢复台词样例须在场（D15 ①）')
+  assert.ok(body.includes('骨架确认（只放行 save_skeleton'), '骨架确认不代用作物化批准（D15 ②）')
+  assert.ok(body.includes('两次独立人审，不得互代'), '骨架点头与物化点头互不代用')
+  assert.ok(body.includes('批准卡（或明确问一句）再物化'), '未见明确批准须先出示批准请求再物化（D15 ③）')
+})
+
 test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文要点）', async () => {
   const provider = createModelingGuideProvider()
   const cands = await provider.list({})

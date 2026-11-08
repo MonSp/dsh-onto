@@ -2198,6 +2198,9 @@ export function apply(ctx: Context): void {
         + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
         + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
         + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
+        + '「明确批准」须指代本批草案清单本身（用户主动批准/同意这批草案，或批准卡通过）；'
+        + '恢复/推进类台词（按提案落盘/继续弄）、包形态与业务范围选择、骨架确认均不构成批准，'
+        + '不得引用其作为 humanApproved 依据——未见明确批准先问一句再传。'
         + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。'
         + '物化成功后自动重派生（无需再手动 derive），包立刻过加载门禁可直接运行/列技能。',
       parameters: {
@@ -2207,7 +2210,9 @@ export function apply(ctx: Context): void {
         humanApproved: {
           type: 'boolean',
           required: true,
-          description: '人审契约：仅当用户明确指示批准时传 true；agent 不得自行批准',
+          description:
+            '人审契约：仅当用户明确批准本批草案时传 true；恢复/推进类台词、包形态选择、'
+            + '骨架确认均不构成批准，agent 不得自行批准',
         },
       },
       output: {
@@ -2379,7 +2384,9 @@ export function apply(ctx: Context): void {
       description:
         '骨架落盘（D3，物化门 I6 前置）：保存全量 ID 清单与域码并置「已确认」。'
         + 'humanApproved 人审契约同 apply_draft：仅当用户在会话中明确确认骨架后才传 true，'
-        + 'agent 不得自行确认；ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
+        + 'agent 不得自行确认；点头须指代**这份 ID 清单本身**——包形态/业务范围/域码澄清选择、'
+        + '恢复/推进类台词均不构成骨架确认；骨架点头也不得代用作后续 apply_draft 的物化批准。'
+        + 'ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
         + '骨架是唯一能改名/新增 ID 的入口，确认前不得物化任何元素。',
       parameters: {
         packageId: { type: 'string', required: true, description: '目标包 name@version' },
@@ -2388,7 +2395,9 @@ export function apply(ctx: Context): void {
         humanApproved: {
           type: 'boolean',
           required: true,
-          description: '人审契约：仅当用户明确点头确认骨架时传 true；agent 不得自行确认',
+          description:
+            '人审契约：仅当用户明确点头确认这份 ID 清单时传 true；包形态/范围选择、'
+            + '恢复类台词均不算，agent 不得自行确认',
         },
       },
       output: {
