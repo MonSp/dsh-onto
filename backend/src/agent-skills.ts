@@ -149,6 +149,17 @@ export function candidateNameForSkl(candidateName: unknown, sklId: string): stri
 }
 
 /**
+ * 目录条目描述带包身份前缀（L4 身份层）：跨包技能在一屏平铺时按【包@版本 · 域】可识别，
+ * 用户/模型引用技能时连本体一起看到，不靠猜 slug。
+ */
+export function skillListDescription(
+  template: O2SkillTemplate,
+  meta: { name: string; version: string; domain: string },
+): string {
+  return `【${meta.name}@${meta.version} · ${meta.domain}】${template.description ?? template.name}`
+}
+
+/**
  * 胜出者复核（get() 前置校验）：locator 仍须是当前扫描快照下该名的去重胜出者——
  * 失效目录（fork/transition 后出现更优版本）之外，落选 DRAFT/旧版 locator 一律拒载
  * （round-13 minor：stale 候选绕过 ISSUED 优先）。
@@ -279,6 +290,17 @@ export function renderModelingGuideBody(): string {
     '- ISSUED 只读（修改须 fork 新版本）；签发仅人工（issuedBy 不得为 agent/llm）；',
     '  L 层只读，改 O 层后重派生。',
     '',
+    '## 专家识别与点名聚焦（L4 身份层）',
+    '- 会话开局、或用户问「有哪些业务本体 / 你能干什么 / 都有哪些专家」时：先调 `list_experts`',
+    '  （省略 name/version）拿**全局专家索引**，把身份卡（包@版本 · 域 · 状态 — 首场景目标）列给',
+    '  用户选；不要凭记忆报包名或技能名。',
+    '- 用户点名某个本体（如「就用反洗钱的」）后，本会话默认**聚焦该包**：后续 list_capabilities /',
+    '  list_experts / invoke_expert / draft_elements / save_skeleton 等一律显式传该 name+version，',
+    '  直到用户改点名或明确换域。点名只是会话约定（软聚焦），不改执行语义——执行仍走单包场景',
+    '  1:1 的专家（invoke_expert），打分只在引擎。',
+    '- 向用户介绍技能时连包一起报（技能目录描述自带【包@版本 · 域】前缀），跨本体的同名叙述',
+    '  不要裸引 slug。',
+    '',
     '## 标准流程',
     '1. 建包：create_package 对话完成（DRAFT 空包，同名同版本拒绝）。骨架先行：先在对话里',
     '   产出骨架提案（域码 + 全量 ID 清单 + 规模预算 + 取舍理由），**仅当用户明确点头确认**',
@@ -391,9 +413,17 @@ export function apply(ctx: Context): void {
           // 包含性过滤（与 get() 同口径）：packages 内 junction 指外的外来模板不进目录
           // （round-13 nit：此前 list 会列出 get 必拒的 stale/外来候选）。
           if (!locatorInWorkspace(s.versionDir, wsRoot)) continue
+          // 身份层：描述带【包@版本 · 域】前缀，跨包平铺一眼可分（meta 读失败保留占位不丢条目）。
+          let meta = { name: '?', version: s.version, domain: '?' }
+          try {
+            const m = loadPackage(s.versionDir).meta
+            meta = { name: m.name, version: m.version, domain: m.domain }
+          } catch {
+            /* 占位 meta */
+          }
           out.push({
             name,
-            description: s.template.description ?? s.template.name,
+            description: skillListDescription(s.template, meta),
             invocation: { modelInvocable: true, userInvocable: true },
             source: 'runtime',
             provider: 'onto-skill-templates',
@@ -423,7 +453,7 @@ export function apply(ctx: Context): void {
         if (template === undefined) return undefined
         return {
           name,
-          description: template.description ?? template.name,
+          description: skillListDescription(template, pkg.meta),
           invocation: { modelInvocable: true, userInvocable: true },
           source: 'runtime',
           provider: 'onto-skill-templates',

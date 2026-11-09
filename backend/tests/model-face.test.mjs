@@ -19,9 +19,11 @@ import {
 } from '../dist/model-face.js'
 import {
   assertDutiesAligned,
+  buildExpertIndex,
   buildExpertProfiles,
   experienceHintOf,
   readAgentDuties,
+  renderExpertIndex,
   renderExperts,
   renderExperienceSection,
   registerExpertTools,
@@ -557,4 +559,36 @@ test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化
   assert.ok(wb.includes("|| (formMis !== '' && !formBy.trim())"), '误迁移回填 by 前端必拦')
   assert.ok(wb.includes("className: 'ogc-node-acts'"), '人审按钮须二遍绘制（脱离节点组防遮挡）')
   assert.ok(wb.includes('graph.nodes.filter((nd) => nd.draft)'), '二遍绘制作用于全部草案节点')
+})
+
+test('L4 身份层：buildExpertIndex 一包一卡、ISSUED 优先选版、无场景回退、渲染带点名聚焦', () => {
+  const { root, ws } = mkAmlWorkspace()
+  try {
+    ws.forkVersion('aml-analysis', '1.0.0', '1.1.0')
+    ws.transition('aml-analysis', '1.1.0', 'IN_REVIEW')
+    ws.transition('aml-analysis', '1.1.0', 'ISSUED', 'tester（人工）')
+    ws.createPackage({ name: 'idx-empty', version: '1.0.0', domain: 'IDX' })
+
+    const { cards, phrases } = buildExpertIndex(ws.listVersions())
+    assert.equal(cards.length, 2, '一包一卡（同包多版本聚合）')
+
+    const aml = cards.find((c) => c.package === 'aml-analysis')
+    assert.equal(aml.version, '1.1.0', '同包取 ISSUED 优先版本')
+    assert.equal(aml.status, 'ISSUED')
+    assert.ok(aml.scenarios.length >= 1, '场景清单非空')
+    assert.ok(aml.title.length > 0, 'title=首场景 goal')
+    assert.ok(aml.skills.length >= 1, '技能清单非空')
+
+    const empty = cards.find((c) => c.package === 'idx-empty')
+    assert.match(empty.title, /尚无场景/, '无场景包显式回退标注')
+    assert.ok(Array.isArray(phrases))
+
+    const text = renderExpertIndex(cards)
+    assert.match(text, /业务本体专家 2 个/)
+    assert.match(text, /aml-analysis@1\.1\.0/)
+    assert.match(text, /点名聚焦：本会话默认 name=aml-analysis version=1\.1\.0/)
+    assert.ok(text.indexOf('aml-analysis') < text.indexOf('idx-empty'), 'ISSUED 优先列前')
+  } finally {
+    cleanup(root)
+  }
 })

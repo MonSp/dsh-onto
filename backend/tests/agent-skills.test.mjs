@@ -20,6 +20,7 @@ import {
   pickSkillSources,
   renderModelingGuideBody,
   renderSkillBody,
+  skillListDescription,
   skillNameFromId,
 } from '../dist/agent-skills.js'
 import { invalidateSkillCatalog, registerSkillInvalidator } from '../dist/agent-hooks.js'
@@ -269,4 +270,13 @@ test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文�
   assert.equal(await provider.get({ ...c, name: 'spoofed-name' }), undefined)
   // 非本提供方候选拒载
   assert.equal(await provider.get({ ...c, provider: 'onto-skill-templates' }), undefined)
+})
+
+test('skillListDescription：目录描述带【包@版本 · 域】身份前缀（跨包平铺可识别）', () => {
+  const tpl = { id: 'SKL-AML-NARRATIVE', name: '线索叙述', description: '按证据模板叙述', weights: {} }
+  const d = skillListDescription(tpl, { name: 'aml-analysis', version: '1.0.0', domain: 'AML' })
+  assert.equal(d, '【aml-analysis@1.0.0 · AML】按证据模板叙述')
+  // 无 description 回退模板名
+  const d2 = skillListDescription({ id: 'SKL-TFD-CLUE-NARRATIVE', name: '线索叙述', weights: {} }, { name: 'telecom-fraud', version: '1.0.0', domain: 'TFD' })
+  assert.match(d2, /^【telecom-fraud@1\.0\.0 · TFD】线索叙述$/)
 })
