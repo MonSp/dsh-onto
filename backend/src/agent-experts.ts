@@ -333,7 +333,9 @@ export function renderExperts(v: { experts?: ExpertProfile[]; derived?: boolean 
     for (const s of e.steps) {
       const llm = s.llm ? ` · llm:${s.llm}` : ''
       const gate = s.humanGate ? ' · 人审闸' : ''
-      lines.push(`  - ${s.stepId} ${s.stepType} · 工具 ${s.toolCount}${llm}${gate}`)
+      // stageDuty 上墙（实测补）：只给步型/工具数时模型会去翻文件凑「每一步谁干什么」。
+      const duty = s.stageDuty ? ` · ${s.stageDuty}` : ''
+      lines.push(`  - ${s.stepId} ${s.stepType}${duty} · 工具 ${s.toolCount}${llm}${gate}`)
     }
   }
   return lines.join('\n')
