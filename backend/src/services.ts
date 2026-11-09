@@ -26,6 +26,7 @@ import {
   KnowledgeStore,
   PackageWorkspace,
   SOURCE_TYPES,
+  assertIssueReady,
   buildQualityReport,
   buildRunRecord,
   compareRunRecords,
@@ -67,6 +68,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'onto/conflict': Record<string, never>
     'onto/readonly': Record<string, never>
     'onto/drift': Record<string, never>
+    'onto/issue-gate': Record<string, never>
   }
 }
 
@@ -106,6 +108,7 @@ function toRemoteError(e: unknown): RemoteError {
     return ontoError('onto/readonly', message)
   }
   if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message)
+  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message)
   if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message)
   if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message)
   return ontoError('onto/bad-request', message)
@@ -191,9 +194,22 @@ export class OntoWorkspace extends TypertRemoteService {
       if (!request?.name || !request?.version || !request?.to) {
         throw ontoError('onto/bad-request', 'name/version/to required')
       }
+      const dir = this.ws.versionDir(request.name, request.version)
+      // 签发门禁：校验 0 错 + 场景/规则非空 + 派生 + 加载门禁（空壳包/坏包不得签发）。
+      const gate = request.to === 'ISSUED' ? assertIssueReady(dir) : null
       this.ws.transition(request.name, request.version, request.to, request.issuedBy, request.note)
       invalidateSkillCatalog()
-      return { status: request.to }
+      // 状态迁移会改写 package.yaml（issueRecord/状态位）→ 同事务重派生，
+      // 否则签发/送审即 DERIVED_DRIFT，包立刻不可加载（实测 P0）。
+      try {
+        derivePackage(dir)
+      } catch (e) {
+        throw ontoError(
+          'onto/drift',
+          `状态已迁移到 ${request.to}，但重派生失败（请在校验派生页手动 derive）：${e instanceof Error ? e.message : String(e)}`,
+        )
+      }
+      return { status: request.to, ...(gate ? { gate } : {}) }
     })
   }
 
@@ -255,8 +271,15 @@ export class OntoModel extends TypertRemoteService {
   @Remote('save')
   async remoteExportSave(request: { name: string; version: string; pkg: OntologyPackage }): Promise<{ ok: true }> {
     return guard(() => {
-      savePackage(this.dirOf(request.name, request.version), request.pkg)
+      const dir = this.dirOf(request.name, request.version)
+      savePackage(dir, request.pkg)
       invalidateSkillCatalog()
+      // P1-C：与 materialize D6 同口径——源已改即重派生，避免 UI 保存后立刻 DERIVED_DRIFT。
+      try {
+        derivePackage(dir)
+      } catch (e) {
+        throw ontoError('onto/drift', `源已保存但重派生失败，请在校验派生页手动 derive：${e instanceof Error ? e.message : String(e)}`)
+      }
       return { ok: true as const }
     })
   }
@@ -289,6 +312,12 @@ export class OntoModel extends TypertRemoteService {
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, request.text, 'utf8')
       invalidateSkillCatalog()
+      // P1-C：YAML 导入后同事务重派生（与 materialize D6 / save 同口径）。
+      try {
+        derivePackage(dir)
+      } catch (e) {
+        throw ontoError('onto/drift', `源已写入但重派生失败，请在校验派生页手动 derive：${e instanceof Error ? e.message : String(e)}`)
+      }
       return { ok: true as const }
     })
   }
@@ -471,12 +500,41 @@ export class OntoKnowledge extends TypertRemoteService {
     action: 'approve' | 'reject' | 'merge'
     mergeIntoName?: string
   }): Promise<{ candidate: unknown }> {
-    return guard(() => ({
-      candidate: this.store.reviewCandidate(request.id, request.action, {
-        mergeIntoName: request.mergeIntoName,
-        reviewedBy: 'workbench',
-      }),
-    }))
+    return guard(() => {
+      // P3b（实测）：红线候选的唯一载体是场景 forbiddenPhrases——「标记并入」目标必须
+      // 命中该包任一版本的场景（ID 或名），否则记账成 merged 只会骗人（无载体、物化必失败）。
+      if (request.action === 'merge') {
+        const cand = this.store.getCandidate(request.id)
+        if (cand.targetKind === 'RedLine') {
+          const target = (request.mergeIntoName ?? '').trim()
+          const scenarioIds: string[] = []
+          let hit = false
+          for (const v of this.ws.listVersions()) {
+            if (v.name !== cand.packageId) continue
+            try {
+              for (const s of loadPackage(v.dir).scenarios) {
+                scenarioIds.push(s.id)
+                if (s.id === target || s.name === target) hit = true
+              }
+            } catch {
+              /* 单版本读取失败不阻断其余版本的匹配 */
+            }
+          }
+          if (!hit) {
+            throw ontoError(
+              'onto/bad-request',
+              `红线候选只能并入场景（forbiddenPhrases 载体）：「${target}」不是该包任何版本的场景。可用场景：${[...new Set(scenarioIds)].join(', ') || '（该包尚无场景，红线暂无载体）'}`,
+            )
+          }
+        }
+      }
+      return {
+        candidate: this.store.reviewCandidate(request.id, request.action, {
+          mergeIntoName: request.mergeIntoName,
+          reviewedBy: 'workbench',
+        }),
+      }
+    })
   }
 
   /** 对话开局骨架（P3/I6）：domainCode + 全量 ID 清单 + 确认态；骨架门在物化前置。 */

@@ -19,9 +19,11 @@ import {
 } from '../dist/model-face.js'
 import {
   assertDutiesAligned,
+  buildExpertIndex,
   buildExpertProfiles,
   experienceHintOf,
   readAgentDuties,
+  renderExpertIndex,
   renderExperts,
   renderExperienceSection,
   registerExpertTools,
@@ -61,6 +63,8 @@ const NEW_TOOLS = [
   'recall_experience',
   'annotate_experience',
   'abstract_experience',
+  'list_runs',
+  'list_drafts',
 ]
 
 function mkAmlWorkspace({ derived = false } = {}) {
@@ -136,6 +140,13 @@ test('get_model_graph 数据源：元素节点 + 引用边 + issue 定位（I3�
 test('草案上图与溯源回连（I1/I2）：pending 虚线节点，物化后 provenance 上节点', () => {
   const { root, ws, dir, knowledge } = mkAmlWorkspace()
   try {
+    // I6 对话路径：物化前须已确认骨架
+    knowledge.skeletons.save({
+      packageId: 'aml-analysis',
+      domainCode: 'AML',
+      confirmed: true,
+      ids: ['OBJ-AML-DRAFTED'],
+    })
     const draft = knowledge.addDraft({
       packageId: 'aml-analysis',
       item: {
@@ -228,8 +239,9 @@ test('buildExpertProfiles：派生后 duties 上墙，打分步 llm:forbidden、
     const text = renderExperts({ experts, derived })
     assert.ok(text.includes('SCN-AML-FIND-CLUES'))
     // render 即模型可见面：步级收权（toolCount/llm/人审闸）必须上墙（I7 可发现）
-    assert.match(text, /- \S+ RULE_EVALUATE · 工具 0 · llm:forbidden/, '打分步 render 含工具 0 与 llm:forbidden')
-    assert.match(text, /- \S+ DATA_INGEST · 工具 [1-9]\d* · llm:allowed/, '数据步 render 含非零工具数')
+    assert.match(text, /- \S+ RULE_EVALUATE · 规则引擎判定（排除\/打分） · 工具 0 · llm:forbidden/, '打分步 render 含 stageDuty、工具 0 与 llm:forbidden')
+  assert.match(text, /HUMAN_REVIEW · 人工复核（认定唯一出口）/, '人审步 stageDuty 上墙（每一步谁干什么可读）')
+    assert.match(text, /- \S+ DATA_INGEST · 数据归一、建图 · 工具 [1-9]\d* · llm:allowed/, '数据步 render 含 stageDuty 与非零工具数')
   } finally {
     cleanup(root)
   }
@@ -488,5 +500,117 @@ test('P2-2/P3-3 源断言：materialize derive 失败回滚 + SkillTemplate wire
   assert.ok(
     atSrc.includes('直接复用且不覆盖 payload'),
     'skillBodyUpdateEntry JSDoc 须与实现一致（不覆盖在途 payload）',
+  )
+})
+
+test('P1 修复源断言：wire save/writeSource 自动重派生 + create_package humanApproved + 对话骨架门', () => {
+  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  assert.ok(svc.includes("throw ontoError('onto/drift'"), 'save/writeSource derive 失败须受控 onto/drift')
+  assert.ok(svc.includes('derivePackage(dir)'), 'wire save/writeSource 成功路径须自动 derive')
+  // save 与 writeSource 两处
+  const deriveCount = (svc.match(/derivePackage\(dir\)/g) || []).length
+  assert.ok(deriveCount >= 2, `save+writeSource 均须 derive，实际 ${deriveCount}`)
+
+  const at = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(at.includes('assertHumanApproved(args.humanApproved, \'建包\')'), 'create_package 须 humanApproved')
+  assert.ok(at.includes('对话起草前须先 save_skeleton'), 'draft_elements 须骨架先行')
+  assert.ok(at.includes('骨架未确认，不得对话起草'), 'draft_elements 须已确认骨架')
+  assert.ok(at.includes("name: 'list_runs'"), 'list_runs 须注册')
+  assert.ok(at.includes("name: 'list_drafts'"), 'list_drafts 须注册')
+
+  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  assert.ok(grants.includes("'list_runs'"), 'list_runs 须入 ONTOOL_NAMES')
+  assert.ok(grants.includes("'list_drafts'"), 'list_drafts 须入 ONTOOL_NAMES')
+
+  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  assert.ok(wb.includes('issueConfirm'), 'issue 须 confirm 文案')
+  assert.ok(wb.includes("window.confirm(`${t('issueConfirm')}"), 'issue 按钮须 window.confirm')
+
+  for (const pkg of ['core', 'backend', 'workbench']) {
+    const pj = JSON.parse(readFileSync(join(REPO, pkg, 'package.json'), 'utf8'))
+    assert.equal(pj.version, '0.2.0', `${pkg} package.json version 须 0.2.0`)
+  }
+})
+
+test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化跳过上墙 / 回填 by 前端拦 / 画布按钮二遍 / 红线并入场景校验', () => {
+  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  assert.ok(svc.includes('assertIssueReady(dir)'), '签发端点须先过 assertIssueReady 门禁')
+  assert.ok(svc.includes("onto/issue-gate"), 'ISSUE_GATE_* 须映射 onto/issue-gate')
+  // save + writeSource + transition 迁移后重派生
+  const deriveCount = (svc.match(/derivePackage\(dir\)/g) || []).length
+  assert.ok(deriveCount >= 3, `transition 之后也须重派生（save+writeSource+transition），实际 ${deriveCount}`)
+  assert.ok(svc.includes('状态已迁移到'), '迁移后 derive 失败须给可操作文案')
+  assert.ok(svc.includes('红线候选只能并入场景'), 'RedLine merge 须校验场景载体')
+
+  const coreV = readFileSync(join(REPO, 'core', 'src', 'validate.ts'), 'utf8')
+  assert.ok(coreV.includes('export function assertIssueReady'), 'core 须导出签发门禁')
+  assert.ok(coreV.includes('ISSUE_GATE_EMPTY'), '空壳（无场景/无规则）须有专属错误码')
+  assert.ok(coreV.includes('之后必须再 derive'), '门禁须注明双 derive 约定（勿删任一次）')
+
+  const cli = readFileSync(join(REPO, 'core', 'src', 'cli.ts'), 'utf8')
+  assert.ok(cli.includes('assertIssueReady(dir)'), 'CLI issue 须同门禁')
+  const cliIssue = cli.slice(cli.indexOf("case 'issue'"), cli.indexOf("case 'export'"))
+  assert.ok(cliIssue.includes('derivePackage(dir)'), 'CLI issue 签发后须重派生')
+  assert.ok(cliIssue.includes('状态已迁移到 ISSUED'), 'CLI issue 迁移后 derive 失败须受控上墙')
+  const cliReview = cli.slice(cli.indexOf("case 'review'"), cli.indexOf("case 'issue'"))
+  assert.ok(cliReview.includes('状态已迁移到 IN_REVIEW'), 'CLI review 迁移后 derive 失败须受控上墙')
+  assert.ok(cliReview.includes('可手动 dsh-onto derive'), 'CLI 半成功态须给可操作下一步')
+
+  const kb = readFileSync(join(REPO, 'core', 'src', 'knowledge.ts'), 'utf8')
+  assert.ok(kb.includes('getCandidate(id: string)'), 'KnowledgeStore 须暴露 getCandidate 供端点前置校验')
+
+  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  assert.ok(wb.includes("approveSkip: '批准已记录，但物化未落地（被跳过）'"), '物化跳过须错误条上墙（不得绿勾吞掉）')
+  assert.ok(wb.includes("setError(`${t('approveSkip')}"), '单条批准全跳过须走 setError')
+  assert.ok(wb.includes("|| (formMis !== '' && !formBy.trim())"), '误迁移回填 by 前端必拦')
+  assert.ok(wb.includes("className: 'ogc-node-acts'"), '人审按钮须二遍绘制（脱离节点组防遮挡）')
+  assert.ok(wb.includes('graph.nodes.filter((nd) => nd.draft)'), '二遍绘制作用于全部草案节点')
+})
+
+test('L4 身份层：buildExpertIndex 一包一卡、ISSUED 优先选版、无场景回退、渲染带点名聚焦', () => {
+  const { root, ws } = mkAmlWorkspace()
+  try {
+    ws.forkVersion('aml-analysis', '1.0.0', '1.1.0')
+    ws.transition('aml-analysis', '1.1.0', 'IN_REVIEW')
+    ws.transition('aml-analysis', '1.1.0', 'ISSUED', 'tester（人工）')
+    ws.createPackage({ name: 'idx-empty', version: '1.0.0', domain: 'IDX' })
+
+    const { cards, phrases } = buildExpertIndex(ws.listVersions())
+    assert.equal(cards.length, 2, '一包一卡（同包多版本聚合）')
+
+    const aml = cards.find((c) => c.package === 'aml-analysis')
+    assert.equal(aml.version, '1.1.0', '同包取 ISSUED 优先版本')
+    assert.equal(aml.status, 'ISSUED')
+    assert.ok(aml.scenarios.length >= 1, '场景清单非空')
+    assert.ok(aml.title.length > 0, 'title=首场景 goal')
+    assert.ok(aml.skills.length >= 1, '技能清单非空')
+
+    const empty = cards.find((c) => c.package === 'idx-empty')
+    assert.match(empty.title, /尚无场景/, '无场景包显式回退标注')
+    assert.ok(Array.isArray(phrases))
+
+    const text = renderExpertIndex(cards)
+    assert.match(text, /业务本体专家 2 个/)
+    assert.match(text, /aml-analysis@1\.1\.0/)
+    assert.match(text, /点名聚焦：本会话默认 name=aml-analysis version=1\.1\.0/)
+    assert.ok(text.indexOf('aml-analysis') < text.indexOf('idx-empty'), 'ISSUED 优先列前')
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('L4 空全局索引：render 走 index 分支（不落明细「duties 未派生」文案）', () => {
+  // 空数组也必须是「没有包」语义，而不是 experts=[] + derived=false 的降级文案。
+  const emptyText = renderExpertIndex([])
+  assert.match(emptyText, /业务本体专家 0 个/)
+  assert.match(emptyText, /暂无包/)
+  assert.ok(!emptyText.includes('duties'), '空索引不得出现 duties 降级措辞')
+  assert.ok(!emptyText.includes('场景骨架'), '空索引不得出现骨架降级措辞')
+
+  // render 分支：index 键存在（即使 []）→ index 渲染；缺省 → 明细渲染。
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  assert.ok(
+    src.includes('v.index !== undefined ? renderExpertIndex(v.index) : renderExperts(v)'),
+    'render 须以 index 键存在与否分支，而非 length>0',
   )
 })

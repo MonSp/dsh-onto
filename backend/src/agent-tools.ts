@@ -28,6 +28,7 @@ import {
   isValidId,
   isSafeRelPath,
   listExperienceNotes,
+  listRunRecords,
   loadExperienceNote,
   loadPackage,
   loadRunRecord,
@@ -331,11 +332,13 @@ export function requireExistingPackage(
 /**
  * 对话建包（D3）：只产 DRAFT 空包；同名同版本由 PackageWorkspace 拒绝（PACKAGE_EXISTS，
  * 不幂等覆盖）。不回显服务端目录（P2.4）。
+ * humanApproved：建包是对话写动作，须用户明确要求建包（与 save_skeleton 同族契约）。
  */
 export function createPackageForPkg(
   ws: { createPackage(meta: { name: string; version: string; domain: string }): string },
-  args: { name?: unknown; version?: unknown; domain?: unknown },
+  args: { name?: unknown; version?: unknown; domain?: unknown; humanApproved?: unknown },
 ): { name: string; version: string; domain: string; status: 'DRAFT' } {
+  assertHumanApproved(args.humanApproved, '建包')
   const name = typeof args.name === 'string' ? args.name.trim() : ''
   const version = typeof args.version === 'string' ? args.version.trim() : ''
   const domain = typeof args.domain === 'string' ? args.domain.trim() : ''
@@ -847,12 +850,21 @@ export function annotateExperienceForTool(
 
   if (existing !== null) {
     gateSuccess(existing.counterexample || args.counterexample === true)
+    // 旧签名升版：人审触碰即按当前包补 ruleShape（packageScope 不一致时 upgrade 内部跳过）。
+    let upgradePkg: ReturnType<typeof loadPackage> | undefined
+    try {
+      const rec0 = loadRunRecord(ws.root, args.runId)
+      upgradePkg = loadPackage(ws.versionDir(rec0.package.name, rec0.package.version))
+    } catch {
+      upgradePkg = undefined
+    }
     const note = reviewExperienceNote(ws.root, args.runId, {
       outcome: args.outcome,
       outcomeReason: args.outcomeReason,
       misTransfer: args.misTransfer,
       reviewFocus: args.reviewFocus,
       reusedFromRunId: args.reusedFromRunId,
+      upgradePkg,
     })
     return projectAnnotateReceipt(note, false)
   }
@@ -1428,6 +1440,148 @@ export function apply(ctx: Context): void {
           ),
       },
       execute: toolExecute(() => ({ packages: projectPackageList(ws.listVersions()) })),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'list_runs',
+      description:
+        '列出工作区运行记录摘要（runId、包、场景、时间、候选数、审计是否通过）。只读——'
+        + '「上次跑得怎么样 / 最近有哪些运行」类发现入口，免翻目录。',
+      parameters: {
+        limit: { type: 'number', description: '最多返回条数（缺省 20，上限 100）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runs: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  runId: { type: 'string', required: true },
+                  package: { type: 'string', required: true },
+                  scenarioId: { type: 'string', required: true },
+                  savedAt: { type: 'string', required: true },
+                  candidateCount: { type: 'number', required: true },
+                  auditPassed: { type: 'boolean', required: true },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          const runs = (value as { runs: Array<Record<string, unknown>> }).runs
+          if (runs.length === 0) return textBlock('（无运行记录）')
+          return textBlock(
+            runs
+              .map(
+                (r) =>
+                  `- ${String(r.runId)} · ${String(r.package)} · ${String(r.scenarioId)}`
+                  + ` · ${String(r.savedAt)} · 候选 ${String(r.candidateCount)} · 审计${r.auditPassed === true ? '过' : '未过'}`,
+              )
+              .join('\n'),
+          )
+        },
+      },
+      execute: toolExecute((args: { limit?: number }) => {
+        const limitRaw = args.limit
+        const limit =
+          typeof limitRaw === 'number' && Number.isFinite(limitRaw) && limitRaw >= 1
+            ? Math.min(Math.floor(limitRaw), 100)
+            : 20
+        const runs = listRunRecords(ws.root)
+          .slice(0, limit)
+          .map((r) => ({
+            runId: r.runId,
+            package: `${r.package.name}@${r.package.version}`,
+            scenarioId: r.scenarioId,
+            savedAt: r.savedAt,
+            candidateCount: r.result.candidates?.length ?? 0,
+            auditPassed: r.result.audit?.passed === true,
+          }))
+        return toolOut({ runs })
+      }),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'list_drafts',
+      description:
+        '列出知识库待审/已批草案摘要（id、包、targetKind、name、status、forcedReview）。只读——'
+        + '「有哪些待审草案 / 草案什么状态」发现入口，免读 queue.json。',
+      parameters: {
+        packageId: { type: 'string', description: '可选：按包名过滤（裸名或 name@version）' },
+        status: {
+          type: 'string',
+          enum: ['pending', 'approved', 'merged', 'rejected'],
+          description: '可选：按状态过滤',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            drafts: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  id: { type: 'string', required: true },
+                  packageId: { type: 'string', required: true },
+                  targetKind: { type: 'string', required: true },
+                  name: { type: 'string', required: true },
+                  status: { type: 'string', required: true },
+                  forcedReview: { type: 'boolean', required: true },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          const drafts = (value as { drafts: Array<Record<string, unknown>> }).drafts
+          if (drafts.length === 0) return textBlock('（无草案）')
+          return textBlock(
+            drafts
+              .map(
+                (d) =>
+                  `- ${String(d.id)} · ${String(d.packageId)} · [${String(d.targetKind)}] ${String(d.name)}`
+                  + ` · ${String(d.status)}${d.forcedReview === true ? ' · 强制人审' : ''}`,
+              )
+              .join('\n'),
+          )
+        },
+      },
+      execute: toolExecute((args: { packageId?: string; status?: string }) => {
+        const filter: { packageId?: string; status?: 'pending' | 'approved' | 'merged' | 'rejected' } = {}
+        if (typeof args.packageId === 'string' && args.packageId.trim() !== '') {
+          filter.packageId = args.packageId.trim()
+        }
+        if (
+          typeof args.status === 'string'
+          && (args.status === 'pending' || args.status === 'approved' || args.status === 'merged' || args.status === 'rejected')
+        ) {
+          filter.status = args.status
+        }
+        const drafts = knowledge.listCandidates(filter).map((c) => ({
+          id: c.id,
+          packageId: c.packageId,
+          targetKind: c.targetKind,
+          name: c.name,
+          status: c.status,
+          forcedReview: c.forcedReview,
+        }))
+        return toolOut({ drafts })
+      }),
     }),
   )
 
@@ -2100,6 +2254,7 @@ export function apply(ctx: Context): void {
       name: 'draft_elements',
       description:
         '对话轮起草：把 items 入草案队列等待人审——只入队列、永不直写包（I1）。'
+        + '前置：包须已有已确认骨架（save_skeleton，I6 骨架先行），否则拒绝。'
         + 'items 元素：layer(O1|O2|O3)、targetKind、name、payload、confidence(0..1)、rationale；'
         + 'op 缺省=create 新增元素。op=update 修改/接线既有元素（targetId=元素 ID，Attribute 为 OBJ.attr）：'
         + '标量字段覆盖、weights 按键并入、数组整替，append.<字段>=[…] 追加去重（如给行为接关系）。'
@@ -2143,6 +2298,16 @@ export function apply(ctx: Context): void {
               'INVALID_ARGS',
               `${packageName}@${version} 已签发只读：请 fork 新版本后起草（P1）`,
             )
+          }
+          // I6 对话路径：骨架先行——无骨架/未确认不得入队（物化侧另有 defense-in-depth）。
+          {
+            const skel = knowledge.skeletons.get(packageName)
+            if (!skel) {
+              throw new AgentToolError('INVALID_ARGS', '对话起草前须先 save_skeleton 落骨架（I6 骨架先行）')
+            }
+            if (!skel.confirmed) {
+              throw new AgentToolError('INVALID_ARGS', '骨架未确认，不得对话起草（I6）——请用户确认骨架后再分片')
+            }
           }
           if (!Array.isArray(args.items) || args.items.length === 0) {
             throw new AgentToolError('INVALID_ARGS', 'items 必须是非空数组')
@@ -2357,11 +2522,17 @@ export function apply(ctx: Context): void {
       description:
         '对话建包（D3）：创建 DRAFT 空包（name/version/domain），随后 save_skeleton 落骨架、'
         + '对话分片起草。同名同版本拒绝（PACKAGE_EXISTS，不覆盖）；签发 ISSUED 仍仅人工。'
+        + 'humanApproved 人审契约：仅当用户明确要求建包时传 true，agent 不得自行建包。'
         + '建包只是开局动作，内容仍走 draft_elements 起草 → 人审 apply_draft 物化。',
       parameters: {
         name: { type: 'string', required: true, description: '包名（kebab-case，如 claims-fraud）' },
         version: { type: 'string', required: true, description: '初始版本（如 1.0.0）' },
         domain: { type: 'string', required: true, description: '域码（大写字母数字，1–12 位，如 CLF）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '人审契约：仅当用户明确要求建包时传 true；澄清选择/推进类台词不构成建包批准',
+        },
       },
       output: {
         schema: {
@@ -2382,7 +2553,8 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute(
-        (args: { name: string; version: string; domain: string }) => toolOut(createPackageForPkg(ws, args)),
+        (args: { name: string; version: string; domain: string; humanApproved: boolean }) =>
+          toolOut(createPackageForPkg(ws, args)),
         [],
         (args) => redlines(args),
       ),

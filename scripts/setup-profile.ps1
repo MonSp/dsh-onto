@@ -62,6 +62,10 @@ try {
         finally { Pop-Location }
     }
 
+    # Expert presets (hero-chip conversation-time expert selection): managed patch block.
+    # Idempotent; data in expert-presets.json + preset-plugins.standard.yaml.
+    & (Join-Path $PSScriptRoot 'ensure-expert-presets.ps1') -ProfileName $ProfileName
+
     # 播种示例业务本体包（域目录 → 包名目录）；目录解析多级回退，失败不阻断装配
     $userHome = [Environment]::GetFolderPath('UserProfile')
     if (-not $userHome) { $userHome = $HOME }

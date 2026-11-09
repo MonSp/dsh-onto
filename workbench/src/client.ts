@@ -245,6 +245,9 @@ window.__ModuleLoader__.load({
       approveAll: '批准全部并物化',
       approveAllConfirm: '确认批准并物化全部待审草案？',
       approveReviewFail: '批准失败',
+      approveSkip: '批准已记录，但物化未落地（被跳过）',
+      partialSkip: '部分跳过',
+      issueConfirm: '确认签发该版本？签发后 ISSUED 只读，修改须 fork 新版本。',
       prov: '溯源',
       pkgIssues: '包级问题',
       nodeIssues: '节点问题',
@@ -442,6 +445,9 @@ window.__ModuleLoader__.load({
       approveAll: 'Approve & materialize all',
       approveAllConfirm: 'Approve and materialize all pending drafts?',
       approveReviewFail: 'Review failed',
+      approveSkip: 'Approved, but nothing was materialized (skipped)',
+      partialSkip: 'partially skipped',
+      issueConfirm: 'Issue this version? ISSUED is read-only; changes require a fork.',
       prov: 'Provenance',
       pkgIssues: 'Package-level issues',
       nodeIssues: 'Node issues',
@@ -811,6 +817,7 @@ window.__ModuleLoader__.load({
                             title: t('issueBy'),
                             onClick: () =>
                               void call('issue', async () => {
+                                if (!window.confirm(`${t('issueConfirm')}\n${v.name}@${v.version}`)) return
                                 unwrap(await api!.transition({
                                   name: v.name,
                                   version: v.version,
@@ -1393,7 +1400,35 @@ window.__ModuleLoader__.load({
                     ? '#d97706'
                     : OG_STROKE[nd.layer] ?? '#9aa3b2'
               const isSel = selected === nd.id
-              // 内嵌人审按钮（E3-1）：草案节点下方 ✓/✕，点选即走 draftAction（stopPropagation 不触发选中）。
+              return h(
+                'g',
+                {
+                  key: nd.id,
+                  className: 'ogc-node',
+                  transform: `translate(${p.x - w / 2},${p.y - 14})`,
+                  onClick: () => onSelect(nd.id),
+                },
+                h('title', null, `${nd.id}${nd.draft ? '（草案）' : ''}${nd.runHit ? '（运行命中）' : ''}`),
+                h('rect', {
+                  width: w,
+                  height: 28,
+                  rx: 7,
+                  fill: OG_FILL[nd.layer] ?? '#f3f4f6',
+                  fillOpacity: nd.draft ? 0.5 : 1,
+                  stroke,
+                  strokeWidth: isSel ? 2.4 : 1.4,
+                  strokeDasharray: nd.draft ? '5 3' : undefined,
+                }),
+                h('text', { className: 'ogc-lbl', x: w / 2, y: 18, textAnchor: 'middle' }, label),
+              )
+            }),
+            // P3a（实测）：人审按钮二遍绘制——先画完所有节点体，✓/✕ 再统一盖上去。
+            // 若留在节点组内，纵向相邻节点的 rect 后绘制会截走下方按钮的 pointer 事件（点不到）。
+            ...graph.nodes.filter((nd) => nd.draft).map((nd) => {
+              const p = pos.get(nd.id)
+              if (!p) return null
+              const label = nd.name.length > 12 ? `${nd.name.slice(0, 11)}…` : nd.name
+              const w = Math.max(56, Math.min(140, 30 + label.length * 11))
               const actOff = actionOff === true || !onDraftAction
               const bw = 18
               const gap = 4
@@ -1431,29 +1466,12 @@ window.__ModuleLoader__.load({
               return h(
                 'g',
                 {
-                  key: nd.id,
-                  className: 'ogc-node',
+                  key: `act-${nd.id}`,
+                  className: 'ogc-node-acts',
                   transform: `translate(${p.x - w / 2},${p.y - 14})`,
-                  onClick: () => onSelect(nd.id),
                 },
-                h('title', null, `${nd.id}${nd.draft ? '（草案）' : ''}${nd.runHit ? '（运行命中）' : ''}`),
-                h('rect', {
-                  width: w,
-                  height: 28,
-                  rx: 7,
-                  fill: OG_FILL[nd.layer] ?? '#f3f4f6',
-                  fillOpacity: nd.draft ? 0.5 : 1,
-                  stroke,
-                  strokeWidth: isSel ? 2.4 : 1.4,
-                  strokeDasharray: nd.draft ? '5 3' : undefined,
-                }),
-                h('text', { className: 'ogc-lbl', x: w / 2, y: 18, textAnchor: 'middle' }, label),
-                ...(nd.draft
-                  ? [
-                      actBtn(0, '✓', 'approve', '#e9f7ef', '#3d9970', t('approveMat')),
-                      actBtn(bw + gap, '✕', 'reject', '#fee2e2', '#dc2626', t('reject')),
-                    ]
-                  : []),
+                actBtn(0, '✓', 'approve', '#e9f7ef', '#3d9970', t('approveMat')),
+                actBtn(bw + gap, '✕', 'reject', '#fee2e2', '#dc2626', t('reject')),
               )
             }),
           )
@@ -1659,11 +1677,18 @@ window.__ModuleLoader__.load({
                   const res = unwrap<{ applied: string[]; skipped: Array<{ id: string; reason: string }> }>(
                     await kApi.materialize({ name: selected.name, version: selected.version, ids: [id] }),
                   )
-                  setInfo(
-                    res.applied.length > 0
-                      ? `✓ ${t('approveMat')}`
-                      : `✓ ${t('approve')} — ${res.skipped.map((s) => s.reason).join('; ') || t('empty')}`,
-                  )
+                  const reasons = res.skipped.map((s) => s.reason).join('; ')
+                  if (res.applied.length > 0) {
+                    // 物化了但有跳过 → 告警色列出原因，不吞（I6 拦截要让人看见）。
+                    setInfo(
+                      res.skipped.length > 0
+                        ? `✓ ${t('approveMat')}（${t('partialSkip')}: ${reasons}）`
+                        : `✓ ${t('approveMat')}`,
+                    )
+                  } else {
+                    // 一条没落地 → 不打 ✓，走错误条（实测 P1：绿勾盖住 I6 跳过原因）。
+                    setError(`${t('approveSkip')}: ${reasons || t('empty')}`)
+                  }
                 } else {
                   setInfo(`✓ ${t('reject')}`)
                 }
@@ -3658,7 +3683,9 @@ window.__ModuleLoader__.load({
                       className: 'ow-btn',
                       disabled:
                         !!busy ||
-                        (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim()),
+                        (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim())
+                        // 误迁移判定必须带 by（人工身份）——前端先拦，不再把必填报错甩给后端。
+                        || (formMis !== '' && !formBy.trim()),
                       onClick: () => review(viewRun),
                     },
                     t('expReviewBtn'),

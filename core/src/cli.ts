@@ -36,10 +36,12 @@ import {
   buildDiffTable,
   buildTaskSignature,
   compressExperiences,
+  isLegacySignature,
   listExperienceNotes,
   loadExperienceNote,
   retrieveSimilar,
   saveExperienceNote,
+  upgradeLegacySignature,
 } from './experience.js'
 import { KnowledgeStore } from './knowledge.js'
 import { DeepSeekLlm, HeuristicLlm } from './llm.js'
@@ -56,7 +58,7 @@ import { runScenario } from './scenario.js'
 import { loadPackage, PackageWorkspace, readPackageMeta } from './store.js'
 import type { RuntimeDataset, SourceType } from './types.js'
 import { SOURCE_TYPES } from './types.js'
-import { buildQualityReport, writeQualityReport } from './validate.js'
+import { buildQualityReport, writeQualityReport, assertIssueReady } from './validate.js'
 
 interface Args {
   _: string[]
@@ -181,12 +183,25 @@ function cmdPackage(sub: string | undefined, args: Args): void {
       return
     }
     case 'review': {
+      const dir = ws.versionDir(flagStr(args, 'name'), flagStr(args, 'version'))
       ws.transition(flagStr(args, 'name'), flagStr(args, 'version'), 'IN_REVIEW')
+      // 状态写盘改 package.yaml → 重派生，防送审即 DERIVED_DRIFT。
+      // 与 backend 同口径：半成功态（已送审、派生失败）须受控上墙，不裸抛栈。
+      try {
+        derivePackage(dir)
+      } catch (e) {
+        fail(
+          `状态已迁移到 IN_REVIEW，但重派生失败（可手动 dsh-onto derive）：${e instanceof Error ? e.message : String(e)}`,
+        )
+      }
       print({ ok: true, status: 'IN_REVIEW' })
       return
     }
     case 'issue': {
       // 签发 = 人审通过；issuedBy 必须是人工身份（§3.4）
+      const dir = ws.versionDir(flagStr(args, 'name'), flagStr(args, 'version'))
+      // 签发门禁：0 错 + 场景/规则非空 + 派生 + 加载门禁（空壳/坏包不得签发）。
+      const gate = assertIssueReady(dir)
       ws.transition(
         flagStr(args, 'name'),
         flagStr(args, 'version'),
@@ -194,7 +209,16 @@ function cmdPackage(sub: string | undefined, args: Args): void {
         flagStr(args, 'by'),
         typeof args.flags['note'] === 'string' ? args.flags['note'] : undefined,
       )
-      print({ ok: true, status: 'ISSUED' })
+      // issueRecord/状态位改写 package.yaml → 再派生，签完即可加载。
+      // 门禁内已 derive 过一次；此处必须再 derive（状态位变了），失败同样受控上墙。
+      try {
+        derivePackage(dir)
+      } catch (e) {
+        fail(
+          `状态已迁移到 ISSUED，但重派生失败（可手动 dsh-onto derive）：${e instanceof Error ? e.message : String(e)}`,
+        )
+      }
+      print({ ok: true, status: 'ISSUED', gate })
       return
     }
     case 'export': {
@@ -432,11 +456,16 @@ function cmdExp(sub: string | undefined, args: Args): void {
       }
       // patch 语义（M2）：已有 note 保留人审字段（misTransfer/reusedFrom/reviewFocus），
       // 只覆写本次显式传入的旗标——CLI 二次标注不得静默抹掉人工判定。
-      const signature = existing?.signature ?? buildTaskSignature({
+      // 旧版签名（无 ruleShape）：人审触碰即按当前包升版（annotate = 确认仍对当前语义负责）。
+      let signature = existing?.signature ?? buildTaskSignature({
         pkg: loadPackage(dir),
         scenarioId: rec.scenarioId,
         datasetSummary: rec.datasetSummary,
       })
+      if (existing && isLegacySignature(existing.signature)) {
+        const upgraded = upgradeLegacySignature(existing.signature, loadPackage(dir))
+        if (upgraded) signature = upgraded
+      }
       let reusedFrom: { runId: string; diff: ReturnType<typeof buildDiffTable> } | undefined
       if (typeof args.flags['reused-from'] === 'string') {
         const srcId = args.flags['reused-from']
@@ -488,10 +517,12 @@ function cmdExp(sub: string | undefined, args: Args): void {
           scenarioId: n.signature.scenarioId,
           outcome: n.outcome,
           counterexample: n.counterexample,
+          legacySignature: isLegacySignature(n.signature),
           reusedFrom: n.reusedFrom?.runId ?? null,
           misTransfer: n.misTransfer?.judged ?? false,
           savedAt: n.savedAt,
         })),
+        legacyNote: 'legacySignature=true 表示 0.2.0 前旧签名（无 ruleShape）；annotate 该条时按当前包升版',
       })
       return
     }

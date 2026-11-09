@@ -1313,24 +1313,44 @@ test('端到端：内联 dataset 走 runScenario 与 datasetPath 同契约', () 
   assert.ok(result.candidates.some((c) => c.hitRuleIds.length > 0))
 })
 
-test('D3 create_package：DRAFT 空包、缺参拒绝、同名同版本 PACKAGE_EXISTS 拒绝、不回显路径', () => {
+test('D3 create_package：humanApproved 契约 + DRAFT 空包、缺参拒绝、同名同版本 PACKAGE_EXISTS 拒绝、不回显路径', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'onto-d3-'))
   try {
     const ws = new PackageWorkspace(join(tmp, 'workspace'))
-    const r = createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T' })
+    // 未点头 → 人审契约拒绝
+    expectCode(() => createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
+    const r = createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T', humanApproved: true })
     assert.equal(r.status, 'DRAFT')
     assert.equal(r.name, 'd3-demo')
     assert.equal(r.domain, 'D3T')
     assert.ok(!('dir' in r), '不回显服务端路径')
     // 同名同版本拒绝（幂等不覆盖）
-    expectCode(() => createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T' }), 'PACKAGE_EXISTS')
+    expectCode(
+      () => createPackageForPkg(ws, { name: 'd3-demo', version: '1.0.0', domain: 'D3T', humanApproved: true }),
+      'PACKAGE_EXISTS',
+    )
     // 缺参 / 空白
-    expectCode(() => createPackageForPkg(ws, { name: ' ', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
-    expectCode(() => createPackageForPkg(ws, { name: 'x', version: '', domain: 'D3T' }), 'INVALID_ARGS')
+    expectCode(
+      () => createPackageForPkg(ws, { name: ' ', version: '1.0.0', domain: 'D3T', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    expectCode(
+      () => createPackageForPkg(ws, { name: 'x', version: '', domain: 'D3T', humanApproved: true }),
+      'INVALID_ARGS',
+    )
     // 包名 kebab-case、域码大写字母数字（与工具描述一致）
-    expectCode(() => createPackageForPkg(ws, { name: 'Bad_Name', version: '1.0.0', domain: 'D3T' }), 'INVALID_ARGS')
-    expectCode(() => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'd3t' }), 'INVALID_ARGS')
-    expectCode(() => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'D3T-X' }), 'INVALID_ARGS')
+    expectCode(
+      () => createPackageForPkg(ws, { name: 'Bad_Name', version: '1.0.0', domain: 'D3T', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    expectCode(
+      () => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'd3t', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    expectCode(
+      () => createPackageForPkg(ws, { name: 'ok-name', version: '1.0.0', domain: 'D3T-X', humanApproved: true }),
+      'INVALID_ARGS',
+    )
     // 真实落盘且为空包
     const pkg = loadPackage(ws.versionDir('d3-demo', '1.0.0'))
     assert.equal(pkg.meta.status, 'DRAFT')
@@ -1872,10 +1892,11 @@ test('D13：SkillTemplate 已物化后再抽象——正文一致回执 bodyUpTo
     assert.equal(pendingAfterUpToDate.length, 0, 'bodyUpToDate 不得入队新草案')
 
     // 新 reviewFocus 入簇 → 正文过期 → 入队 op=update 正文更新草案
+    // （结构位过滤：只收特征名/OBJ.attr/ruleId——中文自由文本不进 steps）
     const runIds = first.queued[0].runId // 任取其一；再补一条新 focus 的经验
     annotateExperienceForTool(ws, {
       runId: runIds,
-      reviewFocus: ['listHitCount', '关联集中度'],
+      reviewFocus: ['listHitCount', 'counterpartyAcct'],
       humanApproved: true,
     })
     const third = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
@@ -1899,7 +1920,7 @@ test('D13：SkillTemplate 已物化后再抽象——正文一致回执 bodyUpTo
     const appliedUpd = knowledge.materialize(dir, [updEntry.id])
     assert.deepEqual(appliedUpd.applied, [updEntry.id])
     const el1 = loadPackage(dir).skillTemplates.find((s) => s.id === el0.id)
-    assert.ok(el1.steps.includes('关联集中度'), `物化后 steps 须含新 focus: ${JSON.stringify(el1.steps)}`)
+    assert.ok(el1.steps.includes('counterpartyAcct'), `物化后 steps 须含新 focus: ${JSON.stringify(el1.steps)}`)
 
     // 第三次抽象（无再变）→ bodyUpToDate
     const fourth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
@@ -1908,7 +1929,7 @@ test('D13：SkillTemplate 已物化后再抽象——正文一致回执 bodyUpTo
     // 又一批新 focus 入簇 → 上一代 update 已 merged → 按 #N 换代重提，不撞幂等
     annotateExperienceForTool(ws, {
       runId: runIds,
-      reviewFocus: ['listHitCount', '关联集中度', '资金分层'],
+      reviewFocus: ['listHitCount', 'counterpartyAcct', 'fundTier'],
       humanApproved: true,
     })
     const fifth = abstractExperienceForTool(ws, knowledge, { packageId: pkgId, humanApproved: true })
@@ -2000,7 +2021,6 @@ test('D13 源断言：描述引导正文更新通道（op=update / bodyUpToDate�
   assert.ok(slice.includes('bodyUpToDate'), '描述须声明 bodyUpToDate 诚实回执')
   assert.ok(slice.includes('apply_draft'), '描述须指明刷新路径是 apply_draft')
 })
-
 
 /* ── 评审 M1/I1：recall/annotate 三出口（value 闸 + render 兜底 + humanReviewRequired） ── */
 

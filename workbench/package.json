@@ -1,6 +1,6 @@
 {
   "name": "@dsh-onto/workbench",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "dsh-onto 业务本体建模平台工作台：包管理 / 建模 / 知识库 / 校验派生 / 场景运行",

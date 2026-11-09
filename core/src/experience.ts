@@ -29,6 +29,13 @@ export interface TaskSignature {
   stepShape: string
   /** scoreRefs/exclusionRefs/全量（排序去重）。 */
   ruleRefs: string[]
+  /**
+   * 圈内规则语义指纹（id:weight:expression[:threshold] 排序串）。
+   * 仅 ruleRefs 不够——同包改权重/表达式后 digest 必须变，否则同构短路复用过期 DiffTable。
+   * 可选：0.2.0 前落盘的旧签名无此字段（isLegacySignature）；比对走诚实路径，
+   * 人工 annotate 时按当前包升版（upgradeLegacySignature），不做无确认的全量补算。
+   */
+  ruleShape?: string[]
   /** pipeline skillRefs 并集（排序去重）。 */
   skillRefs: string[]
   /** inputs 的 `name:type` 排序串。 */
@@ -74,6 +81,7 @@ export function buildTaskSignature(input: {
   const scoreRefs = scenario.scoreRefs ?? pkg.scoreRules.map((r) => r.id)
   const exclusionRefs = scenario.exclusionRefs ?? pkg.exclusionRules.map((r) => r.id)
   const ruleRefs = [...new Set([...scoreRefs, ...exclusionRefs])].sort()
+  const ruleShape = ruleShapeOf(pkg, ruleRefs)
   const skillRefs = [...new Set(scenario.pipeline.flatMap((s) => s.skillRefs ?? []))].sort()
   const inputShape = scenario.inputs.map((i) => `${i.name}:${i.type}`).sort()
   const core = {
@@ -82,9 +90,52 @@ export function buildTaskSignature(input: {
     goalClass: scenario.goal.trim(),
     stepShape,
     ruleRefs,
+    ruleShape,
     skillRefs,
     inputShape,
     dataBand: dataBandOf(datasetSummary.candidates),
+  }
+  return { ...core, digest: createHash('sha256').update(canonicalJson(core)).digest('hex') }
+}
+
+/** 规则语义指纹：同 ID 改 weight/expression/threshold → digest 变（防假同构短路）。 */
+function ruleShapeOf(pkg: OntologyPackage, ruleRefs: readonly string[]): string[] {
+  return ruleRefs
+    .map((id) => {
+      const s = pkg.scoreRules.find((r) => r.id === id)
+      if (s) return `${id}:${s.weight}:${s.expression}:${s.threshold ?? ''}`
+      const e = pkg.exclusionRules.find((r) => r.id === id)
+      if (e) return `${id}:${e.action}:${e.factor ?? ''}:${e.condition}`
+      return id
+    })
+    .sort()
+}
+
+/** 0.2.0 前旧签名：无 ruleShape 字段（digest 公式亦不同，永不同构短路）。 */
+export function isLegacySignature(sig: Pick<TaskSignature, 'ruleShape'>): boolean {
+  return !Array.isArray(sig.ruleShape)
+}
+
+/**
+ * 旧签名升版（仅人工 annotate 等写路径调用）：按当前包补 ruleShape 并重算 digest。
+ * 人审触碰 = 确认该经验仍对当前包语义负责；不做后台全量补算——若规则在落盘后已改
+ * 且未经人确认，保留旧签名走诚实比对（mustChange 上墙），避免假同构复用。
+ * packageScope 与当前包不一致 → 返回 null（不跨包升版）。
+ */
+export function upgradeLegacySignature(sig: TaskSignature, pkg: OntologyPackage): TaskSignature | null {
+  if (!isLegacySignature(sig)) return null
+  const scope = `${pkg.meta.name}@${pkg.meta.version}`
+  if (sig.packageScope !== scope) return null
+  const core = {
+    scenarioId: sig.scenarioId,
+    packageScope: sig.packageScope,
+    goalClass: sig.goalClass,
+    stepShape: sig.stepShape,
+    ruleRefs: sig.ruleRefs,
+    ruleShape: ruleShapeOf(pkg, sig.ruleRefs),
+    skillRefs: sig.skillRefs,
+    inputShape: sig.inputShape,
+    dataBand: sig.dataBand,
   }
   return { ...core, digest: createHash('sha256').update(canonicalJson(core)).digest('hex') }
 }
@@ -252,6 +303,26 @@ function sameArray(a: readonly string[], b: readonly string[]): boolean {
 const CROSS_SCOPE_FACTOR = 0.5
 
 /**
+ * reviewFocus 结构位白名单（进 SkillTemplate.steps 的唯一通道）：
+ * 特征名（camelCase/snake/点号）、OBJ.attr / REL.attr、RULE-/SKL-/SCN-/BHV- ID。
+ * 自由中文句子/结论性表述一律拒——方法论正文只收结构位。
+ */
+export function isStructuralFocusToken(token: string): boolean {
+  const t = token.trim()
+  if (t === '' || t.length > 120) return false
+  if (/[一-鿿]/.test(t) && !/^(OBJ|REL|RULE|SKL|SCN|BHV|PKG)-/.test(t)) return false
+  if (/\s{2,}/.test(t)) return false
+  if (/^(认定|确定|已构成|构成犯罪)/.test(t)) return false
+  return (
+    /^(OBJ|REL|RULE|SKL|SCN|BHV|PKG|TOOL|FM|SRC|AGT|AUD)-[A-Z0-9-]+(\.[A-Za-z0-9_]+)?$/.test(t)
+    || /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(t)
+    || /^[a-z][a-z0-9_]*([A-Z][a-z0-9_]*)+$/.test(t)
+    || /^[a-z][a-z0-9_]*$/.test(t)
+    || /^[A-Z][A-Z0-9_]*$/.test(t)
+  )
+}
+
+/**
  * 字段级 signature 新旧对照（P4-5）：命中理由不只 Jaccard——
  * 逐字段给出「同 / 源→新 / 集合增删」，结构位、可回指、无自由流程。
  * 与 buildDiffTable 同源比对口径；digest 同构时全字段为「同」。
@@ -273,6 +344,14 @@ export function signatureFieldReasons(query: TaskSignature, source: TaskSignatur
     out.push('goalClass 同')
   } else {
     out.push(`goalClass 源=「${source.goalClass}」→ 新=「${query.goalClass}」`)
+  }
+  if (isLegacySignature(source)) {
+    out.push(`ruleShape 源=旧版签名（无指纹，digest 公式亦不同）→ 新=${(query.ruleShape ?? []).length} 条（无法确认语义同构，须人工核对）`)
+  } else {
+    const shapeQ = new Set(query.ruleShape ?? [])
+    const shapeS = new Set(source.ruleShape ?? [])
+    const shapeSame = shapeQ.size === shapeS.size && [...shapeQ].every((x) => shapeS.has(x))
+    out.push(shapeSame ? 'ruleShape 同' : 'ruleShape 源≠新（权重/表达式有变）')
   }
   const rules = diffStrSets(query.ruleRefs, source.ruleRefs)
   out.push(
@@ -445,6 +524,25 @@ export function buildDiffTable(query: TaskSignature, source: TaskSignature): Dif
   if (rules.onlyS.length > 0) {
     mustChange.push({ item: 'ruleRefs', why: `源独有（不迁移）：${rules.onlyS.join(', ')}` })
   }
+  // 规则语义变化（同 ID 改权重/表达式）→ 必须转人工，不得当同构复用。
+  // 旧版签名（无 ruleShape）同样必须转人工：诚实标注「无法确认」，不谎称「有变」也不静默放行。
+  if (isLegacySignature(source)) {
+    mustChange.push({
+      item: 'ruleShape',
+      why: '源为 0.2.0 前旧版签名（无 ruleShape 指纹），无法确认规则语义是否同构——须人工核对；annotate 时按当前包升版',
+    })
+  } else {
+    const shapeQ = new Set(query.ruleShape ?? [])
+    const shapeS = new Set(source.ruleShape ?? [])
+    const shapeOnlyQ = [...shapeQ].filter((x) => !shapeS.has(x))
+    const shapeOnlyS = [...shapeS].filter((x) => !shapeQ.has(x))
+    if (shapeOnlyQ.length > 0 || shapeOnlyS.length > 0) {
+      mustChange.push({
+        item: 'ruleShape',
+        why: `规则语义有变（权重/表达式/阈值）：新独有 ${shapeOnlyQ.length} · 源独有 ${shapeOnlyS.length}`,
+      })
+    }
+  }
 
   const skills = diffStrSets(query.skillRefs, source.skillRefs)
   if (skills.shared.length > 0) {
@@ -605,7 +703,8 @@ export function abstractSkillDrafts(
     const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
     const slug = rep.signature.scenarioId.replace(/^SCN-[A-Z0-9]+-/, '') || 'EXP'
     const domainTag = pkg.meta.domain || 'EXP'
-    const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))]
+    // 结构位过滤：只保留特征名 / OBJ.attr / ruleId / skillId 形态，防自由文本进方法论正文。
+    const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))].filter(isStructuralFocusToken)
     const weights: Record<string, number> = {}
     for (const r of pkg.scoreRules) weights[r.id] = r.weight
     const draft: DraftItem = {
@@ -780,7 +879,8 @@ export function compressExperiences(
 
 /**
  * 人审回填：pending-human 改判、误迁移只由人判（by 必须非空人工身份）、reviewFocus 沉淀。
- * 禁改 signature / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome（机器闸不否决人审）。
+ * 禁改 signature 语义位 / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome（机器闸不否决人审）。
+ * upgradePkg：人审触碰时对 0.2.0 前旧签名按当前包升版（补 ruleShape + 重算 digest），可选。
  * reusedFromRunId：补写复用归因（S5.4.4），diff 按当前 signature 机械生成。
  */
 export function reviewExperienceNote(
@@ -792,9 +892,15 @@ export function reviewExperienceNote(
     misTransfer?: { judged: boolean; by: string; note?: string }
     reviewFocus?: string[]
     reusedFromRunId?: string
+    /** 人审触碰时传入当前包 → 旧签名升版（packageScope 须一致，否则跳过）。 */
+    upgradePkg?: OntologyPackage
   },
 ): ExperienceNote {
   const note = loadExperienceNote(root, runId)
+  if (patch.upgradePkg !== undefined && isLegacySignature(note.signature)) {
+    const upgraded = upgradeLegacySignature(note.signature, patch.upgradePkg)
+    if (upgraded) note.signature = upgraded
+  }
   if (patch.outcome !== undefined) {
     if (!['success', 'partial', 'failure', 'pending-human'].includes(patch.outcome)) {
       throw new PackageStoreError('INVALID_ARGS', 'invalid outcome')

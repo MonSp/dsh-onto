@@ -37,6 +37,7 @@ import {
   type TopHitRevision,
 } from './agent-policy.js'
 import { assertDatasetGranted, readToolContracts } from './agent-grants.js'
+import { compareVersions } from './agent-skills.js'
 import type { PackageWorkspace } from '@dsh-onto/core'
 
 /** agent-duties 条目（derive 产物形状）。 */
@@ -236,6 +237,93 @@ export function assertDutiesAligned(
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * L4 身份层：包级专家索引（一包一卡）——对话开场/用户问「有哪些业务本体」时
+ * 给出可快速识别的身份卡；执行仍走场景 1:1 的 ExpertProfile（invoke_expert）。
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/** 包级专家身份卡（list_experts 省略 name/version 时的全局索引条目）。 */
+export interface ExpertIndexCard {
+  package: string
+  version: string
+  domain: string
+  status: string
+  /** 识别用一句话：首场景 goal；无场景时显式标注「先走建模」。 */
+  title: string
+  scenarios: Array<{ id: string; goal: string }>
+  skills: string[]
+}
+
+/**
+ * 全局专家索引：扫工作区全部包版本，同包取 ISSUED→版本降序的最优版本聚合成卡。
+ * 损坏包跳过（发现面不因单包中断）；phrases 供输出禁语扫描复用。
+ */
+export function buildExpertIndex(versions: ReadonlyArray<{
+  name: string
+  version: string
+  status: string
+  domain: string
+  dir: string
+}>): { cards: ExpertIndexCard[]; phrases: string[] } {
+  const best = new Map<string, (typeof versions)[number]>()
+  for (const v of versions) {
+    const cur = best.get(v.name)
+    if (cur === undefined) {
+      best.set(v.name, v)
+      continue
+    }
+    const ia = cur.status === 'ISSUED' ? 1 : 0
+    const ib = v.status === 'ISSUED' ? 1 : 0
+    if (ib > ia || (ib === ia && compareVersions(v.version, cur.version) > 0)) best.set(v.name, v)
+  }
+  const cards: ExpertIndexCard[] = []
+  const phrases: string[] = []
+  for (const v of best.values()) {
+    let pkg: OntologyPackage
+    try {
+      pkg = loadPackage(v.dir)
+    } catch {
+      continue
+    }
+    phrases.push(...phrasesOf(pkg))
+    const scenarios = pkg.scenarios.map((s) => ({ id: s.id, goal: s.goal }))
+    cards.push({
+      package: pkg.meta.name,
+      version: pkg.meta.version,
+      domain: pkg.meta.domain,
+      status: pkg.meta.status,
+      title: scenarios[0]?.goal ?? '（尚无场景，先走建模）',
+      scenarios,
+      skills: pkg.skillTemplates.map((t) => t.id),
+    })
+  }
+  cards.sort((a, b) => {
+    const ia = a.status === 'ISSUED' ? 1 : 0
+    const ib = b.status === 'ISSUED' ? 1 : 0
+    if (ia !== ib) return ib - ia
+    return a.package < b.package ? -1 : a.package > b.package ? 1 : 0
+  })
+  return { cards, phrases: [...new Set(phrases)] }
+}
+
+/** 全局索引渲染：一包一行身份卡 + 点名聚焦提示（模型可见面即 render）。 */
+export function renderExpertIndex(cards: ExpertIndexCard[]): string {
+  if (cards.length === 0) {
+    // 空工作区：明确是「没有包」，不落到明细模式的「duties 未派生」文案（误导）。
+    return '业务本体专家 0 个（工作区暂无包——先 create_package 建包，再 list_experts）'
+  }
+  const lines = [`业务本体专家 ${cards.length} 个（一包一卡 · ISSUED 优先列前）`]
+  for (const c of cards) {
+    lines.push(`${c.package}@${c.version} · ${c.domain} · ${c.status} —「${c.title}」`)
+    if (c.scenarios.length > 0) {
+      lines.push(`  场景/专家：${c.scenarios.map((s) => `${s.id}（${s.goal}）`).join('、')}`)
+    }
+    if (c.skills.length > 0) lines.push(`  技能：${c.skills.join('、')}`)
+    lines.push(`  点名聚焦：本会话默认 name=${c.package} version=${c.version}`)
+  }
+  return lines.join('\n')
+}
+
 /** list_experts 渲染：每专家一行 + 步级收权明细（模型可见面即 render，I7 步级边界须可发现）+ 未派生提示。 */
 export function renderExperts(v: { experts?: ExpertProfile[]; derived?: boolean }): string {
   const experts = v.experts ?? []
@@ -249,7 +337,9 @@ export function renderExperts(v: { experts?: ExpertProfile[]; derived?: boolean 
     for (const s of e.steps) {
       const llm = s.llm ? ` · llm:${s.llm}` : ''
       const gate = s.humanGate ? ' · 人审闸' : ''
-      lines.push(`  - ${s.stepId} ${s.stepType} · 工具 ${s.toolCount}${llm}${gate}`)
+      // stageDuty 上墙（实测补）：只给步型/工具数时模型会去翻文件凑「每一步谁干什么」。
+      const duty = s.stageDuty ? ` · ${s.stageDuty}` : ''
+      lines.push(`  - ${s.stepId} ${s.stepType}${duty} · 工具 ${s.toolCount}${llm}${gate}`)
     }
   }
   return lines.join('\n')
@@ -273,11 +363,14 @@ export function registerExpertTools(
     defineTool({
       name: 'list_experts',
       description:
-        'L4 专家清单：每个专家（= 场景执行主体）的职责步（stageDuty/llm 权限/人审闸）、技能与工具白名单。'
-        + '派生 duties 缺失时降级为场景骨架并标 derived=false。只读。',
+        'L4 专家清单（双模式）：省略 name/version = 全局业务本体专家索引——跨包身份卡'
+        + '（包@版本 · 域 · 状态 · 首场景目标 · 场景/技能清单），会话开场或用户问「有哪些业务本体」'
+        + '先用它给用户选、并按卡点名聚焦；给出 name+version = 该包场景级专家明细'
+        + '（步级 stageDuty/llm 权限/人审闸、技能与工具白名单）。派生 duties 缺失时降级为场景骨架'
+        + '并标 derived=false。只读。',
       parameters: {
-        name: { type: 'string', required: true, description: '包名' },
-        version: { type: 'string', required: true, description: '版本号' },
+        name: { type: 'string', description: '包名（与 version 同时省略 = 全局索引）' },
+        version: { type: 'string', description: '版本号（与 name 同时省略 = 全局索引）' },
       },
       output: {
         schema: {
@@ -286,15 +379,26 @@ export function registerExpertTools(
           properties: {
             experts: { type: 'array', required: true, items: { type: 'json' } },
             derived: { type: 'boolean', required: true },
+            index: { type: 'array', items: { type: 'json' } },
           },
         },
-        render: (_args, value) =>
-          textBlock(renderExperts(value as unknown as { experts?: ExpertProfile[]; derived?: boolean })),
+        render: (_args, value) => {
+          const v = value as unknown as { experts?: ExpertProfile[]; derived?: boolean; index?: ExpertIndexCard[] }
+          // index 键存在 = 全局模式（含空数组）；缺省 = name+version 明细模式。
+          return textBlock(v.index !== undefined ? renderExpertIndex(v.index) : renderExperts(v))
+        },
       },
       execute: toolExecute(
-        (args: { name: string; version: string }) => {
-          const out = buildExpertProfiles(ws.versionDir(args.name, args.version))
-          const pkg = loadPackage(ws.versionDir(args.name, args.version))
+        (args: { name?: string; version?: string }) => {
+          if (!args.name !== !args.version) {
+            throw new AgentToolError('INVALID_ARGS', 'name/version 须同时提供（包内明细），或同时省略（全局索引）')
+          }
+          if (!args.name && !args.version) {
+            const { cards, phrases } = buildExpertIndex(ws.listVersions())
+            return toolOut(enforceOutputPolicy({ experts: [], derived: false, index: cards }, phrases))
+          }
+          const out = buildExpertProfiles(ws.versionDir(args.name as string, args.version as string))
+          const pkg = loadPackage(ws.versionDir(args.name as string, args.version as string))
           return toolOut(enforceOutputPolicy(out, phrasesOf(pkg)))
         },
         [],
