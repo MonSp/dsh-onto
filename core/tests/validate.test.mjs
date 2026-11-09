@@ -328,3 +328,60 @@ test('D14-warn：阈值超过圈内权重和 90% → REVIEW_GATE_TIGHT（仅近�
   const v2 = validatePackage(okPkg)
   assert.ok(!v2.warnings.some((w) => w.code === 'REVIEW_GATE_TIGHT'), '阈值≤90% 不应 warn')
 })
+
+/* ── 签发门禁 assertIssueReady（实测 P0：空壳可签发 / 坏包可签发） ── */
+
+test('assertIssueReady：合法包通过并完成派生（签完即可加载）', async () => {
+  const { assertIssueReady, verifyDerived } = await import('../dist/index.js')
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const r = assertIssueReady(dir)
+    assert.ok(r.score > 0)
+    assert.ok(r.scenarios >= 1 && r.scoreRules >= 1)
+    assert.ok(r.sources >= 1 && r.derived >= 1)
+    const gate = verifyDerived(dir)
+    assert.equal(gate.ok, true, `门禁须过: ${gate.reason}`)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('assertIssueReady：无场景空壳 → ISSUE_GATE_EMPTY', async () => {
+  const { assertIssueReady, PackageStoreError } = await import('../dist/index.js')
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = minimalPkg()
+    pkg.scenarios = []
+    savePackage(dir, pkg)
+    try {
+      assertIssueReady(dir)
+      assert.fail('无场景包不得过签发门禁')
+    } catch (e) {
+      assert.ok(e instanceof PackageStoreError, String(e))
+      assert.equal(e.code, 'ISSUE_GATE_EMPTY')
+      assert.match(e.message, /场景/)
+    }
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('assertIssueReady：校验错误 → ISSUE_GATE_VALIDATION（先于派生）', async () => {
+  const { assertIssueReady, PackageStoreError } = await import('../dist/index.js')
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = minimalPkg()
+    pkg.relations[0].to = 'OBJ-TST-MISSING'
+    savePackage(dir, pkg)
+    try {
+      assertIssueReady(dir)
+      assert.fail('带 error 的包不得过签发门禁')
+    } catch (e) {
+      assert.ok(e instanceof PackageStoreError, String(e))
+      assert.equal(e.code, 'ISSUE_GATE_VALIDATION')
+      assert.match(e.message, /REF_UNCLOSED/)
+    }
+  } finally {
+    rmWorkspace(root)
+  }
+})

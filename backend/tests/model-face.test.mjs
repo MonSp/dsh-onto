@@ -61,6 +61,8 @@ const NEW_TOOLS = [
   'recall_experience',
   'annotate_experience',
   'abstract_experience',
+  'list_runs',
+  'list_drafts',
 ]
 
 function mkAmlWorkspace({ derived = false } = {}) {
@@ -136,6 +138,13 @@ test('get_model_graph 数据源：元素节点 + 引用边 + issue 定位（I3�
 test('草案上图与溯源回连（I1/I2）：pending 虚线节点，物化后 provenance 上节点', () => {
   const { root, ws, dir, knowledge } = mkAmlWorkspace()
   try {
+    // I6 对话路径：物化前须已确认骨架
+    knowledge.skeletons.save({
+      packageId: 'aml-analysis',
+      domainCode: 'AML',
+      confirmed: true,
+      ids: ['OBJ-AML-DRAFTED'],
+    })
     const draft = knowledge.addDraft({
       packageId: 'aml-analysis',
       item: {
@@ -489,4 +498,63 @@ test('P2-2/P3-3 源断言：materialize derive 失败回滚 + SkillTemplate wire
     atSrc.includes('直接复用且不覆盖 payload'),
     'skillBodyUpdateEntry JSDoc 须与实现一致（不覆盖在途 payload）',
   )
+})
+
+test('P1 修复源断言：wire save/writeSource 自动重派生 + create_package humanApproved + 对话骨架门', () => {
+  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  assert.ok(svc.includes("throw ontoError('onto/drift'"), 'save/writeSource derive 失败须受控 onto/drift')
+  assert.ok(svc.includes('derivePackage(dir)'), 'wire save/writeSource 成功路径须自动 derive')
+  // save 与 writeSource 两处
+  const deriveCount = (svc.match(/derivePackage\(dir\)/g) || []).length
+  assert.ok(deriveCount >= 2, `save+writeSource 均须 derive，实际 ${deriveCount}`)
+
+  const at = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(at.includes('assertHumanApproved(args.humanApproved, \'建包\')'), 'create_package 须 humanApproved')
+  assert.ok(at.includes('对话起草前须先 save_skeleton'), 'draft_elements 须骨架先行')
+  assert.ok(at.includes('骨架未确认，不得对话起草'), 'draft_elements 须已确认骨架')
+  assert.ok(at.includes("name: 'list_runs'"), 'list_runs 须注册')
+  assert.ok(at.includes("name: 'list_drafts'"), 'list_drafts 须注册')
+
+  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  assert.ok(grants.includes("'list_runs'"), 'list_runs 须入 ONTOOL_NAMES')
+  assert.ok(grants.includes("'list_drafts'"), 'list_drafts 须入 ONTOOL_NAMES')
+
+  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  assert.ok(wb.includes('issueConfirm'), 'issue 须 confirm 文案')
+  assert.ok(wb.includes("window.confirm(`${t('issueConfirm')}"), 'issue 按钮须 window.confirm')
+
+  for (const pkg of ['core', 'backend', 'workbench']) {
+    const pj = JSON.parse(readFileSync(join(REPO, pkg, 'package.json'), 'utf8'))
+    assert.equal(pj.version, '0.2.0', `${pkg} package.json version 须 0.2.0`)
+  }
+})
+
+test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化跳过上墙 / 回填 by 前端拦 / 画布按钮二遍 / 红线并入场景校验', () => {
+  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  assert.ok(svc.includes('assertIssueReady(dir)'), '签发端点须先过 assertIssueReady 门禁')
+  assert.ok(svc.includes("onto/issue-gate"), 'ISSUE_GATE_* 须映射 onto/issue-gate')
+  // save + writeSource + transition 迁移后重派生
+  const deriveCount = (svc.match(/derivePackage\(dir\)/g) || []).length
+  assert.ok(deriveCount >= 3, `transition 之后也须重派生（save+writeSource+transition），实际 ${deriveCount}`)
+  assert.ok(svc.includes('状态已迁移到'), '迁移后 derive 失败须给可操作文案')
+  assert.ok(svc.includes('红线候选只能并入场景'), 'RedLine merge 须校验场景载体')
+
+  const coreV = readFileSync(join(REPO, 'core', 'src', 'validate.ts'), 'utf8')
+  assert.ok(coreV.includes('export function assertIssueReady'), 'core 须导出签发门禁')
+  assert.ok(coreV.includes('ISSUE_GATE_EMPTY'), '空壳（无场景/无规则）须有专属错误码')
+
+  const cli = readFileSync(join(REPO, 'core', 'src', 'cli.ts'), 'utf8')
+  assert.ok(cli.includes('assertIssueReady(dir)'), 'CLI issue 须同门禁')
+  const cliIssue = cli.slice(cli.indexOf("case 'issue'"), cli.indexOf("case 'export'"))
+  assert.ok(cliIssue.includes('derivePackage(dir)'), 'CLI issue 签发后须重派生')
+
+  const kb = readFileSync(join(REPO, 'core', 'src', 'knowledge.ts'), 'utf8')
+  assert.ok(kb.includes('getCandidate(id: string)'), 'KnowledgeStore 须暴露 getCandidate 供端点前置校验')
+
+  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  assert.ok(wb.includes("approveSkip: '批准已记录，但物化未落地（被跳过）'"), '物化跳过须错误条上墙（不得绿勾吞掉）')
+  assert.ok(wb.includes("setError(`${t('approveSkip')}"), '单条批准全跳过须走 setError')
+  assert.ok(wb.includes("|| (formMis !== '' && !formBy.trim())"), '误迁移回填 by 前端必拦')
+  assert.ok(wb.includes("className: 'ogc-node-acts'"), '人审按钮须二遍绘制（脱离节点组防遮挡）')
+  assert.ok(wb.includes('graph.nodes.filter((nd) => nd.draft)'), '二遍绘制作用于全部草案节点')
 })

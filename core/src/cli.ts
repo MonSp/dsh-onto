@@ -56,7 +56,7 @@ import { runScenario } from './scenario.js'
 import { loadPackage, PackageWorkspace, readPackageMeta } from './store.js'
 import type { RuntimeDataset, SourceType } from './types.js'
 import { SOURCE_TYPES } from './types.js'
-import { buildQualityReport, writeQualityReport } from './validate.js'
+import { buildQualityReport, writeQualityReport, assertIssueReady } from './validate.js'
 
 interface Args {
   _: string[]
@@ -181,12 +181,18 @@ function cmdPackage(sub: string | undefined, args: Args): void {
       return
     }
     case 'review': {
+      const dir = ws.versionDir(flagStr(args, 'name'), flagStr(args, 'version'))
       ws.transition(flagStr(args, 'name'), flagStr(args, 'version'), 'IN_REVIEW')
+      // 状态写盘改 package.yaml → 重派生，防送审即 DERIVED_DRIFT。
+      derivePackage(dir)
       print({ ok: true, status: 'IN_REVIEW' })
       return
     }
     case 'issue': {
       // 签发 = 人审通过；issuedBy 必须是人工身份（§3.4）
+      const dir = ws.versionDir(flagStr(args, 'name'), flagStr(args, 'version'))
+      // 签发门禁：0 错 + 场景/规则非空 + 派生 + 加载门禁（空壳/坏包不得签发）。
+      const gate = assertIssueReady(dir)
       ws.transition(
         flagStr(args, 'name'),
         flagStr(args, 'version'),
@@ -194,7 +200,9 @@ function cmdPackage(sub: string | undefined, args: Args): void {
         flagStr(args, 'by'),
         typeof args.flags['note'] === 'string' ? args.flags['note'] : undefined,
       )
-      print({ ok: true, status: 'ISSUED' })
+      // issueRecord/状态位改写 package.yaml → 再派生，签完即可加载。
+      derivePackage(dir)
+      print({ ok: true, status: 'ISSUED', gate })
       return
     }
     case 'export': {

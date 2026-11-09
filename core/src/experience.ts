@@ -29,6 +29,11 @@ export interface TaskSignature {
   stepShape: string
   /** scoreRefs/exclusionRefs/全量（排序去重）。 */
   ruleRefs: string[]
+  /**
+   * 圈内规则语义指纹（id:weight:expression[:threshold] 排序串）。
+   * 仅 ruleRefs 不够——同包改权重/表达式后 digest 必须变，否则同构短路复用过期 DiffTable。
+   */
+  ruleShape: string[]
   /** pipeline skillRefs 并集（排序去重）。 */
   skillRefs: string[]
   /** inputs 的 `name:type` 排序串。 */
@@ -74,6 +79,16 @@ export function buildTaskSignature(input: {
   const scoreRefs = scenario.scoreRefs ?? pkg.scoreRules.map((r) => r.id)
   const exclusionRefs = scenario.exclusionRefs ?? pkg.exclusionRules.map((r) => r.id)
   const ruleRefs = [...new Set([...scoreRefs, ...exclusionRefs])].sort()
+  // 规则语义指纹：同 ID 改 weight/expression/threshold → digest 变（防假同构短路）。
+  const ruleShape = ruleRefs
+    .map((id) => {
+      const s = pkg.scoreRules.find((r) => r.id === id)
+      if (s) return `${id}:${s.weight}:${s.expression}:${s.threshold ?? ''}`
+      const e = pkg.exclusionRules.find((r) => r.id === id)
+      if (e) return `${id}:${e.action}:${e.factor ?? ''}:${e.condition}`
+      return id
+    })
+    .sort()
   const skillRefs = [...new Set(scenario.pipeline.flatMap((s) => s.skillRefs ?? []))].sort()
   const inputShape = scenario.inputs.map((i) => `${i.name}:${i.type}`).sort()
   const core = {
@@ -82,6 +97,7 @@ export function buildTaskSignature(input: {
     goalClass: scenario.goal.trim(),
     stepShape,
     ruleRefs,
+    ruleShape,
     skillRefs,
     inputShape,
     dataBand: dataBandOf(datasetSummary.candidates),
@@ -252,6 +268,26 @@ function sameArray(a: readonly string[], b: readonly string[]): boolean {
 const CROSS_SCOPE_FACTOR = 0.5
 
 /**
+ * reviewFocus 结构位白名单（进 SkillTemplate.steps 的唯一通道）：
+ * 特征名（camelCase/snake/点号）、OBJ.attr / REL.attr、RULE-/SKL-/SCN-/BHV- ID。
+ * 自由中文句子/结论性表述一律拒——方法论正文只收结构位。
+ */
+export function isStructuralFocusToken(token: string): boolean {
+  const t = token.trim()
+  if (t === '' || t.length > 120) return false
+  if (/[一-鿿]/.test(t) && !/^(OBJ|REL|RULE|SKL|SCN|BHV|PKG)-/.test(t)) return false
+  if (/\s{2,}/.test(t)) return false
+  if (/^(认定|确定|已构成|构成犯罪)/.test(t)) return false
+  return (
+    /^(OBJ|REL|RULE|SKL|SCN|BHV|PKG|TOOL|FM|SRC|AGT|AUD)-[A-Z0-9-]+(\.[A-Za-z0-9_]+)?$/.test(t)
+    || /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(t)
+    || /^[a-z][a-z0-9_]*([A-Z][a-z0-9_]*)+$/.test(t)
+    || /^[a-z][a-z0-9_]*$/.test(t)
+    || /^[A-Z][A-Z0-9_]*$/.test(t)
+  )
+}
+
+/**
  * 字段级 signature 新旧对照（P4-5）：命中理由不只 Jaccard——
  * 逐字段给出「同 / 源→新 / 集合增删」，结构位、可回指、无自由流程。
  * 与 buildDiffTable 同源比对口径；digest 同构时全字段为「同」。
@@ -274,6 +310,10 @@ export function signatureFieldReasons(query: TaskSignature, source: TaskSignatur
   } else {
     out.push(`goalClass 源=「${source.goalClass}」→ 新=「${query.goalClass}」`)
   }
+  const shapeQ = new Set(query.ruleShape ?? [])
+  const shapeS = new Set(source.ruleShape ?? [])
+  const shapeSame = shapeQ.size === shapeS.size && [...shapeQ].every((x) => shapeS.has(x))
+  out.push(shapeSame ? 'ruleShape 同' : 'ruleShape 源≠新（权重/表达式有变）')
   const rules = diffStrSets(query.ruleRefs, source.ruleRefs)
   out.push(
     `ruleRefs 共有${rules.shared.length}/新独有${rules.onlyQ.length}/源独有${rules.onlyS.length}`
@@ -445,6 +485,17 @@ export function buildDiffTable(query: TaskSignature, source: TaskSignature): Dif
   if (rules.onlyS.length > 0) {
     mustChange.push({ item: 'ruleRefs', why: `源独有（不迁移）：${rules.onlyS.join(', ')}` })
   }
+  // 规则语义变化（同 ID 改权重/表达式）→ 必须转人工，不得当同构复用。
+  const shapeQ = new Set(query.ruleShape ?? [])
+  const shapeS = new Set(source.ruleShape ?? [])
+  const shapeOnlyQ = [...shapeQ].filter((x) => !shapeS.has(x))
+  const shapeOnlyS = [...shapeS].filter((x) => !shapeQ.has(x))
+  if (shapeOnlyQ.length > 0 || shapeOnlyS.length > 0) {
+    mustChange.push({
+      item: 'ruleShape',
+      why: `规则语义有变（权重/表达式/阈值）：新独有 ${shapeOnlyQ.length} · 源独有 ${shapeOnlyS.length}`,
+    })
+  }
 
   const skills = diffStrSets(query.skillRefs, source.skillRefs)
   if (skills.shared.length > 0) {
@@ -605,7 +656,8 @@ export function abstractSkillDrafts(
     const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
     const slug = rep.signature.scenarioId.replace(/^SCN-[A-Z0-9]+-/, '') || 'EXP'
     const domainTag = pkg.meta.domain || 'EXP'
-    const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))]
+    // 结构位过滤：只保留特征名 / OBJ.attr / ruleId / skillId 形态，防自由文本进方法论正文。
+    const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))].filter(isStructuralFocusToken)
     const weights: Record<string, number> = {}
     for (const r of pkg.scoreRules) weights[r.id] = r.weight
     const draft: DraftItem = {

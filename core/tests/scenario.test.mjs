@@ -4,6 +4,16 @@ import assert from 'node:assert/strict'
 import { runScenario, ScenarioRunError, derivePackage, savePackage, loadPackage, KnowledgeStore } from '../dist/index.js'
 import { copyExamplePackage, exampleData, mkWorkspaceWithPkg, minimalPkg, rmWorkspace } from './helpers.mjs'
 
+
+function confirmSkeleton(store, extraIds = []) {
+  store.skeletons.save({
+    packageId: 'test-pkg',
+    domainCode: 'TST',
+    confirmed: true,
+    ids: [...new Set(['OBJ-TST-A', 'OBJ-TST-B', 'REL-TST-AB', 'dict-tst-k', 'BHV-TST-X', 'RULE-TST-S1', 'RULE-TST-E1', 'SKL-TST-N', 'SCN-TST-1', 'FM-TST-1', 'SRC-TST-1', ...extraIds])],
+  })
+}
+
 test('端到端 AML：候选 + 风险分 + 命中规则 + 证据链 + 待核实点齐全', () => {
   const { dir, root } = copyExamplePackage('aml')
   try {
@@ -342,6 +352,7 @@ test('P-1 includeExcluded 持久化：create 携带、update 可开、坏类型�
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['SCN-TST-1', 'SCN-TST-2'])
     // create 携带
     const c = store.addDraft({
       packageId: 'test-pkg',

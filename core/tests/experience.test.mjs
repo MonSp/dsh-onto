@@ -69,6 +69,58 @@ test('digest 稳定：同结构同 digest；结构变则 digest 变', () => {
   assert.notEqual(a.digest, c.digest)
 })
 
+test('ruleShape：同 ID 改权重/表达式 → digest 变（防假同构短路）', () => {
+  const base = minimalPkg()
+  const a = buildTaskSignature({ pkg: base, scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  assert.ok(Array.isArray(a.ruleShape) && a.ruleShape.length > 0, 'ruleShape 须非空')
+  assert.ok(a.ruleShape.some((x) => x.startsWith('RULE-TST-S1:')), '含打分规则语义指纹')
+
+  const changed = minimalPkg()
+  const rule = changed.scoreRules.find((r) => r.id === 'RULE-TST-S1')
+  rule.weight = 0.7
+  const b = buildTaskSignature({ pkg: changed, scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  assert.notEqual(a.digest, b.digest, '改权重必须改 digest')
+  assert.notDeepEqual(a.ruleShape, b.ruleShape)
+
+  const expr = minimalPkg()
+  expr.scoreRules.find((r) => r.id === 'RULE-TST-S1').expression = 'min(1, f2)'
+  const c = buildTaskSignature({ pkg: expr, scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  assert.notEqual(a.digest, c.digest, '改表达式必须改 digest')
+})
+
+test('isStructuralFocusToken：结构位放行、自由文本/结论拒', async () => {
+  const { isStructuralFocusToken } = await import('../dist/experience.js')
+  assert.equal(isStructuralFocusToken('listHitCount'), true)
+  assert.equal(isStructuralFocusToken('OBJ-AML-ACCOUNT.balance'), true)
+  assert.equal(isStructuralFocusToken('RULE-AML-SCORE-FANOUT'), true)
+  assert.equal(isStructuralFocusToken('inboundCount'), true)
+  assert.equal(isStructuralFocusToken('this is a long free text sentence about risk'), false)
+  assert.equal(isStructuralFocusToken('认定洗钱'), false)
+  assert.equal(isStructuralFocusToken('复核时注意那个集中转入的特征再看一下'), false)
+  assert.equal(isStructuralFocusToken(''), false)
+})
+
+test('abstractSkillDrafts：reviewFocus 自由文本不进 steps，结构位保留', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const mk = (runId, focus, savedAt) =>
+      saveExperienceNote(root, {
+        ...makeNote({ runId, savedAt }),
+        reviewFocus: focus,
+      })
+    mk('run-f1', ['listHitCount', '这是一句很长的自由文本复核说明不能进方法论'], '2026-11-08T01:00:00.000Z')
+    mk('run-f2', ['listHitCount', 'OBJ-TST-A.a1'], '2026-11-08T02:00:00.000Z')
+    const abs = abstractSkillDrafts(root, { pkg: minimalPkg() })
+    assert.equal(abs.length, 1)
+    const steps = abs[0].draft.payload.steps
+    assert.ok(steps.includes('listHitCount'))
+    assert.ok(steps.includes('OBJ-TST-A.a1'))
+    assert.ok(!steps.some((s) => String(s).includes('自由文本')), `自由文本不得进 steps: ${JSON.stringify(steps)}`)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('scoreRefs/exclusionRefs 显式圈定 → ruleRefs 只含圈内', () => {
   const pkg = minimalPkg()
   pkg.scenarios[0].scoreRefs = ['RULE-TST-S1']

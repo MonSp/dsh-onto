@@ -573,7 +573,18 @@ export class KnowledgeStore {
     // P2-2：整批落盘前快照——derive 失败时回滚到物化前源状态，避免半写死锁。
     const originalSnap = snapshotPkg(pkg)
     const weightTouched = new Set<string>()
+    /** 对话起草（draft_elements 带 turnId）强制骨架门：无骨架/未确认一律拒（I6 对话路径）。 */
+    const isConversationDraft = (c: DraftCandidate): boolean =>
+      typeof c.provenance?.turnId === 'string' && c.provenance.turnId !== ''
     for (const c of eligible) {
+      if (isConversationDraft(c) && !skeleton) {
+        skipped.push({ id: c.id, reason: '对话起草须先 save_skeleton 落骨架并确认（I6）' })
+        continue
+      }
+      if (isConversationDraft(c) && skeleton && !skeleton.confirmed) {
+        skipped.push({ id: c.id, reason: 'skeleton 未确认，不得物化对话草案（I6）' })
+        continue
+      }
       // 自动分配 ID 也必须在骨架内：先干跑应用，超界即回滚该条（I6 全覆盖）。
       // 口径：I6 只约束新增 Schema ID；update/属性/红线不新增 ID，按 ID 段对照骨架。
       const before = snapshotPkg(pkg)

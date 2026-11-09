@@ -7,7 +7,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractAttrRefs, parseAttrRef, UNREFERENCED_EXEMPT_PREFIXES } from './ids.js'
 import { validateExpression } from './rules.js'
-import { listSourceFiles, loadPackage, readPackageMeta, QUALITY_REPORT_FILE } from './store.js'
+import { listSourceFiles, loadPackage, readPackageMeta, PackageStoreError, QUALITY_REPORT_FILE } from './store.js'
+import { derivePackage } from './derive.js'
+import { verifyDerived } from './loadgate.js'
 import type { OntologyPackage, QualityReport, SkeletonRecord, ValidationIssue } from './types.js'
 import { loadYaml } from './yamlio.js'
 
@@ -410,5 +412,56 @@ export function buildQualityReport(versionDir: string): QualityReport {
     info,
     score,
     passed: errors.length === 0,
+  }
+}
+
+/** 签发门禁结果（供端点回执）。 */
+export interface IssueGateResult {
+  score: number
+  warnings: number
+  scenarios: number
+  scoreRules: number
+  sources: number
+  derived: number
+}
+
+/**
+ * 签发门禁（签发端点在状态迁移前调用；core transition 保持原语不动）：
+ * 1. 校验错误必须为 0（警告放行，与「签发前预检」同口径）；
+ * 2. 至少 1 张场景卡 + 1 条打分规则——ISSUED 只读，空壳签发后永远无法跑批也无法补救；
+ * 3. 重派生 + 加载门禁通过（签下来就能加载，不留 DERIVED_DRIFT）。
+ * 失败抛 `PackageStoreError`，code 前缀 `ISSUE_GATE_*`。
+ */
+export function assertIssueReady(versionDir: string): IssueGateResult {
+  const report = writeQualityReport(versionDir)
+  if (report.errors.length > 0) {
+    const codes = [...new Set(report.errors.map((e) => e.code))].join(', ')
+    throw new PackageStoreError(
+      'ISSUE_GATE_VALIDATION',
+      `签发被拒：校验错误 ${report.errors.length} 条（${codes}），先修复再签发`,
+    )
+  }
+  const pkg = loadPackage(versionDir)
+  if (pkg.scenarios.length === 0) {
+    throw new PackageStoreError(
+      'ISSUE_GATE_EMPTY',
+      '签发被拒：包内没有任何场景卡（SCN-*）。ISSUED 只读，空壳签发后永远无法跑批也无法补救',
+    )
+  }
+  if (pkg.scoreRules.length === 0) {
+    throw new PackageStoreError('ISSUE_GATE_EMPTY', '签发被拒：包内没有任何打分规则（0 规则空壳不得签发）')
+  }
+  const manifest = derivePackage(versionDir)
+  const gate = verifyDerived(versionDir)
+  if (!gate.ok) {
+    throw new PackageStoreError('ISSUE_GATE_DRIFT', `签发被拒：加载门禁未过（${gate.code}: ${gate.reason}）`)
+  }
+  return {
+    score: report.score,
+    warnings: report.warnings.length,
+    scenarios: pkg.scenarios.length,
+    scoreRules: pkg.scoreRules.length,
+    sources: manifest.sources.length,
+    derived: manifest.derived.length,
   }
 }

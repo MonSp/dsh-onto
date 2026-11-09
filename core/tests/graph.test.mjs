@@ -20,10 +20,21 @@ function fullIds() {
   ]
 }
 
+/** 对话起草（provenance.turnId）物化前置：I6 要求已确认骨架；extraIds 覆盖本用例新建/改写 ID。 */
+function confirmSkeleton(store, extraIds = []) {
+  store.skeletons.save({
+    packageId: 'test-pkg',
+    domainCode: 'TST',
+    confirmed: true,
+    ids: [...new Set([...fullIds(), ...extraIds])],
+  })
+}
+
 test('addDraft：草案只入队列不写包，带 provenance，幂等（I1）', () => {
   const { dir, root, pkg } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const item = {
       layer: 'O1',
       targetKind: 'ObjectType',
@@ -66,6 +77,7 @@ test('addDraft 溯源 runId（experience-loop S4.4）：透传保留；非法 ru
   const { root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const item = {
       layer: 'O2',
       targetKind: 'SkillTemplate',
@@ -95,6 +107,7 @@ test('批准物化：appliedAs 落盘 + 画布溯源回连（I2）', () => {
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['OBJ-TST-NEW'])
     const c = store.addDraft({
       packageId: 'test-pkg',
       item: {
@@ -132,6 +145,7 @@ test('skeleton 门：未确认全拒；骨架外 ID 拒且回滚；骨架内通�
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const mkDraft = (payload, name) =>
       store.addDraft({
         packageId: 'test-pkg',
@@ -201,6 +215,7 @@ test('skeleton 门：Attribute 不新增 ID，按 owner ID 段校验（I6 口径
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const mkAttr = (name) => {
       const c = store.addDraft({
         packageId: 'test-pkg',
@@ -249,6 +264,7 @@ test('人审留痕：reviewCandidate 落 reviewedBy/reviewedAt 并随队列持�
   const { root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const c = store.addDraft({
       packageId: 'test-pkg',
       item: { layer: 'O1', targetKind: 'ObjectType', name: '留痕对象', payload: { id: 'OBJ-TST-NEW', attributes: [] }, confidence: 0.9 },
@@ -269,6 +285,7 @@ test('草案引用边只从语义字段抽取（自由文本不连边，防假�
   const { root, pkg } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     // name/description 自由文本里出现 ID 字面 → 不连边
     const cFree = store.addDraft({
       packageId: 'test-pkg',
@@ -358,9 +375,10 @@ test('草案虚线节点上图，pending/approved 画、merged 退出（I1）', 
   const { root, dir, pkg } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['RULE-TST-NEW'])
     const c = store.addDraft({
       packageId: 'test-pkg',
-      item: { layer: 'O2', targetKind: 'ScoreRule', name: '新规则', payload: { weight: 0.3, expression: '1' }, confidence: 0.6 },
+      item: { layer: 'O2', targetKind: 'ScoreRule', name: '新规则', payload: { id: 'RULE-TST-NEW', weight: 0.3, expression: '1' }, confidence: 0.6 },
       provenance: { turnId: 'turn-9' },
     })
     const g = buildModelGraph({ pkg, candidates: store.listCandidates({ packageId: 'test-pkg' }) })
@@ -483,6 +501,7 @@ test('op=update：改权重联动归一 + 技能模板同权（P3）', () => {
   })
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['RULE-TST-A', 'RULE-TST-B'])
     const c = store.addDraft({
       packageId: 'test-pkg',
       item: {
@@ -530,6 +549,7 @@ test('op=update：同批多条权重固定 → 未动规则吸收残差（批语
   })
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['RULE-TST-A', 'RULE-TST-B', 'RULE-TST-C'])
     const mkUpd = (targetId, weight, name) => {
       const c = store.addDraft({
         packageId: 'test-pkg',
@@ -558,6 +578,7 @@ test('op=update：标量覆盖、append 接线去重、阈值调整；目标不�
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['BHV-TST-X'])
     const upd = (item) => {
       const c = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-u' } })
       store.reviewCandidate(c.id, 'approve')
@@ -617,6 +638,7 @@ test('op=update：校验与幂等、图谱 targetId 引用边、骨架门口径�
     )
 
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store)
     const mk = (name) => store.addDraft({
       packageId: 'test-pkg',
       item: { layer: 'O1', targetKind: 'ObjectType', op: 'update', targetId: 'OBJ-TST-A', name, payload: { idRule: '<c>:<a2>' }, confidence: 0.9 },
@@ -672,6 +694,7 @@ test('v1.1 引用位：场景卡 create/update 携带 behaviorRefs/exclusionRefs
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['SCN-TST-1', 'SCN-TST-2', 'BHV-TST-X', 'RULE-TST-E1'])
     // update：给既有场景补引用位
     const u = store.addDraft({
       packageId: 'test-pkg',
@@ -718,6 +741,7 @@ test('D9：update 白名单外字段 fail-loud；顶层 mustInclude 归一进 ou
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['SCN-TST-1', 'SCN-TST-2'])
     // 1) 白名单外字段：起草即拒（不再静默入队、物化假 merged）
     assert.throws(
       () => store.addDraft({
@@ -772,6 +796,7 @@ test('D6：驳回后同名可重新起草（恢复路径）；pending/merged 仍
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['OBJ-TST-RETRY'])
     const item = {
       layer: 'O1', targetKind: 'ObjectType', name: '重试对象',
       payload: { id: 'OBJ-TST-RETRY', attributes: [] }, confidence: 0.9,
@@ -809,6 +834,7 @@ test('scoreRefs：场景卡 create/update 携带并持久化（UPDATABLE 白名�
   const { dir, root } = mkWorkspaceWithPkg()
   try {
     const store = new KnowledgeStore(root)
+    confirmSkeleton(store, ['SCN-TST-1', 'SCN-TST-2', 'RULE-TST-S1'])
     // update：给既有场景补 scoreRefs（走白名单，不得被 D9 拦）
     const u = store.addDraft({
       packageId: 'test-pkg',
