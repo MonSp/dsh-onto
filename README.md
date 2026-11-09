@@ -158,12 +158,12 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 
 ## Testing
 
-- `core/tests/`: **158 tests** (`node --test tests/*.test.mjs`) — validator interceptions,
+- `core/tests/`: **159 tests** (`node --test tests/*.test.mjs`) — validator interceptions,
   six-source knowledge parsing, conclusion phrases kept out of O3, forced review, ISSUED
   read-only + fork, derived-drift refusal and recovery, end-to-end scenario output
   contract, rule-ID/evidence-chain/forbidden-phrase guarantees, experience signatures
-  (`ruleShape` anti-false-isomorphism), issue gate (hollow/broken packages refused), and
-  extra domains running on the untouched engine.
+  (`ruleShape` anti-false-isomorphism + honest legacy-signature compatibility), issue gate
+  (hollow/broken packages refused), and extra domains running on the untouched engine.
 - `backend/tests/`: **167 tests** (`pnpm run test`) — agent tool contracts
   (humanApproved, skeleton-first, list_runs/list_drafts) plus source assertions
   (re-derive / gate / surfacing of skipped materializations).
@@ -185,6 +185,13 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - Skill isolation per preset is not done yet (our skill provider is a singleton service;
   scoping it into preset realms hits that boundary — Phase 2); focus currently comes from
   the persona constraints + the tool surface.
+- **0.2.0 experience signature upgrade**: `ruleShape` is a new field. Notes written before
+  the upgrade (`legacySignature=true` in `exp list`) never take the digest short-circuit;
+  the diff table honestly reports "legacy signature, semantic isomorphism unconfirmed"
+  and forces human review — no silent pass, no false "rules changed" claim. Running
+  `exp annotate` (or the agent `annotate_experience`) on that note upgrades it against
+  the **current** package; do not upgrade if rule weights/expressions may have changed
+  since the note was saved without human confirmation.
 
 ## Current progress (2026-11-09)
 
@@ -200,7 +207,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - **Expert identity layer (L4)**: `list_experts` with no args returns the global expert index (one card per package, ISSUED first, explicit no-scenario fallback, per-card focus hint); skill catalog descriptions carry a `[package@version · domain]` prefix; the modeling guide now opens with "list cards first, name it to focus" conventions.
 - **Conversation-time expert selection (preset layer)**: `setup-profile.ps1` idempotently generates the profile's expert preset block (`ensure-expert-presets.ps1` + `expert-presets.json` + `preset-plugins.standard.yaml` template) — the new-session hero chip offers AML / TAX / MED experts, the Host applies the pick to the blank session, `persona.prefix` carries the focus constraints (model-visible), and the session header's `AgentPresetLabel` shows the active expert.
 - **Expert sub-agent dispatch**: a top-level `expert_agent` entry (dsh-tool-subagent with `allowedAgentPresets` exposing onto-aml/onto-tax/onto-med) lets a standard session — without any hot-switch (the Host locks a started composition) — delegate tasks to a child agent running under the expert preset, with async completion notices carrying the child's answer; the modeling guide carries the recommend-and-hand-over script.
-- Verification green: core 158/158 · backend 167/167 · dump-config 2/2 · dev-web +
+- Verification green: core 159/159 · backend 167/167 · dump-config 2/2 · dev-web +
   browser smoke passed.
 
 ## License

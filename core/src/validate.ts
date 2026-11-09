@@ -431,6 +431,11 @@ export interface IssueGateResult {
  * 2. 至少 1 张场景卡 + 1 条打分规则——ISSUED 只读，空壳签发后永远无法跑批也无法补救；
  * 3. 重派生 + 加载门禁通过（签下来就能加载，不留 DERIVED_DRIFT）。
  * 失败抛 `PackageStoreError`，code 前缀 `ISSUE_GATE_*`。
+ *
+ * 派生调用约定（勿「优化」掉任一次）：
+ * - 本函数内 `derivePackage` = 签前可加载性断言（消费 verifyDerived + 回执 sources/derived 计数）；
+ * - 调用方在 `transition` **之后必须再 derive 一次**——状态位/issueRecord 改写了 package.yaml，
+ *   不重派生即 DERIVED_DRIFT。两次 derive 语义不同：第一次验「现在能签」，第二次保「签完能加载」。
  */
 export function assertIssueReady(versionDir: string): IssueGateResult {
   const report = writeQualityReport(versionDir)

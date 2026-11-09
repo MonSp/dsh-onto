@@ -545,11 +545,16 @@ test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化
   const coreV = readFileSync(join(REPO, 'core', 'src', 'validate.ts'), 'utf8')
   assert.ok(coreV.includes('export function assertIssueReady'), 'core 须导出签发门禁')
   assert.ok(coreV.includes('ISSUE_GATE_EMPTY'), '空壳（无场景/无规则）须有专属错误码')
+  assert.ok(coreV.includes('之后必须再 derive'), '门禁须注明双 derive 约定（勿删任一次）')
 
   const cli = readFileSync(join(REPO, 'core', 'src', 'cli.ts'), 'utf8')
   assert.ok(cli.includes('assertIssueReady(dir)'), 'CLI issue 须同门禁')
   const cliIssue = cli.slice(cli.indexOf("case 'issue'"), cli.indexOf("case 'export'"))
   assert.ok(cliIssue.includes('derivePackage(dir)'), 'CLI issue 签发后须重派生')
+  assert.ok(cliIssue.includes('状态已迁移到 ISSUED'), 'CLI issue 迁移后 derive 失败须受控上墙')
+  const cliReview = cli.slice(cli.indexOf("case 'review'"), cli.indexOf("case 'issue'"))
+  assert.ok(cliReview.includes('状态已迁移到 IN_REVIEW'), 'CLI review 迁移后 derive 失败须受控上墙')
+  assert.ok(cliReview.includes('可手动 dsh-onto derive'), 'CLI 半成功态须给可操作下一步')
 
   const kb = readFileSync(join(REPO, 'core', 'src', 'knowledge.ts'), 'utf8')
   assert.ok(kb.includes('getCandidate(id: string)'), 'KnowledgeStore 须暴露 getCandidate 供端点前置校验')
@@ -592,4 +597,20 @@ test('L4 身份层：buildExpertIndex 一包一卡、ISSUED 优先选版、无�
   } finally {
     cleanup(root)
   }
+})
+
+test('L4 空全局索引：render 走 index 分支（不落明细「duties 未派生」文案）', () => {
+  // 空数组也必须是「没有包」语义，而不是 experts=[] + derived=false 的降级文案。
+  const emptyText = renderExpertIndex([])
+  assert.match(emptyText, /业务本体专家 0 个/)
+  assert.match(emptyText, /暂无包/)
+  assert.ok(!emptyText.includes('duties'), '空索引不得出现 duties 降级措辞')
+  assert.ok(!emptyText.includes('场景骨架'), '空索引不得出现骨架降级措辞')
+
+  // render 分支：index 键存在（即使 []）→ index 渲染；缺省 → 明细渲染。
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  assert.ok(
+    src.includes('v.index !== undefined ? renderExpertIndex(v.index) : renderExperts(v)'),
+    'render 须以 index 键存在与否分支，而非 length>0',
+  )
 })

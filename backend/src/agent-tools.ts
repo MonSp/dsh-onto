@@ -850,12 +850,21 @@ export function annotateExperienceForTool(
 
   if (existing !== null) {
     gateSuccess(existing.counterexample || args.counterexample === true)
+    // 旧签名升版：人审触碰即按当前包补 ruleShape（packageScope 不一致时 upgrade 内部跳过）。
+    let upgradePkg: ReturnType<typeof loadPackage> | undefined
+    try {
+      const rec0 = loadRunRecord(ws.root, args.runId)
+      upgradePkg = loadPackage(ws.versionDir(rec0.package.name, rec0.package.version))
+    } catch {
+      upgradePkg = undefined
+    }
     const note = reviewExperienceNote(ws.root, args.runId, {
       outcome: args.outcome,
       outcomeReason: args.outcomeReason,
       misTransfer: args.misTransfer,
       reviewFocus: args.reviewFocus,
       reusedFromRunId: args.reusedFromRunId,
+      upgradePkg,
     })
     return projectAnnotateReceipt(note, false)
   }

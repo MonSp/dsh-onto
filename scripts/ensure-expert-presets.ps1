@@ -55,6 +55,18 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine($begin)
 foreach ($n in $data.note) { [void]$sb.AppendLine($n) }
 [void]$sb.AppendLine('- insert:')
+# Detect the default persona prefix line before rewriting. If the harness changes
+# that line and the template is stale, every expert preset would silently keep the
+# generic coding prefix (no package focus) - fail loud via warning, not silence.
+$prefixPattern = '*prefix: You are a coding agent powered by the {{model}} model.*'
+$prefixHits = @($templateLines | Where-Object { $_ -like $prefixPattern })
+if ($prefixHits.Count -eq 0) {
+    Write-Warning ("preset template has no recognizable default persona prefix line; " +
+        "expert presets will NOT get the package-focus prefix. " +
+        "Regenerate preset-plugins.standard.yaml from `pnpm dsh --dump-config` " +
+        "(preset-standard plugins block) and re-run this script.")
+}
+$prefixReplaced = $false
 foreach ($e in $data.experts) {
     $prefix = $data.prefixTemplate.Replace('{TITLE}', $e.title).Replace('{PKG}', $e.pkg).Replace('{VER}', $e.ver).Replace('{DOM}', $e.dom).Replace('{FOCUS}', $e.focus)
     [void]$sb.AppendLine("  - id: preset-$($e.id)")
@@ -67,14 +79,19 @@ foreach ($e in $data.experts) {
     # Template is dumped at top-level-entry depth; inside `insert:` it sits two deeper.
     foreach ($row in $templateLines) {
         $shifted = if ($row -eq '') { $row } else { '  ' + $row }
-        if ($shifted -like '*prefix: You are a coding agent powered by the {{model}} model.*') {
+        if ($shifted -like $prefixPattern) {
             $indent = ($shifted -replace 'prefix:.*$', '')
             [void]$sb.AppendLine($indent + 'prefix: "' + $prefix + '"')
+            $prefixReplaced = $true
         }
         else {
             [void]$sb.AppendLine($shifted)
         }
     }
+}
+if (-not $prefixReplaced -and $prefixHits.Count -gt 0) {
+    Write-Warning ("prefix line found in template but no expert row replaced it (shift/indent drift?). " +
+        "Check preset-plugins.standard.yaml against the harness dump.")
 }
 
 # Expert delegation tool: lets the model call a child agent under a chosen expert

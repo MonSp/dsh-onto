@@ -308,6 +308,10 @@ export function buildExpertIndex(versions: ReadonlyArray<{
 
 /** 全局索引渲染：一包一行身份卡 + 点名聚焦提示（模型可见面即 render）。 */
 export function renderExpertIndex(cards: ExpertIndexCard[]): string {
+  if (cards.length === 0) {
+    // 空工作区：明确是「没有包」，不落到明细模式的「duties 未派生」文案（误导）。
+    return '业务本体专家 0 个（工作区暂无包——先 create_package 建包，再 list_experts）'
+  }
   const lines = [`业务本体专家 ${cards.length} 个（一包一卡 · ISSUED 优先列前）`]
   for (const c of cards) {
     lines.push(`${c.package}@${c.version} · ${c.domain} · ${c.status} —「${c.title}」`)
@@ -380,7 +384,8 @@ export function registerExpertTools(
         },
         render: (_args, value) => {
           const v = value as unknown as { experts?: ExpertProfile[]; derived?: boolean; index?: ExpertIndexCard[] }
-          return textBlock(v.index && v.index.length > 0 ? renderExpertIndex(v.index) : renderExperts(v))
+          // index 键存在 = 全局模式（含空数组）；缺省 = name+version 明细模式。
+          return textBlock(v.index !== undefined ? renderExpertIndex(v.index) : renderExperts(v))
         },
       },
       execute: toolExecute(

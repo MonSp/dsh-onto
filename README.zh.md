@@ -103,9 +103,9 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 
 ## 验收
 
-- `core/tests/`：**158 项**（`node --test tests/*.test.mjs`）——校验拦截、六类原料解析、结论不进 O3、
+- `core/tests/`：**159 项**（`node --test tests/*.test.mjs`）——校验拦截、六类原料解析、结论不进 O3、
   强制人审、ISSUED 只读、fork、派生漂移拒绝与恢复、端到端场景字段齐全、ruleId/证据链/禁语零命中、
-  经验签名（ruleShape 防假同构）、签发门禁（空壳/坏包拒绝）、第二域零改引擎。
+  经验签名（ruleShape 防假同构 + 旧版签名诚实兼容）、签发门禁（空壳/坏包拒绝）、第二域零改引擎。
 - `backend/tests/`：**167 项**（`pnpm run test`）——agent 工具契约（humanApproved、骨架先行、
   list_runs/list_drafts）、源断言（重派生 / 门禁 / 人审上墙）等。
 - 改动后验证阶梯：core/backend/workbench `pnpm run build` + `node --check` → `scripts/dump-config.ps1`
@@ -118,6 +118,9 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - 平台只做线索筛查与证据组装；认定与处置在人工（设计如此，不是待补功能）。
 - 会话 preset **不可热切**（首回合后 Host 拒绝切换，头部标签只读）；换专家身份 = 新会话 hero 选择，或 `expert_agent` 派子 agent。
 - 技能按 preset 作用域隔离未做（技能提供方为单例服务，进隔离域有单例边界，Phase 2）；当前靠 persona 约束 + 工具面聚焦。
+- **0.2.0 经验签名升级**：`ruleShape` 语义指纹为新增字段；升级前落盘的旧笔记（`exp list` 中 `legacySignature=true`）
+  **不会** digest 短路，差异表诚实标「旧版签名、无法确认语义同构」并转人工——不静默放行、也不谎称规则已变。
+  对该条执行 `exp annotate`（或 agent `annotate_experience`）时按**当前包**升版补指纹；规则若在落盘后已改且未经人确认，请勿升版。
 
 ## 当前进展（2026-11-09）
 
@@ -135,7 +138,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - **专家子 agent 派发**：顶层注册 `expert_agent`（dsh-tool-subagent，`allowedAgentPresets`
   暴露 onto-aml/onto-tax/onto-med）——标准会话**不热切**（Host 锁定已开聊组合）即可把任务派给
   专家 preset 下的子 agent，异步完成通知带回原文；建模引导含推荐-交接口径。
-- 验证全绿：core 158/158 · backend 167/167 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
+- 验证全绿：core 159/159 · backend 167/167 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
 
 ## 许可证
 

@@ -2,6 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   buildTaskSignature,
@@ -21,6 +22,8 @@ import {
   abstractSkillDrafts,
   abstractCounterexampleDrafts,
   compressExperiences,
+  isLegacySignature,
+  upgradeLegacySignature,
 } from '../dist/index.js'
 import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
 
@@ -86,6 +89,55 @@ test('ruleShape：同 ID 改权重/表达式 → digest 变（防假同构短路
   expr.scoreRules.find((r) => r.id === 'RULE-TST-S1').expression = 'min(1, f2)'
   const c = buildTaskSignature({ pkg: expr, scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
   assert.notEqual(a.digest, c.digest, '改表达式必须改 digest')
+})
+
+test('旧版签名兼容：无 ruleShape → 诚实 mustChange；annotate 升版后可同构', () => {
+  const pkg = minimalPkg()
+  const modern = buildTaskSignature({ pkg, scenarioId: 'SCN-TST-1', datasetSummary: SUMMARY })
+  assert.equal(isLegacySignature(modern), false)
+
+  // 模拟 0.2.0 前落盘：去掉 ruleShape 并按旧公式重算 digest（core 不含 ruleShape）
+  const { ruleShape: _drop, digest: _d, ...legacyCore } = modern
+  const legacy = {
+    ...legacyCore,
+    digest: createHash('sha256').update(JSON.stringify(legacyCore)).digest('hex'),
+  }
+  assert.equal(isLegacySignature(legacy), true)
+
+  const draft = buildDiffTable(modern, legacy)
+  const shape = draft.mustChange.find((m) => m.item === 'ruleShape')
+  assert.ok(shape, '旧签名必须进 mustChange')
+  assert.match(shape.why, /旧版签名/)
+  assert.match(shape.why, /无法确认/)
+
+  const reasons = signatureFieldReasons(modern, legacy).join('\n')
+  assert.match(reasons, /旧版签名/)
+  assert.ok(!reasons.includes('权重/表达式有变'), '不得谎称规则已变')
+
+  // 升版：补 ruleShape + 新 digest 公式 → 与当前包同构
+  const upgraded = upgradeLegacySignature(legacy, pkg)
+  assert.ok(upgraded, '同包须可升版')
+  assert.equal(isLegacySignature(upgraded), false)
+  assert.deepEqual(upgraded.ruleShape, modern.ruleShape)
+  assert.equal(upgraded.digest, modern.digest, '升版后 digest 须与当前公式一致')
+
+  // 跨包不升版
+  const other = { ...pkg, meta: { ...pkg.meta, name: 'other-pkg' } }
+  assert.equal(upgradeLegacySignature(legacy, other), null)
+
+  // reviewExperienceNote 升级路径
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const note = makeNote({ runId: 'run-legacy-1' })
+    note.signature = legacy
+    saveExperienceNote(root, note)
+    const after = reviewExperienceNote(root, 'run-legacy-1', { outcome: 'partial', upgradePkg: pkg })
+    assert.equal(isLegacySignature(after.signature), false)
+    assert.equal(after.signature.digest, modern.digest)
+    assert.equal(after.outcome, 'partial')
+  } finally {
+    rmWorkspace(root)
+  }
 })
 
 test('isStructuralFocusToken：结构位放行、自由文本/结论拒', async () => {
