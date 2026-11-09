@@ -87,8 +87,8 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 158 node --test acceptance tests)
-  backend/    @dsh-onto/backend — dsh bundle: onto* wire services (single backend landing point; 167 tests)
+  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 159 node --test acceptance tests)
+  backend/    @dsh-onto/backend — dsh bundle: onto* wire services (single backend landing point; 168 tests)
   workbench/  @dsh-onto/workbench — dsh bundle: Web UI (six tabs + persistent right-rail ontology graph)
   packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0, tax/1.0.0
   examples/   scenario run fixtures (aml-run.json / med-run.json / tax-run.json)
@@ -164,7 +164,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
   contract, rule-ID/evidence-chain/forbidden-phrase guarantees, experience signatures
   (`ruleShape` anti-false-isomorphism + honest legacy-signature compatibility), issue gate
   (hollow/broken packages refused), and extra domains running on the untouched engine.
-- `backend/tests/`: **167 tests** (`pnpm run test`) — agent tool contracts
+- `backend/tests/`: **168 tests** (`pnpm run test`) — agent tool contracts
   (humanApproved, skeleton-first, list_runs/list_drafts) plus source assertions
   (re-derive / gate / surfacing of skipped materializations).
 - Post-change ladder: core/backend/workbench `pnpm run build` + `node --check` →
@@ -207,7 +207,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - **Expert identity layer (L4)**: `list_experts` with no args returns the global expert index (one card per package, ISSUED first, explicit no-scenario fallback, per-card focus hint); skill catalog descriptions carry a `[package@version · domain]` prefix; the modeling guide now opens with "list cards first, name it to focus" conventions.
 - **Conversation-time expert selection (preset layer)**: `setup-profile.ps1` idempotently generates the profile's expert preset block (`ensure-expert-presets.ps1` + `expert-presets.json` + `preset-plugins.standard.yaml` template) — the new-session hero chip offers AML / TAX / MED experts, the Host applies the pick to the blank session, `persona.prefix` carries the focus constraints (model-visible), and the session header's `AgentPresetLabel` shows the active expert.
 - **Expert sub-agent dispatch**: a top-level `expert_agent` entry (dsh-tool-subagent with `allowedAgentPresets` exposing onto-aml/onto-tax/onto-med) lets a standard session — without any hot-switch (the Host locks a started composition) — delegate tasks to a child agent running under the expert preset, with async completion notices carrying the child's answer; the modeling guide carries the recommend-and-hand-over script.
-- Verification green: core 159/159 · backend 167/167 · dump-config 2/2 · dev-web +
+- Verification green: core 159/159 · backend 168/168 · dump-config 2/2 · dev-web +
   browser smoke passed.
 
 ## License

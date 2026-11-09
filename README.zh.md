@@ -44,8 +44,8 @@
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，158 项 node --test 验收测试）
-  backend/    @dsh-onto/backend — dsh bundle：onto* wire 服务（唯一后端落点，167 项测试）
+  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，159 项 node --test 验收测试）
+  backend/    @dsh-onto/backend — dsh bundle：onto* wire 服务（唯一后端落点，168 项测试）
   workbench/  @dsh-onto/workbench — dsh bundle：Web UI 六 tab + 右栏常驻本体图谱
   packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0、tax/1.0.0
   examples/   场景运行样例数据（aml-run.json / med-run.json / tax-run.json）
@@ -106,7 +106,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - `core/tests/`：**159 项**（`node --test tests/*.test.mjs`）——校验拦截、六类原料解析、结论不进 O3、
   强制人审、ISSUED 只读、fork、派生漂移拒绝与恢复、端到端场景字段齐全、ruleId/证据链/禁语零命中、
   经验签名（ruleShape 防假同构 + 旧版签名诚实兼容）、签发门禁（空壳/坏包拒绝）、第二域零改引擎。
-- `backend/tests/`：**167 项**（`pnpm run test`）——agent 工具契约（humanApproved、骨架先行、
+- `backend/tests/`：**168 项**（`pnpm run test`）——agent 工具契约（humanApproved、骨架先行、
   list_runs/list_drafts）、源断言（重派生 / 门禁 / 人审上墙）等。
 - 改动后验证阶梯：core/backend/workbench `pnpm run build` + `node --check` → `scripts/dump-config.ps1`
   → `scripts/dev-web.ps1` + 浏览器冒烟（侧栏五流程 + 自然语言 agent 跑批）。
@@ -138,7 +138,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - **专家子 agent 派发**：顶层注册 `expert_agent`（dsh-tool-subagent，`allowedAgentPresets`
   暴露 onto-aml/onto-tax/onto-med）——标准会话**不热切**（Host 锁定已开聊组合）即可把任务派给
   专家 preset 下的子 agent，异步完成通知带回原文；建模引导含推荐-交接口径。
-- 验证全绿：core 159/159 · backend 167/167 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
+- 验证全绿：core 159/159 · backend 168/168 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
 
 ## 许可证
 
