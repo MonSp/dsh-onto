@@ -127,6 +127,9 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
   （`ensure-expert-presets.ps1` + `expert-presets.json` + `preset-plugins.standard.yaml` 模板）——
   新会话 hero 芯片可选「反洗钱 AML / 税务 TAX / 医疗 MED 专家」，Host 应用到空白会话，
   `persona.prefix` 携带聚焦约束（模型可见），会话头部 `AgentPresetLabel` 显示当前专家。
+- **专家子 agent 派发**：顶层注册 `expert_agent`（dsh-tool-subagent，`allowedAgentPresets`
+  暴露 onto-aml/onto-tax/onto-med）——标准会话**不热切**（Host 锁定已开聊组合）即可把任务派给
+  专家 preset 下的子 agent，异步完成通知带回原文；建模引导含推荐-交接口径。
 - 验证全绿：core 158/158 · backend 167/167 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
 
 ## 许可证

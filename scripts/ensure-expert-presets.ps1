@@ -76,6 +76,23 @@ foreach ($e in $data.experts) {
         }
     }
 }
+
+# Expert delegation tool: lets the model call a child agent under a chosen expert
+# preset (dsh-tool-subagent allowedAgentPresets -> agent_preset argument). Top-level
+# so standard sessions can dispatch to experts without a preset switch (the Host
+# locks a started session's own composition).
+if ($data.expertTool) {
+    $et = $data.expertTool
+    [void]$sb.AppendLine('- insert:')
+    [void]$sb.AppendLine("  - id: $($et.id)")
+    [void]$sb.AppendLine('    name: "@deepseek-ai/dsh-tool-subagent"')
+    [void]$sb.AppendLine('    config:')
+    [void]$sb.AppendLine('      provider: spawn')
+    [void]$sb.AppendLine("      toolName: $($et.toolName)")
+    [void]$sb.AppendLine("      agentPreset: $($et.defaultPreset)")
+    [void]$sb.AppendLine('      allowedAgentPresets:')
+    foreach ($presetId in $et.presets) { [void]$sb.AppendLine("        - $presetId") }
+}
 [void]$sb.AppendLine($end)
 
 [System.IO.File]::WriteAllText($patchFile, $text.TrimEnd() + "`n" + $sb.ToString().TrimStart("`n"), $utf8)
