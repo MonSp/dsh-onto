@@ -1,7 +1,7 @@
 /**
  * dsh 原生 agent 工具面：场景执行 / 只读查询 / 知识上传。
  *
- * 约束（docs/compose/spec/tool-face-policy.md）：
+ * 约束（工具面信任边界；三策略收口见 agent-policy / agent-grants / 本模块分工）：
  * - 签发/审阅端点永不注册（规范 §12.4）；
  * - 策略裁决全部在 agent-policy（禁语/错误信封/契约断言）与 agent-grants（收权），
  *   本模块只做注册、投影与数据双通道；

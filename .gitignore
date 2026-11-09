@@ -5,3 +5,5 @@ dist/
 .setup*.log
 result.json
 .dump*.log
+# 本地方案/台账/压测笔记——不入库（历史 blob 暂不改写）
+docs/compose/

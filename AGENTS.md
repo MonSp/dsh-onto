@@ -1,7 +1,6 @@
 # AGENTS.md
 
-dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture.md](docs/architecture.md)，自包含；
-工具面信任边界与三策略收口见 [docs/compose/spec/tool-face-policy.md](docs/compose/spec/tool-face-policy.md)），
+dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture.md](docs/architecture.md)，自包含），
 以 dsh plugin bundle 形态承载：`backend/`（@dsh-onto/backend 统一后端 wire 服务）、
 `workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）。
 示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0、tax/1.0.0），场景样例在 `examples/`。
