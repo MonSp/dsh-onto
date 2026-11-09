@@ -20,6 +20,8 @@ Any domain swaps package content only — the skeleton stays the same.
 
 ## From one sentence to a self-running loop
 
+**⓪ Choose before chat, dispatch during it (preamble).** The new-session hero chip pre-selects three business experts (presets: AML / TAX / MED) — the Host applies the pick to the blank session, `persona.prefix` carries the focus constraints (model-visible), and the session header's `AgentPresetLabel` keeps the active expert in view. **A started session's composition cannot be hot-switched** (the Host locks the tool surface after the first turn): mid-conversation you either `expert_agent` the task to a child agent running under the expert preset (`agent_preset` picks it; the completion notice carries the answer back), or open a new session to change identity (optionally with a hand-over summary).
+
 **① Build phase — one sentence creates the model.** The user states intent in the main chat
 ("I want to spot credit-card cash-out; create an ontology package for that"). The agent
 de-duplicates and calls `create_package` (requires `humanApproved` — only when the user
@@ -77,7 +79,8 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 | Rule engine: exclusions (before-scoring) → weighted scoring (weights come from O2); every score points back to a rule ID | core engine |
 | Scenario execution: minimal-step pipeline dispatch + three-layer audit closure + human-review fields + run history A/B compare + audit export | `dsh-onto run` · `dsh-onto runs *` · Web · Scenarios tab |
 | **Experience loop**: run records → recall hints → human annotation (mis-transfer judged-by, structural review focus) → SkillTemplate drafts → methodology upgrades | `dsh-onto exp *` · Web · Experience tab · agent `recall_experience` · `annotate_experience` · `abstract_experience` |
-| Agent tool surface: package/skeleton/draft/review, `run_scenario` · `compare_runs` · `export_audit`, `list_runs` · `list_drafts`, `invoke_expert` | main chat (grant allowlist; issue stays human-only) |
+| **Expert identity layer**: `list_experts` with no args returns the global ontology-expert index (one card per package: package@version · domain · status · first-scenario goal · scenario/skill lists, ISSUED first); naming a package soft-focuses the session; skill-catalog descriptions carry a 【package@version · domain】 prefix; **preset selection before chat** (hero chip for three experts → Host applies → header label persists) | main chat (opening / "which ontologies exist?") / new-session hero chip |
+| Agent tool surface: package/skeleton/draft/review, `run_scenario` · `compare_runs` · `export_audit`, `list_runs` · `list_drafts`, `invoke_expert`, **`expert_agent`** (expert sub-agent dispatch; `agent_preset` picks the expert) | main chat (grant allowlist; issue stays human-only) |
 | Multi-domain by design: AML (anti-money-laundering) + MED (clinical) + TAX ship as package content only — zero engine changes | `packages/` |
 
 ## Repository layout
@@ -90,6 +93,7 @@ dsh-onto/
   packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0, tax/1.0.0
   examples/   scenario run fixtures (aml-run.json / med-run.json / tax-run.json)
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
+              ensure-expert-presets.ps1 (+ expert-presets.json, preset-plugins.standard.yaml: idempotent expert-preset block)
   docs/       architecture.md — self-contained concepts & rules (Chinese)
               overview-pipeline.{zh,en}.svg — end-to-end pipeline diagrams
 ```
@@ -175,6 +179,12 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
   (dashed = pending draft) — **not free-form drag-and-drop modeling** (explicitly out of scope).
 - Runtime verdicts are out of scope by design: the platform screens candidates and
   assembles evidence; humans decide.
+- A session's preset **cannot be hot-switched** (the Host refuses after the first turn;
+  the header label is read-only); changing expert identity = hero pick in a new session,
+  or dispatching `expert_agent`.
+- Skill isolation per preset is not done yet (our skill provider is a singleton service;
+  scoping it into preset realms hits that boundary — Phase 2); focus currently comes from
+  the persona constraints + the tool surface.
 
 ## Current progress (2026-11-09)
 

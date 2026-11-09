@@ -16,6 +16,8 @@
 
 ## 从一句话到自运转
 
+**⓪ 对话前选人、对话中派活（前置）。** 新会话 hero 芯片可预选三位业务专家（preset：反洗钱 AML / 税务 TAX / 医疗 MED）——Host 把选择应用到空白会话，`persona.prefix` 携带聚焦约束（模型可见），会话头部 `AgentPresetLabel` 常显当前专家。**已开聊的会话组合不可热切**（Host 锁定首回合后的工具面）：对话中途要用专家，要么 `expert_agent` 把任务**派给专家 preset 下的子 agent**（`agent_preset` 选人，完成通知带回原文），要么新建会话换身份（可带交接摘要）。
+
 **① 构建期——一句话创建模型。** 用户在主对话口述意图（「我想识别信用卡套现行为，帮我建个本体包」），agent 查重建包（`create_package`，必须 `humanApproved`——用户明确要求才准建），给出**骨架提案**（全量 ID 清单 + 规模预算 + 取舍理由），用户确认后 `save_skeleton` 落盘；随后按 O1→O2→O3 分片 `draft_elements` 起草——草案只入队、不写包，画布（面板 + 对话右栏常驻图谱）长出虚线节点；人在节点内嵌 ✓/✕ 或检视器逐条/批量批准，物化过 **I6 骨架门**（骨架外 ID 拒绝并把原因上墙）。最后校验 → 派生 → 加载门禁 → 提交评审 → **人工签发**：签发门禁要求 0 校验错、至少 1 张场景卡 + 1 条打分规则、派生与门禁全绿；签发/送审后同事务重派生，签完即可加载。
 
 **② 应用期——基于模型跑真实业务（这就是"使用"）。** 签发后的包是只读可复用的"应用"：agent 一句话 `run_scenario` / `invoke_expert` 跑批，Web「场景运行」贴数据执行，CLI `dsh-onto run` 直跑；每轮产出候选名单、风险分、命中规则、证据链、待核实点，恒带 `humanReviewRequired=true`——机器筛查线索与组装证据，人只在复核队列里做认定。
@@ -34,8 +36,8 @@
 | 规则引擎：排除（before-scoring）→ 打分（权重来自 O2），每分回指 ruleId | `core` 规则引擎 |
 | 场景执行：pipeline 最小步派发 + 三层审计闭合 + 人审字段 + 运行历史 A/B 对比 + 审计导出 | `dsh-onto run` / `dsh-onto runs *` / Web「场景运行」 |
 | **经验闭环**：运行留痕 → 召回提示 → 人审回填（误迁移 by、结构位复核关注）→ 抽象技能模板草案 → 方法论进化 | `dsh-onto exp *` / Web「经验」 / agent `recall_experience` · `annotate_experience` · `abstract_experience` |
-| **专家身份层**：`list_experts` 省参 = 全局业务本体专家索引（一包一卡：包@版本 · 域 · 状态 · 首场景目标 · 场景/技能清单，ISSUED 优先），点名后会话软聚焦该包；技能目录描述自带【包@版本 · 域】前缀 | 主对话（开场/问「有哪些业务本体」先列卡） |
-| Agent 工具面：建包 / 骨架 / 起草 / 人审、`run_scenario` · `compare_runs` · `export_audit`、`list_runs` · `list_drafts`、`invoke_expert`（场景 1:1 执行） | 主对话（grant 白名单，签发不开放给 agent） |
+| **专家身份层**：`list_experts` 省参 = 全局业务本体专家索引（一包一卡：包@版本 · 域 · 状态 · 首场景目标 · 场景/技能清单，ISSUED 优先），点名后会话软聚焦该包；技能目录描述自带【包@版本 · 域】前缀；**preset 对话前选择**（hero 芯片三专家 → Host 应用 → 头部标签常显） | 主对话（开场/问「有哪些业务本体」先列卡）/ 新会话 hero 芯片 |
+| Agent 工具面：建包 / 骨架 / 起草 / 人审、`run_scenario` · `compare_runs` · `export_audit`、`list_runs` · `list_drafts`、`invoke_expert`（场景 1:1 执行）、**`expert_agent`**（专家子 agent 派发，`agent_preset` 选专家） | 主对话（grant 白名单，签发不开放给 agent） |
 | 第二域零改引擎：AML（反洗钱）+ MED（医疗）+ TAX（税务）只换包内容 | `packages/` |
 
 ## 目录
@@ -48,6 +50,7 @@ dsh-onto/
   packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0、tax/1.0.0
   examples/   场景运行样例数据（aml-run.json / med-run.json / tax-run.json）
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
+              ensure-expert-presets.ps1（+ expert-presets.json、preset-plugins.standard.yaml：专家 preset 块幂等管理）
   docs/       architecture.md（自包含架构与规则）
               overview-pipeline.{zh,en}.svg（端到端链路图）
 ```
@@ -113,6 +116,8 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 - 知识库 LLM 解析默认走词面启发（确定性）；DeepSeek API 路径需 `DEEPSEEK_API_KEY`（如 `~/.dsh/.env`）。
 - 对话式建模是主入口；画布是「状态 + 人审」面（虚线 = 待审草案），**非自由拖拽建模**（非目标）。
 - 平台只做线索筛查与证据组装；认定与处置在人工（设计如此，不是待补功能）。
+- 会话 preset **不可热切**（首回合后 Host 拒绝切换，头部标签只读）；换专家身份 = 新会话 hero 选择，或 `expert_agent` 派子 agent。
+- 技能按 preset 作用域隔离未做（技能提供方为单例服务，进隔离域有单例边界，Phase 2）；当前靠 persona 约束 + 工具面聚焦。
 
 ## 当前进展（2026-11-09）
 
