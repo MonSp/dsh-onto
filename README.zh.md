@@ -123,6 +123,10 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
   红线候选并入须场景载体。
 - **专家身份层（L4）**：`list_experts` 省参出全局专家索引（一包一卡、ISSUED 优先、无场景显式回退、
   卡上带点名聚焦提示）；技能目录描述带【包@版本 · 域】前缀；建模引导写入「开场先列卡、点名即软聚焦」约定。
+- **对话级专家选择（preset 层）**：`setup-profile.ps1` 幂等生成 profile 的专家 preset 块
+  （`ensure-expert-presets.ps1` + `expert-presets.json` + `preset-plugins.standard.yaml` 模板）——
+  新会话 hero 芯片可选「反洗钱 AML / 税务 TAX / 医疗 MED 专家」，Host 应用到空白会话，
+  `persona.prefix` 携带聚焦约束（模型可见），会话头部 `AgentPresetLabel` 显示当前专家。
 - 验证全绿：core 158/158 · backend 167/167 · dump-config 2/2 · dev-web + 浏览器冒烟通过。
 
 ## 许可证
