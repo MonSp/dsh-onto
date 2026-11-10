@@ -66,7 +66,7 @@ window.__ModuleLoader__.load({
   factory(require): PluginModule {
     const React = require('react')
     const h = React.createElement
-    const { useState, useEffect, useCallback, useMemo } = React
+    const { useState, useEffect, useCallback, useMemo, useRef } = React
 
     const NS = 'dsh-onto.workbench'
     const PANEL_ID = 'dsh-onto-workbench'
@@ -256,6 +256,49 @@ window.__ModuleLoader__.load({
       rationale: '依据',
       attrCount: '属性',
       draftCount: '待审草案',
+      statusBoard: '包状态 · 门禁',
+      qualityScore: '质量分',
+      validateErrors: '校验错误',
+      deriveGate: '派生 / 门禁',
+      needReviewRuns: '需人审运行',
+      primaryModelChip: 'O1/O2/O3 · 事件报表=派生',
+      derivedView: '派生展现',
+      derivedHint: '事件与报表不进 O1/O2/O3 源模型；由运行留痕与派生物投影。手改派生物 → DERIVED_DRIFT。',
+      derivedEvents: '事件 · 运行留痕',
+      derivedReports: '报表 · 聚合投影',
+      derivedEmpty: '暂无运行留痕',
+      gateUnknown: '未检测',
+      modelLayers: '建模层',
+      searchPh: '搜索节点 / ID',
+      resetView: '复位视图',
+      edgeDetail: '关系详情',
+      edgeKind: '关系类型',
+      edgeEndpoints: '两端层级',
+      neighborHint: '已高亮邻域 · 点空白复位',
+      zoomHint: '滚轮缩放 · 拖拽平移 · 点节点看详情 · 点连线看关系',
+      clearSel: '清除选择',
+      edgeLegend: '关系图例',
+      focusScenario: '聚焦场景',
+      exitFocus: '退出聚焦',
+      play: '播放',
+      pause: '暂停',
+      prevStep: '上一步',
+      nextStep: '下一步',
+      stepOf: '步',
+      speed: '速度',
+      stepDetail: '步骤详情',
+      focusNodes: '焦点节点',
+      noPipeline: '该场景无 pipeline',
+      scenarioFocusHint: '已进入场景聚焦 · 播放步进高亮相关节点',
+      relatedCol: '相关',
+      layoutMode: '布局',
+      layoutForce: '力导',
+      layoutColumn: '分列',
+      layoutChain: '步骤链',
+      labelDensity: '标签',
+      labelMain: '主节点',
+      labelAll: '全部',
+      labelHover: '悬停',
       revision: '修订',
       graphTabTitle: '本体图谱',
       graphTabDesc: '对话旁的常驻画布：每轮起草自动长出节点',
@@ -456,6 +499,49 @@ window.__ModuleLoader__.load({
       rationale: 'Rationale',
       attrCount: 'Attributes',
       draftCount: 'Pending drafts',
+      statusBoard: 'Package status · gates',
+      qualityScore: 'Quality score',
+      validateErrors: 'Validate errors',
+      deriveGate: 'Derive / gate',
+      needReviewRuns: 'Runs needing review',
+      primaryModelChip: 'O1/O2/O3 · events derived',
+      derivedView: 'Derived view',
+      derivedHint: 'Events and reports are not primary O1/O2/O3 sources; projected from run records and derived artifacts. Hand-edit → DERIVED_DRIFT.',
+      derivedEvents: 'Events · run records',
+      derivedReports: 'Reports · aggregates',
+      derivedEmpty: 'No run records yet',
+      gateUnknown: 'Not checked',
+      modelLayers: 'Model layers',
+      searchPh: 'Search node / ID',
+      resetView: 'Reset view',
+      layoutMode: 'Layout',
+      layoutForce: 'Force',
+      layoutColumn: 'Columns',
+      layoutChain: 'Chain',
+      labelDensity: 'Labels',
+      labelMain: 'Main',
+      labelAll: 'All',
+      labelHover: 'Hover',
+      edgeDetail: 'Edge detail',
+      edgeKind: 'Edge type',
+      edgeEndpoints: 'Endpoint layers',
+      neighborHint: 'Neighbors highlighted · click empty to clear',
+      zoomHint: 'Scroll zoom · drag pan · click node/edge',
+      clearSel: 'Clear',
+      edgeLegend: 'Edge legend',
+      focusScenario: 'Focus scenario',
+      exitFocus: 'Exit focus',
+      play: 'Play',
+      pause: 'Pause',
+      prevStep: 'Prev',
+      nextStep: 'Next',
+      stepOf: 'step',
+      speed: 'Speed',
+      stepDetail: 'Step detail',
+      focusNodes: 'Focus nodes',
+      noPipeline: 'No pipeline',
+      scenarioFocusHint: 'Scenario focus · play steps to highlight',
+      relatedCol: 'Related',
       revision: 'Rev',
       graphTabTitle: 'Ontology graph',
       graphTabDesc: 'Persistent canvas beside chat: drafts grow nodes per turn',
@@ -538,7 +624,17 @@ window.__ModuleLoader__.load({
      * ═══════════════════════════════════════════════════════════════════ */
 
     const CSS = [
-      '.ow-wrap{display:flex;flex-direction:column;gap:12px;padding:16px 20px 40px;color:var(--dsw-alias-label-primary,#1c2333);font-family:var(--dsw-font-family);max-width:1080px;margin:0 auto;}',
+      /* shell：左导航 + 主区（画布模式满宽满高） */
+      '.ow-shell{display:grid;grid-template-columns:64px minmax(0,1fr);min-height:100vh;color:var(--dsw-alias-label-primary,#1c2333);font-family:var(--dsw-font-family);background:#f3f4f8;}',
+      '.ow-nav{display:flex;flex-direction:column;gap:2px;padding:10px 4px;border-right:1px solid var(--dsw-alias-line,#e5e7eb);background:#fff;position:sticky;top:0;height:100vh;overflow:auto;z-index:4;}',
+      '.ow-nav .brand{writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.14em;font-size:10px;color:#9aa3b2;margin:4px auto 8px;font-weight:700;max-height:88px;}',
+      '.ow-nav button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 2px;border-radius:10px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:10px;color:#6b7280;line-height:1.2;text-align:center;}',
+      '.ow-nav button:hover{background:#f3f4f6;color:#1c2333;}',
+      '.ow-nav button.on{background:#3b6fd4;color:#fff;border-color:transparent;font-weight:650;box-shadow:0 2px 8px rgba(59,111,212,.28);}',
+      '.ow-nav .ico{width:18px;height:18px;display:grid;place-items:center;font-size:13px;}',
+      '.ow-main{display:flex;flex-direction:column;min-width:0;min-height:0;}',
+      '.ow-main.canvas{height:100vh;overflow:hidden;padding:0;max-width:none;margin:0;gap:0;}',
+      '.ow-wrap{display:flex;flex-direction:column;gap:12px;padding:16px 20px 40px;color:var(--dsw-alias-label-primary,#1c2333);font-family:var(--dsw-font-family);max-width:1080px;margin:0 auto;width:100%;box-sizing:border-box;}',
       '.ow-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}',
       '.ow-h1{margin:0;font-size:19px;font-weight:700;}',
       '.ow-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);}',
@@ -580,6 +676,29 @@ window.__ModuleLoader__.load({
       '.ow-diff{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:8px;padding:8px 10px;background:var(--dsw-alias-fill,#f8fafc);}',
       '.ow-diff pre{margin:6px 0 0;}',
       '.ow-actions{display:flex;gap:4px;flex-wrap:wrap;}',
+
+      /* 画布工作室：层轨 | 大画布 | 检视器 */
+      '.ogc-studio{display:grid;grid-template-columns:44px minmax(0,1fr) 300px;flex:1;min-height:0;height:100vh;background:#f3f4f8;}',
+      '.ogc-lrail{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0;border-right:1px solid #e5e7eb;background:#fff;overflow:auto;}',
+      '.ogc-lrail .lb{width:36px;height:36px;border-radius:9px;border:1px solid transparent;background:transparent;cursor:pointer;display:grid;place-items:center;font-size:11px;font-weight:700;color:#6b7280;position:relative;}',
+      '.ogc-lrail .lb:hover{background:#f3f4f6;color:#1c2333;}',
+      '.ogc-lrail .lb.on{background:#3b6fd4;color:#fff;box-shadow:0 2px 6px rgba(59,111,212,.3);}',
+      '.ogc-lrail .lb .tip{position:absolute;left:42px;top:50%;transform:translateY(-50%);background:#1c2333;color:#fff;font-size:11px;padding:3px 8px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;z-index:20;}',
+      '.ogc-lrail .lb:hover .tip{opacity:1;}',
+      '.ogc-stage{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;background-color:#f6f7fb;background-image:radial-gradient(circle at 1px 1px,#d5dae5 1px,transparent 0);background-size:24px 24px;overflow:hidden;padding:12px;gap:8px;}',
+      '.ogc-stage-top{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 2px;z-index:5;}',
+      '.ogc-stage-banners{padding:0 2px;z-index:5;position:relative;}',
+      '.ogc-canvas-area{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;background:rgba(255,255,255,.88);box-shadow:0 1px 2px rgba(28,35,51,.04);}',
+      '.ogc-canvas-area .ogc-box{border:none;border-radius:0;flex:1;min-height:0;display:flex;flex-direction:column;background:transparent;}',
+      '.ogc-canvas-area .ogc-box svg{display:block;width:100%;flex:1;min-height:420px;height:100%;}',
+      '.ogc-canvas-area .ogc-legend{background:rgba(255,255,255,.96);border-top:1px solid #f0f1f4;padding:8px 14px;gap:14px;}',
+      '.ogc-board{position:absolute;top:52px;right:12px;width:168px;z-index:6;margin:0 !important;box-shadow:0 8px 24px rgba(28,35,51,.08);background:rgba(255,255,255,.96);border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px;}',
+      '.ogc-derived{position:absolute;left:14px;right:240px;bottom:16px;z-index:6;max-height:38%;overflow:auto;box-shadow:0 10px 28px rgba(28,35,51,.08);}',
+      '.ogc-side{border-left:1px solid #e5e7eb;background:#fff;display:flex;flex-direction:column;min-height:0;overflow:auto;}',
+      '.ogc-side .ogc-insp{border:none;border-radius:0;max-height:none;min-height:100%;padding:16px;gap:10px;}',
+      '.ogc-work{display:flex;flex-direction:column;flex:1;min-height:0;}',
+      '.ogc-topline{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
+      '.ogc-chip{display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;font-size:11.5px;background:var(--dsw-alias-fill,#f3f4f6);border:1px solid var(--dsw-alias-line,#e5e7eb);color:var(--dsw-alias-label-secondary,#6b7280);}',
       '.ogc-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}',
       '.ogc-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start;}',
       '.ogc-box{border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:10px;overflow:hidden;background:transparent;}',
@@ -592,16 +711,55 @@ window.__ModuleLoader__.load({
       '.ogc-kv b{color:var(--dsw-alias-label-secondary,#6b7280);font-weight:600;min-width:52px;flex-shrink:0;}',
       '.ogc-issue{border-left:3px solid #dc2626;padding:2px 8px;margin:2px 0;font-size:12px;background:#fee2e2;color:#7f1d1d;border-radius:0 6px 6px 0;word-break:break-word;}',
       '.ogc-issue.warn{border-left-color:#d97706;background:#fef3c7;color:#78350f;}',
-      '.ogc-skel{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;padding:6px 10px;border:1px dashed var(--dsw-alias-line,#d1d5db);border-radius:8px;}',
-
-      '.ogc-node{cursor:pointer;}',
-      '.ogc-right .ogc-grid{grid-template-columns:1fr;}',
-      '.ogc-right{max-width:none;}',
+      '.ogc-skel{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;padding:0; border:none; background:transparent;}',
+      '.ogc-board h4{margin:0;font-size:11px;font-weight:650;color:var(--dsw-alias-label-secondary,#6b7280);letter-spacing:.04em;}',
+      '.ogc-board .sb-row{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;gap:8px;padding:3px 0;border-bottom:1px dashed var(--dsw-alias-line,#e5e7eb);}',
+      '.ogc-board .sb-row:last-of-type{border-bottom:none;}',
+      '.ogc-board .sb-row span{color:var(--dsw-alias-label-secondary,#6b7280);}',
+      '.ogc-board .sb-row b{font-variant-numeric:tabular-nums;font-weight:650;font-size:14px;}',
+      '.ogc-board .sb-row b.ok{color:#166534;}',
+      '.ogc-board .sb-row b.warn{color:#92400e;}',
+      '.ogc-board .sb-row b.err{color:#b91c1c;}',
+      '.ogc-board-actions{display:flex;gap:6px;margin-top:8px;}',
+      '.ogc-board-actions button{flex:1;font-size:11.5px;padding:4px 0;border-radius:6px;border:1px solid var(--dsw-alias-line,#d1d5db);background:transparent;cursor:pointer;}',
+      '.ogc-board-actions button:hover{border-color:var(--dsw-alias-brand,#3b6fd4);color:var(--dsw-alias-brand,#3b6fd4);}',
+      '.ogc-derived h4{margin:0;font-size:13px;font-weight:650;}',
+      '.ogc-derived .note{margin:0 0 8px;font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);line-height:1.55;}',
+      '.ogc-derived.on{display:block;}',
+      '.ogc-derived{display:none;border:1px solid var(--dsw-alias-line,#e5e7eb);border-radius:12px;padding:12px 14px;background:rgba(255,255,255,.97);}',
+      '.ogc-node{cursor:pointer;transition:opacity .12s;}',
+      '.ogc-node .nlabel{opacity:0;transition:opacity .1s;pointer-events:none;}',
+      '.ogc-node.show-label .nlabel,.ogc-node:hover .nlabel,.ogc-node.selected .nlabel{opacity:1;}',
+      '.ogc-stage-top{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 2px;z-index:5;font-size:12px;}',
+      '.ogc-stage-top .ow-stat,.ogc-stage-top .ogc-chip{font-size:11.5px;padding:2px 8px;}',
+      '.ogc-stage-top .ow-btn,.ogc-stage-top .ow-btn.ghost{padding:4px 10px;font-size:12px;}',
+      '.ogc-focus-bar{position:absolute;left:12px;top:12px;z-index:7;display:flex;gap:8px;align-items:center;padding:6px 10px;background:rgba(255,255,255,.96);border:1px solid #c7d7f8;border-radius:10px;font-size:12px;color:#1e3a8a;box-shadow:0 4px 14px rgba(28,35,51,.08);max-width:calc(100% - 24px);}',
+      '.ogc-playbar{position:absolute;left:50%;bottom:48px;transform:translateX(-50%);z-index:7;display:flex;gap:8px;align-items:center;padding:8px 12px;background:rgba(255,255,255,.97);border:1px solid #e5e7eb;border-radius:12px;font-size:12px;box-shadow:0 8px 24px rgba(28,35,51,.1);max-width:calc(100% - 24px);flex-wrap:wrap;}',
+      '.ogc-node.dim{opacity:.18;}',
+      '.ogc-edge{cursor:pointer;transition:opacity .12s;}',
+      '.ogc-edge.dim{opacity:.1;}',
+      '.ogc-edge.hot{opacity:1;}',
+      '.ogc-edge-hit{stroke:transparent;stroke-width:12;fill:none;cursor:pointer;}',
+      '.ogc-search{display:flex;gap:6px;align-items:center;}',
+      '.ogc-search input{padding:6px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:12.5px;min-width:150px;background:#fff;color:inherit;}',
+      '.ogc-search input:focus{outline:none;border-color:#3b6fd4;box-shadow:0 0 0 3px rgba(59,111,212,.12);}',
+      '.ogc-edge-legend{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:11px;color:#6b7280;width:100%;}',
+      '.ogc-edge-legend button{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;cursor:pointer;font-size:11px;color:inherit;padding:2px 6px;border-radius:4px;}',
+      '.ogc-edge-legend button:hover,.ogc-edge-legend button.on{background:#eef2ff;color:#3b6fd4;font-weight:600;}',
+      '.ogc-edge-legend i{display:inline-block;width:14px;height:0;border-top:2px solid #a8b0c3;}',
+      '.ogc-focus-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 10px;background:#eef2ff;border:1px solid #c7d7f8;border-radius:10px;font-size:12px;color:#1e3a8a;}',
+      '.ogc-focus-bar b{font-weight:650;}',
+      '.ogc-playbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 10px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;font-size:12px;box-shadow:0 2px 8px rgba(28,35,51,.06);}',
+      '.ogc-playbar input[type=range]{flex:1;min-width:120px;accent-color:#3b6fd4;}',
+      '.ogc-playbar select{padding:3px 6px;border-radius:6px;border:1px solid #d1d5db;font-size:12px;background:#fff;}',
+      '.ogc-step-card{border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;background:#f8fafc;font-size:12px;line-height:1.5;}',
+      '.ogc-step-card .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:650;background:#eef2ff;color:#3b6fd4;margin-right:6px;}',
       '.ogc-node:hover text{text-decoration:underline;}',
       '.ogc-lbl{font-size:10px;fill:var(--dsw-alias-label-primary,#1c2333);pointer-events:none;}',
       '.ogc-edge{stroke-width:1;fill:none;opacity:.65;}',
       '.ogc-act{cursor:pointer;}',
       '.ogc-act.off{cursor:default;}',
+      '@media (max-width:1100px){.ogc-studio{grid-template-columns:48px minmax(0,1fr);}.ogc-side{display:none;}}',
       '@media (max-width:900px){.ogc-grid{grid-template-columns:1fr;}}',
     ].join('\n')
 
@@ -1252,67 +1410,72 @@ window.__ModuleLoader__.load({
           skeleton?: { confirmed: boolean; ids: string[] }
         }
 
-        const OG_W = 880
-        const OG_H = 460
-        const OG_FILL: Record<string, string> = { O1: '#eaf0f7', O2: '#fdf1e2', O3: '#e9f7ef' }
-        const OG_STROKE: Record<string, string> = { O1: '#4a6fa5', O2: '#e8933a', O3: '#3d9970' }
+        const OG_W = 1040
+        const OG_H = 720
+        /** 原型口径：白底 + 彩描边。 */
+        const OG_FILL: Record<string, string> = { O1: '#ffffff', O2: '#ffffff', O3: '#ffffff', draft: '#fafafa' }
+        const OG_STROKE: Record<string, string> = { O1: '#3b6fd4', O2: '#d97706', O3: '#16a34a', draft: '#9ca3af' }
         const OG_EDGE: Record<string, string> = {
-          relation: '#4a6fa5',
-          anchor: '#e8933a',
-          dict: '#b8a46b',
-          'skill-rule': '#e8933a',
-          'scenario-step': '#4a6fa5',
-          ref: '#9aa3b2',
-          applies: '#9aa3b2',
+          relation: '#a8b0c3',
+          anchor: '#c4b5a0',
+          dict: '#c4b5a0',
+          'skill-rule': '#c4b5a0',
+          'scenario-step': '#a8b0c3',
+          ref: '#c5cbd6',
+          applies: '#c5cbd6',
         }
 
-        /** 分层力导向：按 O1/O2/O3/草案分列初始 + 固定轮数迭代（确定性，无随机）。 */
-        function layoutGraph(graph: OgGraph): Map<string, { x: number; y: number }> {
+        type ScStepLike = { stepId: string; stepType: string; order?: string; skillRefs?: string[] }
+
+        /**
+         * 确定性力导：圆环初值 + 固定迭代（无 random），层向弱引力保 O1/O2/O3 大致分区。
+         */
+        function layoutForce(graph: OgGraph): { pos: Map<string, { x: number; y: number }>; height: number } {
+          const pos = new Map<string, { x: number; y: number }>()
           const nodes = graph.nodes
           const n = nodes.length
-          const pos = new Map<string, { x: number; y: number }>()
-          if (n === 0) return pos
-          const colX: Record<string, number> = { O1: OG_W * 0.16, O2: OG_W * 0.5, O3: OG_W * 0.8, draft: OG_W * 0.93 }
-          const buckets: Record<string, OgNode[]> = { O1: [], O2: [], O3: [], draft: [] }
-          for (const nd of nodes) buckets[nd.draft ? 'draft' : nd.layer].push(nd)
-          for (const key of Object.keys(buckets)) {
-            const arr = buckets[key]
-            const spread = (OG_H - 72) / Math.max(arr.length, 1)
+          if (n === 0) return { pos, height: OG_H }
+          const cx = OG_W / 2
+          const cy = OG_H / 2
+          const R = Math.min(OG_W, OG_H) * 0.32
+          const byLayer: Record<string, OgNode[]> = { O1: [], O2: [], O3: [], draft: [] }
+          for (const nd of nodes) {
+            const k = nd.draft ? 'draft' : nd.layer
+            byLayer[k].push(nd)
+          }
+          const layerAngle: Record<string, [number, number]> = {
+            O1: [Math.PI * 0.7, Math.PI * 1.3],
+            O2: [Math.PI * 1.4, Math.PI * 1.9],
+            O3: [Math.PI * 0.1, Math.PI * 0.55],
+            draft: [Math.PI * 0.55, Math.PI * 0.7],
+          }
+          for (const layer of ['O1', 'O2', 'O3', 'draft']) {
+            const arr = byLayer[layer]
+            if (!arr.length) continue
+            const [a0, a1] = layerAngle[layer]
             arr.forEach((nd, i) => {
-              pos.set(nd.id, { x: colX[key], y: 36 + spread * (i + 0.5) })
+              const t0 = arr.length === 1 ? 0.5 : i / (arr.length - 1)
+              const ang = a0 + (a1 - a0) * t0
+              const rr = R * (0.75 + 0.35 * ((i * 7) % 5) / 5)
+              pos.set(nd.id, { x: cx + Math.cos(ang) * rr, y: cy + Math.sin(ang) * rr })
             })
           }
-          if (n > 420) return pos // 大图退化为分列布局（斥力 O(n²) 设上限）
-          const K = 4200
-          const REST = 96
-          for (let tick = 0; tick < 130; tick++) {
+          const K = 3800
+          const REST = 100
+          const TICKS = 140
+          const layerX: Record<string, number> = {
+            O1: OG_W * 0.18,
+            O2: OG_W * 0.5,
+            O3: OG_W * 0.8,
+            draft: OG_W * 0.92,
+          }
+          for (let tick = 0; tick < TICKS; tick++) {
             const fx = new Map<string, { x: number; y: number }>()
             const add = (id: string, dx: number, dy: number): void => {
               const cur = fx.get(id) ?? { x: 0, y: 0 }
               cur.x += dx
               cur.y += dy
               fx.set(id, cur)
-            }
-            for (let i = 0; i < n; i++) {
-              for (let j = i + 1; j < n; j++) {
-                const a = nodes[i]
-                const b = nodes[j]
-                const pa = pos.get(a.id)
-                const pb = pos.get(b.id)
-                if (!pa || !pb) continue
-                let dx = pa.x - pb.x
-                let dy = pa.y - pb.y
-                let d2 = dx * dx + dy * dy
-                if (d2 < 1) {
-                  dx = (i % 7) - 3 || 1
-                  dy = (j % 5) - 2 || 1
-                  d2 = dx * dx + dy * dy
-                }
-                const d = Math.sqrt(d2)
-                const f = K / d2
-                add(a.id, (dx / d) * f, (dy / d) * f)
-                add(b.id, (-dx / d) * f, (-dy / d) * f)
-              }
             }
             for (const e of graph.edges) {
               const pa = pos.get(e.from)
@@ -1321,159 +1484,573 @@ window.__ModuleLoader__.load({
               const dx = pb.x - pa.x
               const dy = pb.y - pa.y
               const d = Math.sqrt(dx * dx + dy * dy) || 1
-              const f = (d - REST) * 0.04
+              const f = (d - REST) * 0.035
               add(e.from, (dx / d) * f, (dy / d) * f)
               add(e.to, (-dx / d) * f, (-dy / d) * f)
+            }
+            if (n <= 280) {
+              for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                  const a = nodes[i]
+                  const b = nodes[j]
+                  const pa = pos.get(a.id)
+                  const pb = pos.get(b.id)
+                  if (!pa || !pb) continue
+                  let dx = pb.x - pa.x
+                  let dy = pb.y - pa.y
+                  let d2 = dx * dx + dy * dy
+                  if (d2 < 1) {
+                    dx = (i - j) * 0.5
+                    dy = (j - i) * 0.3
+                    d2 = dx * dx + dy * dy + 1
+                  }
+                  const d = Math.sqrt(d2)
+                  const f = Math.min(28, K / d2)
+                  add(a.id, (-dx / d) * f, (-dy / d) * f)
+                  add(b.id, (dx / d) * f, (dy / d) * f)
+                }
+              }
             }
             for (const nd of nodes) {
               const p = pos.get(nd.id)
               if (!p) continue
-              const tx = colX[nd.draft ? 'draft' : nd.layer]
-              add(nd.id, (tx - p.x) * 0.045, (OG_H / 2 - p.y) * 0.012)
+              add(nd.id, (cx - p.x) * 0.012, (cy - p.y) * 0.012)
+              const lx = layerX[nd.draft ? 'draft' : nd.layer]
+              if (lx !== undefined) add(nd.id, (lx - p.x) * 0.02, 0)
             }
             for (const nd of nodes) {
               const d = fx.get(nd.id)
               const p = pos.get(nd.id)
               if (!d || !p) continue
               const mag = Math.sqrt(d.x * d.x + d.y * d.y) || 1
-              const lim = Math.max(13 - tick * 0.08, 1.5)
-              const step = Math.min(mag, lim) * 0.6
+              const lim = Math.max(11 - tick * 0.06, 1.2)
+              const step = Math.min(mag, lim) * 0.55
               p.x += (d.x / mag) * step
               p.y += (d.y / mag) * step
-              p.x = Math.max(52, Math.min(OG_W - 52, p.x))
-              // 底边留 34px：草案节点下方内嵌 ✓/✕（E3-1）不被 viewBox 裁掉
-              p.y = Math.max(24, Math.min(OG_H - 34, p.y))
+              p.x = Math.max(56, Math.min(OG_W - 56, p.x))
+              p.y = Math.max(40, Math.min(OG_H - 48, p.y))
             }
           }
-          return pos
+          return { pos, height: OG_H }
+        }
+
+        /**
+         * 场景步骤链布局（对齐 OBM 聚焦）：pipeline 横向分列，列内竖排。
+         * 未归类节点挂在最右「相关」列。
+         */
+        function layoutScenarioChain(
+          nodes: OgNode[],
+          pipeline: ScStepLike[],
+          scenarioId: string,
+        ): { pos: Map<string, { x: number; y: number }>; height: number; cols: Array<{ x: number; label: string; stepId: string }> } {
+          const pos = new Map<string, { x: number; y: number }>()
+          const cols: Array<{ x: number; label: string; stepId: string }> = []
+          if (nodes.length === 0) return { pos, height: OG_H, cols }
+
+          const nSteps = Math.max(pipeline.length, 1)
+          const marginX = 70
+          const usable = OG_W - marginX * 2
+          const colW = usable / nSteps
+
+          // 每步归属 ID 集
+          const stepIds: Set<string>[] = pipeline.map(() => new Set<string>())
+          const assign = (stepIdx: number, ids: Iterable<string>): void => {
+            if (stepIdx < 0 || stepIdx >= stepIds.length) return
+            for (const id of ids) stepIds[stepIdx].add(id)
+          }
+
+          const kindIds = (kind: string): string[] => nodes.filter((n) => n.kind === kind).map((n) => n.id)
+
+          pipeline.forEach((step, i) => {
+            if (step.stepType === 'SKILL_RUN') assign(i, step.skillRefs ?? [])
+            else if (step.stepType === 'BEHAVIOR_CALL') assign(i, kindIds('behavior'))
+            else if (step.stepType === 'RULE_EVALUATE') {
+              if (step.order === 'before-scoring') assign(i, kindIds('exclusionRule'))
+              else assign(i, kindIds('scoreRule'))
+            } else if (step.stepType === 'DATA_INGEST') {
+              assign(i, [scenarioId, ...kindIds('object').slice(0, 0)]) // 场景 + 可后续扩对象
+            } else if (step.stepType === 'AUDIT_CHECK' || step.stepType === 'HUMAN_REVIEW') {
+              assign(i, [scenarioId])
+            } else if (step.stepType === 'SKILL_RUN') {
+              assign(i, step.skillRefs ?? [])
+            }
+          })
+          // 场景本体：挂到第一步，避免重复
+          if (stepIds.length > 0) stepIds[0].add(scenarioId)
+
+          // 未分配 → 「相关」虚拟列
+          const assigned = new Set<string>()
+          for (const s of stepIds) for (const id of s) assigned.add(id)
+          const related = nodes.filter((n) => !assigned.has(n.id)).map((n) => n.id)
+
+          const totalCols = nSteps + (related.length ? 1 : 0)
+          const colW2 = (OG_W - marginX * 2) / Math.max(totalCols, 1)
+
+          pipeline.forEach((step, i) => {
+            cols.push({
+              x: marginX + colW2 * i + colW2 / 2,
+              label: step.stepType.replace(/_/g, ' '),
+              stepId: step.stepId,
+            })
+          })
+          if (related.length) {
+            cols.push({
+              x: marginX + colW2 * nSteps + colW2 / 2,
+              label: 'RELATED',
+              stepId: '…',
+            })
+          }
+
+          const NODE_H = 36
+          const MIN_GAP = 48
+          const top = 72
+          const buckets: OgNode[][] = pipeline.map((_, i) =>
+            nodes.filter((n) => stepIds[i]?.has(n.id)),
+          )
+          // 场景可能在多个步——只放第一步
+          const seen = new Set<string>()
+          buckets.forEach((arr, i) => {
+            buckets[i] = arr.filter((n) => {
+              if (seen.has(n.id)) return false
+              seen.add(n.id)
+              return true
+            })
+          })
+          if (related.length) buckets.push(nodes.filter((n) => related.includes(n.id)))
+
+          const maxN = Math.max(1, ...buckets.map((a) => a.length))
+          const height = Math.max(OG_H, top + (maxN - 1) * MIN_GAP + NODE_H + 72)
+          const bottom = height - 72
+
+          buckets.forEach((arr, ci) => {
+            if (!arr.length) return
+            const x = marginX + colW2 * ci + colW2 / 2
+            if (arr.length === 1) {
+              pos.set(arr[0].id, { x, y: (top + bottom) / 2 })
+              return
+            }
+            const span = bottom - top
+            const step = Math.max(MIN_GAP, span / (arr.length - 1))
+            arr.forEach((nd, i) => pos.set(nd.id, { x, y: top + step * i }))
+          })
+
+          let maxY = 0
+          for (const pt of pos.values()) maxY = Math.max(maxY, pt.y)
+          return { pos, height: Math.max(height, maxY + 72), cols }
+        }
+
+        /** 列对齐布局：保证最小竖距，节点多时自动拉高 viewBox，杜绝叠字。 */
+        type LayoutMode = 'force' | 'column' | 'scenario-chain'
+        function layoutGraph(
+          graph: OgGraph,
+          opts?: { mode?: LayoutMode; pipeline?: ScStepLike[]; scenarioId?: string },
+        ): { pos: Map<string, { x: number; y: number }>; height: number; cols?: Array<{ x: number; label: string; stepId: string }> } {
+          if (opts?.mode === 'scenario-chain' && opts.pipeline && opts.scenarioId) {
+            return layoutScenarioChain(graph.nodes, opts.pipeline, opts.scenarioId)
+          }
+          if (opts?.mode === 'force') {
+            return layoutForce(graph)
+          }
+          const pos = new Map<string, { x: number; y: number }>()
+          const nodes = graph.nodes
+          if (nodes.length === 0) return { pos, height: OG_H }
+          const colX: Record<string, number> = {
+            O1: OG_W * 0.14,
+            O2: OG_W * 0.44,
+            O3: OG_W * 0.72,
+            draft: OG_W * 0.9,
+          }
+          const buckets: Record<string, OgNode[]> = { O1: [], O2: [], O3: [], draft: [] }
+          for (const nd of nodes) buckets[nd.draft ? 'draft' : nd.layer].push(nd)
+          for (const key of Object.keys(buckets)) {
+            buckets[key].sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+          }
+          const NODE_H = 36
+          const MIN_GAP = 48
+          const top = 56
+          const maxN = Math.max(...Object.values(buckets).map((a) => a.length), 1)
+          const contentH = top + (maxN - 1) * MIN_GAP + NODE_H + 72
+          const height = Math.max(OG_H, contentH)
+          const bottom = height - 72
+          for (const key of Object.keys(buckets)) {
+            const arr = buckets[key]
+            if (arr.length === 0) continue
+            if (arr.length === 1) {
+              pos.set(arr[0].id, { x: colX[key], y: (top + bottom) / 2 })
+              continue
+            }
+            const span = bottom - top
+            const step = Math.max(MIN_GAP, span / (arr.length - 1))
+            arr.forEach((nd, i) => {
+              pos.set(nd.id, { x: colX[key], y: top + step * i })
+            })
+          }
+          let maxY = 0
+          for (const pt of pos.values()) maxY = Math.max(maxY, pt.y)
+          const finalH = Math.max(height, maxY + 72)
+          return { pos, height: finalH }
+        }
+
+        function edgePath(a: { x: number; y: number }, b: { x: number; y: number }): string {
+          const mx = (a.x + b.x) / 2
+          const my = (a.y + b.y) / 2
+          const dx = b.x - a.x
+          const dy = b.y - a.y
+          const len = Math.sqrt(dx * dx + dy * dy) || 1
+          const nx = -dy / len
+          const ny = dx / len
+          const bulge = Math.min(40, len * 0.1)
+          return `M ${a.x} ${a.y} Q ${mx + nx * bulge} ${my + ny * bulge} ${b.x} ${b.y}`
+        }
+
+        function nodeWidth(name: string): number {
+          const units = [...name].reduce((s, ch) => s + (ch.charCodeAt(0) > 255 ? 12 : 7), 0)
+          return Math.max(88, Math.min(168, units + 28))
         }
 
         function GraphCanvas(props: {
           t: (k: string) => string
           graph: OgGraph
           selected: string | null
-          onSelect: (id: string) => void
-          /** E3-1：草案节点内嵌人审动作（批准/驳回），免进检视器。 */
+          selectedEdge: OgEdge | null
+          onSelect: (id: string | null) => void
+          onSelectEdge: (e: OgEdge | null) => void
           onDraftAction?: (id: string, action: 'approve' | 'reject') => void
-          /** 批处理中/ISSUED 只读：内嵌按钮置灰。 */
           actionOff?: boolean
+          focusId?: string | null
+          onViewportResetKey?: number
+          /** 场景聚焦：只亮焦点集；播放时再亮当前步。 */
+          focusSet?: Set<string> | null
+          playSet?: Set<string> | null
+          layoutMode?: 'force' | 'column' | 'scenario-chain'
+          pipeline?: ScStepLike[]
+          scenarioId?: string
+          labelMode?: 'main' | 'all' | 'hover'
         }) {
-          const { t, graph, selected, onSelect, onDraftAction, actionOff } = props
-          const pos = useMemo(() => layoutGraph(graph), [graph])
+          const {
+            t, graph, selected, selectedEdge, onSelect, onSelectEdge,
+            onDraftAction, actionOff, focusId, onViewportResetKey = 0,
+            focusSet, playSet, layoutMode = 'force', pipeline, scenarioId,
+            labelMode = 'main',
+          } = props
+          const { pos, height: vbH, cols } = useMemo(
+            () =>
+              layoutGraph(graph, {
+                mode: layoutMode,
+                ...(pipeline ? { pipeline } : {}),
+                ...(scenarioId ? { scenarioId } : {}),
+              }),
+            [graph, layoutMode, pipeline, scenarioId],
+          )
+          const NODE_H = 36
+          const [view, setView] = useState({ k: 1, x: 0, y: 0 })
+          const dragRef = useRef<{ x: number; y: number; vx: number; vy: number; id: number; el: Element; active: boolean } | null>(null)
+
+          useEffect(() => {
+            setView({ k: 1, x: 0, y: 0 })
+          }, [onViewportResetKey, graph.revision])
+
+          const neighbor = useMemo(() => {
+            // 场景聚焦优先：焦点集内再按播放步收窄
+            if (focusSet) {
+              if (playSet) {
+                const s = new Set<string>()
+                for (const id of playSet) if (focusSet.has(id)) s.add(id)
+                // 播放时始终保留场景本体可见
+                for (const id of focusSet) {
+                  if (id.startsWith('SCN-')) s.add(id)
+                }
+                return s.size > 0 ? s : focusSet
+              }
+              return focusSet
+            }
+            const set = new Set<string>()
+            if (!selected) return set
+            set.add(selected)
+            for (const e of graph.edges) {
+              if (e.from === selected) set.add(e.to)
+              if (e.to === selected) set.add(e.from)
+            }
+            return set
+          }, [selected, graph.edges, focusSet, playSet])
+
+          const degree = useMemo(() => {
+            const m = new Map<string, number>()
+            for (const e of graph.edges) {
+              m.set(e.from, (m.get(e.from) ?? 0) + 1)
+              m.set(e.to, (m.get(e.to) ?? 0) + 1)
+            }
+            return m
+          }, [graph.edges])
+          /** 主节点标签阈值：度数排序约前 28（对齐 OBM labelCut）。 */
+          const labelCut = useMemo(() => {
+            const degs = graph.nodes.map((n) => degree.get(n.id) ?? 0).sort((a, b) => b - a)
+            if (!degs.length) return 1
+            // 比 OBM 更收敛：默认只标约前 12 个枢纽，避免整屏文字
+            return degs[Math.min(11, degs.length - 1)]
+          }, [graph.nodes, degree])
+
+          useEffect(() => {
+            if (!focusId) return
+            const id = focusId.split('#')[0]
+            const p = pos.get(id)
+            if (!p) return
+            const k = view.k || 1
+            setView({ k, x: (OG_W / 2 - p.x) * k, y: (vbH / 2 - p.y) * k })
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+          }, [focusId])
+
+          const onWheel = (e: { preventDefault: () => void; deltaY: number; clientX: number; clientY: number; currentTarget: Element }): void => {
+            e.preventDefault()
+            const rect = e.currentTarget.getBoundingClientRect()
+            const mx = ((e.clientX - rect.left) / rect.width) * OG_W
+            const my = ((e.clientY - rect.top) / rect.height) * vbH
+            setView((v) => {
+              const factor = e.deltaY > 0 ? 0.9 : 1.1
+              const k = Math.min(3.5, Math.max(0.35, v.k * factor))
+              const x = mx - ((mx - v.x) / v.k) * k
+              const y = my - ((my - v.y) / v.k) * k
+              return { k, x, y }
+            })
+          }
+
+          // 拖拽：仅在移动超过阈值后捕获，避免吞掉节点/边的 click
+          const onPointerDown = (e: { button: number; clientX: number; clientY: number; pointerId: number; currentTarget: Element }): void => {
+            if (e.button !== 0) return
+            dragRef.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, id: e.pointerId, el: e.currentTarget, active: false }
+          }
+          const onPointerMove = (e: { clientX: number; clientY: number; currentTarget: Element }): void => {
+            const d = dragRef.current
+            if (!d) return
+            const dx = e.clientX - d.x
+            const dy = e.clientY - d.y
+            if (!d.active) {
+              if (Math.abs(dx) + Math.abs(dy) < 5) return
+              d.active = true
+              try {
+                ;(d.el as Element & { setPointerCapture: (n: number) => void }).setPointerCapture?.(d.id)
+              } catch { /* ignore */ }
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            const scaleX = rect ? OG_W / rect.width : 1
+            const scaleY = rect ? vbH / rect.height : 1
+            setView((v) => ({ ...v, x: d.vx + dx * scaleX, y: d.vy + dy * scaleY }))
+          }
+          const onPointerUp = (): void => {
+            dragRef.current = null
+          }
+
+          const hitKind = selectedEdge?.kind ?? null
+
           return h(
-            'svg',
-            { viewBox: `0 0 ${OG_W} ${OG_H}`, role: 'img', 'aria-label': 'ontology graph' },
+            'div',
+            {
+              style: { flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' },
+              onWheel,
+            },
             h(
-              'defs',
-              null,
+              'svg',
+              {
+                viewBox: `0 0 ${OG_W} ${vbH}`,
+                role: 'img',
+                'aria-label': 'ontology graph',
+                preserveAspectRatio: 'xMidYMid meet',
+                style: { width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: 'grab' },
+                onPointerDown,
+                onPointerMove,
+                onPointerUp,
+                onPointerLeave: onPointerUp,
+                onClick: (e: { target: EventTarget }) => {
+                  const el = e.target as Element
+                  if (el.tagName === 'svg') {
+                    onSelect(null)
+                    onSelectEdge(null)
+                  }
+                },
+              },
               h(
-                'marker',
-                { id: 'ogc-ar', viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' },
-                h('path', { d: 'M1,1 L6,4 L1,7', fill: 'none', stroke: '#9aa3b2', strokeWidth: 1.2 }),
+                'g',
+                { transform: `translate(${view.x},${view.y}) scale(${view.k})` },
+                h(
+                  'defs',
+                  null,
+                  h(
+                    'marker',
+                    { id: 'ogc-ar', viewBox: '0 0 8 8', refX: 7, refY: 3.5, markerWidth: 6, markerHeight: 6, orient: 'auto' },
+                    h('path', { d: 'M1,1 L6,3.5 L1,6', fill: 'none', stroke: '#b0b7c3', strokeWidth: 1.1, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+                  ),
+                ),
+                // 列头由画布上方 HTML 条渲染（更清晰）
+                ...graph.edges.map((e, i) => {
+                  const a = pos.get(e.from)
+                  const b = pos.get(e.to)
+                  if (!a || !b) return null
+                  const on = selected === e.from || selected === e.to
+                  const hot = !!(selectedEdge && selectedEdge.from === e.from && selectedEdge.to === e.to && selectedEdge.kind === e.kind)
+const dimE = (!!focusSet || !!selected) && !on
+                  const d = edgePath(a, b)
+                  return h(
+                    'g',
+                    { key: `eg-${i}` },
+                    h('path', {
+                      className: `ogc-edge${dimE ? ' dim' : ''}${hot ? ' hot' : ''}`,
+                      d,
+                      fill: 'none',
+                      stroke: OG_EDGE[e.kind] ?? '#c5cbd6',
+                      strokeWidth: hot || (playSet && (playSet.has(e.from) || playSet.has(e.to))) ? 2.4 : 1.15,
+                      opacity: hitKind && e.kind !== hitKind && !hot ? 0.12 : dimE ? 0.12 : 0.75,
+                      markerEnd: 'url(#ogc-ar)',
+                      style: { pointerEvents: 'none' },
+                    }),
+                    h('path', {
+                      className: 'ogc-edge-hit',
+                      d,
+                      onClick: (ev: { stopPropagation: () => void }) => {
+                        ev.stopPropagation()
+                        onSelect(null)
+                        onSelectEdge(e)
+                      },
+                    }),
+                    h('title', null, `${e.kind}: ${e.from} → ${e.to}`),
+                  )
+                }),
+                ...graph.nodes.map((nd) => {
+                  const p = pos.get(nd.id)
+                  if (!p) return null
+                  const short = nd.name.length > 8 ? `${nd.name.slice(0, 7)}…` : nd.name
+                  const stroke =
+                    nd.runHit || nd.issueLevel === 'error'
+                      ? '#dc2626'
+                      : nd.issueLevel === 'warn'
+                        ? '#d97706'
+                        : OG_STROKE[nd.draft ? 'draft' : nd.layer] ?? '#9aa3b2'
+                  const fillC =
+                    nd.draft ? '#fafafa'
+                    : nd.layer === 'O1' ? '#eaf0fb'
+                    : nd.layer === 'O2' ? '#fdf3e4'
+                    : '#e8f7ef'
+                  const isSel = selected === nd.id || !!(playSet && playSet.has(nd.id))
+                  const dimFinal = (!!focusSet || !!selected) && !neighbor.has(nd.id)
+                  const deg = degree.get(nd.id) ?? 0
+                  // OBM 标签密度：main=高阶+焦点；all=全显；hover=仅悬停/CSS
+                  const showLabel =
+                    labelMode === 'all' ||
+                    isSel ||
+                    (focusSet ? neighbor.has(nd.id) && (playSet ? playSet.has(nd.id) || nd.id.startsWith('SCN-') : true) : false) ||
+                    (labelMode === 'main' && deg >= labelCut)
+                  const R = 13
+                  return h(
+                    'g',
+                    {
+                      key: nd.id,
+                      className: `ogc-node${dimFinal ? ' dim' : ''}${isSel ? ' selected' : ''}${showLabel ? ' show-label' : ''}`,
+                      transform: `translate(${p.x},${p.y})`,
+                      onClick: (ev: { stopPropagation: () => void }) => {
+                        ev.stopPropagation()
+                        onSelectEdge(null)
+                        onSelect(nd.id)
+                      },
+                    },
+                    h('title', null, `${nd.name}\n${nd.id}\n${nd.layer} · 度数 ${deg}${nd.draft ? ' · 草案' : ''}`),
+                    h('circle', {
+                      r: R,
+                      fill: fillC,
+                      stroke,
+                      strokeWidth: isSel ? 2.6 : 1.5,
+                      strokeDasharray: nd.draft ? '3 2' : undefined,
+                      filter: isSel ? 'drop-shadow(0 2px 6px rgba(59,111,212,.3))' : undefined,
+                    }),
+                    // 度数指示：中心小点
+                    h('circle', {
+                      r: deg >= labelCut ? 3.5 : 2.2,
+                      fill: stroke,
+                      opacity: 0.85,
+                      style: { pointerEvents: 'none' },
+                    }),
+                    h(
+                      'text',
+                      {
+                        className: 'nlabel',
+                        x: R + 6,
+                        y: 1,
+                        textAnchor: 'start',
+                        dominantBaseline: 'central',
+                        style: {
+                          fontSize: '11px',
+                          fontWeight: isSel ? 700 : 500,
+                          fill: dimFinal ? '#9ca3af' : '#1c2333',
+                          paintOrder: 'stroke',
+                          stroke: '#ffffff',
+                          strokeWidth: 3,
+                          strokeLinejoin: 'round',
+                        },
+                      },
+                      short,
+                    ),
+                  )
+                }),
+                ...graph.nodes.filter((nd) => nd.draft).map((nd) => {
+                  const p = pos.get(nd.id)
+                  if (!p) return null
+                  const actOff = actionOff === true || !onDraftAction
+                  const bw = 22
+                  const bh = 18
+                  const gap = 6
+                  const bx = -(bw + gap)
+                  const actBtn = (dx: number, ch: string, action: 'approve' | 'reject', fill: string, fg: string, tip: string): ReactNode =>
+                    h(
+                      'g',
+                      {
+                        key: action,
+                        className: actOff ? 'ogc-act off' : 'ogc-act',
+                        transform: `translate(${bx + dx},${NODE_H + 6})`,
+                        onClick: actOff
+                          ? undefined
+                          : (e: { stopPropagation: () => void }) => {
+                              e.stopPropagation()
+                              onDraftAction?.(nd.id, action)
+                            },
+                      },
+                      h('title', null, tip),
+                      h('rect', { width: bw, height: bh, rx: 6, fill, stroke: fg, strokeWidth: 1.2, opacity: actOff ? 0.45 : 1 }),
+                      h('text', {
+                        x: bw / 2, y: bh / 2, textAnchor: 'middle', dominantBaseline: 'central',
+                        style: { fontSize: '12px', fontWeight: 700, fill: fg, pointerEvents: 'none' },
+                      }, ch),
+                    )
+                  return h(
+                    'g',
+                    { key: `act-${nd.id}`, className: 'ogc-node-acts', transform: `translate(${p.x},${p.y + 16})` },
+                    actBtn(0, '✓', 'approve', '#ecfdf5', '#16a34a', t('approveMat')),
+                    actBtn(bw + gap, '✕', 'reject', '#fef2f2', '#dc2626', t('reject')),
+                  )
+                }),
               ),
             ),
-            ...graph.edges.map((e, i) => {
-              const a = pos.get(e.from)
-              const b = pos.get(e.to)
-              if (!a || !b) return null
-              return h('line', {
-                key: `e${i}`,
-                className: 'ogc-edge',
-                x1: a.x,
-                y1: a.y,
-                x2: b.x,
-                y2: b.y,
-                stroke: OG_EDGE[e.kind] ?? '#9aa3b2',
-                markerEnd: 'url(#ogc-ar)',
-              })
-            }),
-            ...graph.nodes.map((nd) => {
-              const p = pos.get(nd.id)
-              if (!p) return null
-              const label = nd.name.length > 12 ? `${nd.name.slice(0, 11)}…` : nd.name
-              const w = Math.max(56, Math.min(140, 30 + label.length * 11))
-              const stroke = nd.runHit
-                ? '#dc2626'
-                : nd.issueLevel === 'error'
-                  ? '#dc2626'
-                  : nd.issueLevel === 'warn'
-                    ? '#d97706'
-                    : OG_STROKE[nd.layer] ?? '#9aa3b2'
-              const isSel = selected === nd.id
-              return h(
-                'g',
-                {
-                  key: nd.id,
-                  className: 'ogc-node',
-                  transform: `translate(${p.x - w / 2},${p.y - 14})`,
-                  onClick: () => onSelect(nd.id),
+            h(
+              'div',
+              {
+                style: {
+                  position: 'absolute', left: 12, bottom: 44, fontSize: 11, color: '#6b7280',
+                  background: 'rgba(255,255,255,.92)', border: '1px solid #e5e7eb', borderRadius: 8,
+                  padding: '4px 8px', pointerEvents: 'none',
                 },
-                h('title', null, `${nd.id}${nd.draft ? '（草案）' : ''}${nd.runHit ? '（运行命中）' : ''}`),
-                h('rect', {
-                  width: w,
-                  height: 28,
-                  rx: 7,
-                  fill: OG_FILL[nd.layer] ?? '#f3f4f6',
-                  fillOpacity: nd.draft ? 0.5 : 1,
-                  stroke,
-                  strokeWidth: isSel ? 2.4 : 1.4,
-                  strokeDasharray: nd.draft ? '5 3' : undefined,
-                }),
-                h('text', { className: 'ogc-lbl', x: w / 2, y: 18, textAnchor: 'middle' }, label),
-              )
-            }),
-            // P3a（实测）：人审按钮二遍绘制——先画完所有节点体，✓/✕ 再统一盖上去。
-            // 若留在节点组内，纵向相邻节点的 rect 后绘制会截走下方按钮的 pointer 事件（点不到）。
-            ...graph.nodes.filter((nd) => nd.draft).map((nd) => {
-              const p = pos.get(nd.id)
-              if (!p) return null
-              const label = nd.name.length > 12 ? `${nd.name.slice(0, 11)}…` : nd.name
-              const w = Math.max(56, Math.min(140, 30 + label.length * 11))
-              const actOff = actionOff === true || !onDraftAction
-              const bw = 18
-              const gap = 4
-              const bx = (w - (bw * 2 + gap)) / 2
-              const actBtn = (dx: number, ch: string, action: 'approve' | 'reject', fill: string, fg: string, tip: string): ReactNode =>
-                h(
-                  'g',
+              },
+              `${Math.round(view.k * 100)}%`,
+            ),
+            selected || selectedEdge
+              ? h(
+                  'div',
                   {
-                    key: action,
-                    className: actOff ? 'ogc-act off' : 'ogc-act',
-                    transform: `translate(${bx + dx},32)`,
-                    onClick: actOff
-                      ? undefined
-                      : (e: { stopPropagation: () => void }) => {
-                          e.stopPropagation()
-                          onDraftAction?.(nd.id, action)
-                        },
+                    style: {
+                      position: 'absolute', left: 12, top: 12, fontSize: 11, color: '#3b6fd4',
+                      background: '#eef2ff', border: '1px solid #c7d7f8', borderRadius: 8,
+                      padding: '4px 8px', pointerEvents: 'none',
+                    },
                   },
-                  h('title', null, tip),
-                  h('rect', {
-                    width: bw,
-                    height: 14,
-                    rx: 4,
-                    fill,
-                    stroke: fg,
-                    strokeWidth: 1,
-                    opacity: actOff ? 0.45 : 1,
-                  }),
-                  h(
-                    'text',
-                    { x: bw / 2, y: 10.5, textAnchor: 'middle', style: { fontSize: '10px', fill: fg, pointerEvents: 'none' } },
-                    ch,
-                  ),
+                  t('neighborHint'),
                 )
-              return h(
-                'g',
-                {
-                  key: `act-${nd.id}`,
-                  className: 'ogc-node-acts',
-                  transform: `translate(${p.x - w / 2},${p.y - 14})`,
-                },
-                actBtn(0, '✓', 'approve', '#e9f7ef', '#3d9970', t('approveMat')),
-                actBtn(bw + gap, '✕', 'reject', '#fee2e2', '#dc2626', t('reject')),
-              )
-            }),
+              : null,
           )
         }
 
@@ -1512,15 +2089,68 @@ window.__ModuleLoader__.load({
           t: (k: string) => string
           graph: OgGraph
           node: OgNode | null
+          edge: OgEdge | null
           pkg: Record<string, unknown> | null
           candidates: Array<Record<string, unknown>>
           busy: string
           readOnly: boolean
           onDraftAction: (id: string, action: 'approve' | 'reject') => void
+          onClear?: () => void
+          stepDetail?: { stepId: string; stepType: string; order?: string; label?: string; refs: string[] } | null
         }) {
-          const { t, graph, node, pkg, candidates, busy, readOnly, onDraftAction } = props
+          const { t, graph, node, edge, pkg, candidates, busy, readOnly, onDraftAction, onClear, stepDetail } = props
+          if (!node && !edge && props.stepDetail) {
+            const sd = props.stepDetail
+            return h(
+              'div',
+              { className: 'ogc-insp' },
+              h('div', { className: 'ow-row' },
+                h(Tag, { text: t('stepDetail'), tone: 'warn' }),
+                h(Tag, { text: sd.stepType })),
+              h('h4', null, `${sd.stepId} · ${sd.stepType}`),
+              h('div', { className: 'ogc-step-card' },
+                h('div', null, h('span', { className: 'tag' }, sd.stepType),
+                  sd.order ? h('span', { className: 'tag' }, sd.order) : null),
+                sd.label ? h('div', { style: { marginTop: 6 } }, sd.label) : null,
+                sd.refs && sd.refs.length
+                  ? h('div', { style: { marginTop: 6 } },
+                      h('b', null, 'Refs: '),
+                      sd.refs.join(', '))
+                  : null,
+              ),
+              h('p', { className: 'ow-note' }, t('scenarioFocusHint')),
+            )
+          }
+          if (!node && edge) {
+            const kv = (label: string, value: unknown): ReactNode =>
+              h('div', { className: 'ogc-kv' }, h('b', null, label), h('span', null, String(value ?? '—')))
+            const nameOf = (id: string): string => graph.nodes.find((n) => n.id === id)?.name ?? id
+            const fromNode = graph.nodes.find((n) => n.id === edge.from)
+            const toNode = graph.nodes.find((n) => n.id === edge.to)
+            return h(
+              'div',
+              { className: 'ogc-insp' },
+              h('div', { className: 'ow-row' },
+                h(Tag, { text: t('edgeDetail'), tone: 'warn' }),
+                h(Tag, { text: edge.kind }),
+                onClear ? h('button', { className: 'ow-btn ghost', onClick: onClear }, t('clearSel')) : null),
+              h('h4', null, `${nameOf(edge.from)} → ${nameOf(edge.to)}`),
+              kv(t('edgeKind'), edge.kind),
+              kv('From', edge.from),
+              kv('To', edge.to),
+              edge.label ? kv(t('name'), edge.label) : null,
+              kv(t('edgeEndpoints'), `${fromNode?.layer ?? '?'} → ${toNode?.layer ?? '?'}`),
+              h('p', { className: 'ow-note' }, t('zoomHint')),
+            )
+          }
           if (!node) {
-            return h('div', { className: 'ogc-insp' }, h('p', { className: 'ow-note' }, t('noSelection')))
+            return h(
+              'div',
+              { className: 'ogc-insp' },
+              h('p', { className: 'ow-note', style: { textAlign: 'center', padding: '28px 12px', lineHeight: 1.7 } },
+                h('b', { style: { display: 'block', color: '#1c2333', marginBottom: 6 } }, t('noSelection')),
+                t('zoomHint')),
+            )
           }
           const issues = graph.issues.filter((i) => i.level !== 'info' && matchIssueWhere(i.where, node.id))
           const found = node.draft ? null : findElement(pkg, node.id)
@@ -1618,6 +2248,24 @@ window.__ModuleLoader__.load({
           const [error, setError] = useState('')
           const [info, setInfo] = useState('')
           const [pkg, setPkg] = useState<Record<string, unknown> | null>(null)
+          const [quality, setQuality] = useState<{ score?: number; errors?: unknown[]; warnings?: unknown[] } | null>(null)
+          const [gateOk, setGateOk] = useState<boolean | null>(null)
+          const [derivedOpen, setDerivedOpen] = useState(false)
+          const [derivedRuns, setDerivedRuns] = useState<Array<Record<string, unknown>>>([])
+          const [needReviewN, setNeedReviewN] = useState<number | null>(null)
+          const [layerFilter, setLayerFilter] = useState<'all' | 'O1' | 'O2' | 'O3'>('all')
+          const [selectedEdge, setSelectedEdge] = useState<OgEdge | null>(null)
+          const [searchQ, setSearchQ] = useState('')
+          const [focusId, setFocusId] = useState<string | null>(null)
+          const [vpReset, setVpReset] = useState(0)
+          const [edgeKindFilter, setEdgeKindFilter] = useState<string | null>(null)
+          const [focusScenario, setFocusScenario] = useState<string | null>(null)
+          const [playIndex, setPlayIndex] = useState(-1)
+          const [playing, setPlaying] = useState(false)
+          const [playSpeed, setPlaySpeed] = useState(1)
+          /** 用户布局偏好；聚焦场景时强制步骤链。 */
+          const [layoutPref, setLayoutPref] = useState<'force' | 'column' | 'chain'>('force')
+          const [labelMode, setLabelMode] = useState<'main' | 'all' | 'hover'>('main')
 
           const loadGraph = useCallback(async () => {
             if (!api || !kApi || !selected) return
@@ -1639,9 +2287,52 @@ window.__ModuleLoader__.load({
             }
           }, [apis, selected])
 
+          // 状态板：校验分 + 门禁（OBM 门禁模式贴在画布旁，不进主模型层）
+          const loadStatus = useCallback(async () => {
+            if (!selected) return
+            const vApi = apis.remote['ontoValidate']
+            const dApi = apis.remote['ontoDerive']
+            const rApi = apis.remote['ontoRuntime']
+            if (vApi) {
+              try {
+                const out = unwrap<{ report: Record<string, unknown> }>(
+                  await vApi.validate({ name: selected.name, version: selected.version }),
+                )
+                const rep = out.report as { score?: number; errors?: unknown[]; warnings?: unknown[] }
+                setQuality({ score: rep.score, errors: rep.errors ?? [], warnings: rep.warnings ?? [] })
+              } catch {
+                /* 状态板校验失败不打断画布 */
+              }
+            }
+            if (dApi) {
+              try {
+                const g = unwrap<Record<string, unknown>>(
+                  await dApi.gate({ name: selected.name, version: selected.version }),
+                )
+                setGateOk(g['ok'] === true)
+              } catch {
+                setGateOk(null)
+              }
+            }
+            if (rApi) {
+              try {
+                const out = unwrap<{ runs: Array<Record<string, unknown>> }>(await rApi.listRuns())
+                const runs = out.runs ?? []
+                setDerivedRuns(runs.slice(0, 6))
+                setNeedReviewN(runs.filter((r) => r['humanReviewRequired'] === true || r['needReview'] === true).length)
+              } catch {
+                setDerivedRuns([])
+              }
+            }
+          }, [apis, selected])
+
           useEffect(() => {
             void loadGraph()
           }, [loadGraph])
+
+          useEffect(() => {
+            void loadStatus()
+          }, [loadStatus])
 
           // P1 订阅刷新：轮询 revision——dsh 会话起草 / 知识库人审后画布增量生长
           useEffect(() => {
@@ -1789,16 +2480,179 @@ window.__ModuleLoader__.load({
           const EMPTY_GRAPH: OgGraph = { package: '', version: '', status: '', nodes: [], edges: [], issues: [], revision: 0 }
           const g = graph ?? EMPTY_GRAPH
           const nodeObj: OgNode | null = selNode ? g.nodes.find((nd) => nd.id === selNode) ?? null : null
+          const edgeKinds = Array.from(new Set(g.edges.map((e) => e.kind))).sort()
+          const runSearch = (): void => {
+            const q = searchQ.trim().toLowerCase()
+            if (!q) return
+            const hit = g.nodes.find((n) => n.name.toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
+            if (hit) {
+              setSelectedEdge(null)
+              setSelNode(hit.id)
+              setFocusId(`${hit.id}#${Date.now()}`)
+            } else {
+              setInfo(t('empty'))
+            }
+          }
+          const clearGraphSel = (): void => {
+            setSelNode(null)
+            setSelectedEdge(null)
+            setFocusScenario(null)
+            setPlayIndex(-1)
+            setPlaying(false)
+          }
+
+          type ScStep = { stepId: string; stepType: string; order?: string; skillRefs?: string[]; label?: string }
+          const scenarios = ((pkg ?? {}) as { scenarios?: Array<Record<string, unknown>> }).scenarios ?? []
+          const activeSc = focusScenario
+            ? scenarios.find((s) => String(s['id']) === focusScenario) ?? null
+            : null
+          const pipeline: ScStep[] = activeSc
+            ? ((activeSc['pipeline'] as ScStep[] | undefined) ?? [])
+            : []
+          /** 聚焦场景 → 步骤链；否则跟用户偏好（力导/分列；步骤链无焦点时回落分列）。 */
+          const effectiveLayout: 'force' | 'column' | 'scenario-chain' = focusScenario
+            ? 'scenario-chain'
+            : layoutPref === 'force'
+              ? 'force'
+              : 'column'
+
+          /** 场景焦点集：场景 + pipeline 引用 + 行为/规则圈定 + 图上一跳。 */
+          const focusSet = useMemo(() => {
+            if (!focusScenario) return null
+            const sc = scenarios.find((s) => String(s['id']) === focusScenario)
+            if (!sc) return null
+            const set = new Set<string>([focusScenario])
+            const addAll = (arr: unknown): void => {
+              if (Array.isArray(arr)) arr.forEach((x) => set.add(String(x)))
+            }
+            addAll(sc['behaviorRefs'])
+            addAll(sc['scoreRefs'])
+            addAll(sc['exclusionRefs'])
+            const steps = (sc['pipeline'] as ScStep[] | undefined) ?? []
+            const hasBeh = Array.isArray(sc['behaviorRefs']) && (sc['behaviorRefs'] as unknown[]).length > 0
+            const hasScore = Array.isArray(sc['scoreRefs']) && (sc['scoreRefs'] as unknown[]).length > 0
+            const hasExcl = Array.isArray(sc['exclusionRefs']) && (sc['exclusionRefs'] as unknown[]).length > 0
+            let needBeh = false
+            let needScore = false
+            let needExcl = false
+            for (const step of steps) {
+              addAll(step.skillRefs)
+              if (step.stepType === 'BEHAVIOR_CALL' && !hasBeh) needBeh = true
+              if (step.stepType === 'RULE_EVALUATE' && step.order === 'before-scoring' && !hasExcl) needExcl = true
+              if (step.stepType === 'RULE_EVALUATE' && step.order !== 'before-scoring' && !hasScore) needScore = true
+            }
+            // 缺省圈定 = 与运行一致：该步作用于全量对应类型
+            if (needBeh || hasBeh === false && steps.some((s) => s.stepType === 'BEHAVIOR_CALL')) {
+              if (!hasBeh && steps.some((s) => s.stepType === 'BEHAVIOR_CALL')) {
+                for (const n of g.nodes) if (n.kind === 'behavior') set.add(n.id)
+              }
+            }
+            if (!hasScore && steps.some((s) => s.stepType === 'RULE_EVALUATE' && s.order !== 'before-scoring')) {
+              for (const n of g.nodes) if (n.kind === 'scoreRule') set.add(n.id)
+            }
+            if (!hasExcl && steps.some((s) => s.stepType === 'RULE_EVALUATE' && s.order === 'before-scoring')) {
+              for (const n of g.nodes) if (n.kind === 'exclusionRule') set.add(n.id)
+            }
+            // 图上与场景相连的节点（scenario-step 等）
+            for (const e of g.edges) {
+              if (e.from === focusScenario) set.add(e.to)
+              if (e.to === focusScenario) set.add(e.from)
+            }
+            // 两跳：技能→规则、行为→锚点对象
+            for (const e of g.edges) {
+              if ((e.kind === 'skill-rule' || e.kind === 'anchor' || e.kind === 'ref') && set.has(e.from)) set.add(e.to)
+              if ((e.kind === 'skill-rule' || e.kind === 'anchor' || e.kind === 'ref') && set.has(e.to)) set.add(e.from)
+            }
+            // 行为锚定的对象
+            for (const e of g.edges) {
+              if (e.kind === 'anchor' && set.has(e.from)) set.add(e.to)
+              if (e.kind === 'anchor' && set.has(e.to)) set.add(e.from)
+            }
+            return set
+          }, [focusScenario, pkg, g.edges])
+
+          /** 当前播放步的高亮 ID 集。 */
+          const playSet = useMemo(() => {
+            if (!focusScenario || playIndex < 0 || !pipeline[playIndex]) return null
+            const step = pipeline[playIndex]
+            const sc = activeSc
+            const set = new Set<string>([focusScenario])
+            const addAll = (arr: unknown): void => {
+              if (Array.isArray(arr)) arr.forEach((x) => set.add(String(x)))
+            }
+            if (step.stepType === 'SKILL_RUN') addAll(step.skillRefs)
+            else if (step.stepType === 'BEHAVIOR_CALL') addAll(sc?.['behaviorRefs'])
+            else if (step.stepType === 'RULE_EVALUATE') {
+              if (step.order === 'before-scoring') addAll(sc?.['exclusionRefs'])
+              else addAll(sc?.['scoreRefs'])
+            } else if (step.stepType === 'HUMAN_REVIEW' || step.stepType === 'AUDIT_CHECK') {
+              // 保持场景 + 已出现技能
+              for (let i = 0; i <= playIndex; i++) addAll(pipeline[i].skillRefs)
+            } else if (step.stepType === 'DATA_INGEST') {
+              // 数据摄入：亮场景
+            }
+            // 行为步若未圈定，亮全部 O2 行为（与运行缺省一致）
+            if (step.stepType === 'BEHAVIOR_CALL' && !(sc?.['behaviorRefs'] as unknown[] | undefined)?.length) {
+              for (const n of g.nodes) if (n.kind === 'behavior') set.add(n.id)
+            }
+            if (step.stepType === 'RULE_EVALUATE' && step.order !== 'before-scoring'
+                && !(sc?.['scoreRefs'] as unknown[] | undefined)?.length) {
+              for (const n of g.nodes) if (n.kind === 'scoreRule') set.add(n.id)
+            }
+            if (step.stepType === 'RULE_EVALUATE' && step.order === 'before-scoring'
+                && !(sc?.['exclusionRefs'] as unknown[] | undefined)?.length) {
+              for (const n of g.nodes) if (n.kind === 'exclusionRule') set.add(n.id)
+            }
+            return set
+          }, [focusScenario, playIndex, pipeline, activeSc, g.nodes])
+
+          const enterScenarioFocus = (id: string): void => {
+            setSelNode(null)
+            setSelectedEdge(null)
+            setFocusScenario(id)
+            setPlayIndex(-1)
+            setPlaying(false)
+            setVpReset((n) => n + 1)
+          }
+
+          const exitScenarioFocus = (): void => {
+            setFocusScenario(null)
+            setPlayIndex(-1)
+            setPlaying(false)
+          }
+
+          // 播放循环
+          useEffect(() => {
+            if (!playing || pipeline.length === 0) return
+            const ms = Math.round(1400 / playSpeed)
+            const timer = setInterval(() => {
+              setPlayIndex((i) => {
+                if (i >= pipeline.length - 1) {
+                  setPlaying(false)
+                  return i
+                }
+                return i + 1
+              })
+            }, ms)
+            return () => clearInterval(timer)
+          }, [playing, playSpeed, pipeline.length])
           const pkgIssues = g.issues.filter((i) => i.where === 'package' && i.level !== 'info')
           const draftCount = g.nodes.filter((nd) => nd.draft).length
           const domain = skelDomainFallback(graph)
+          const layerCounts = {
+            O1: g.nodes.filter((n) => !n.draft && n.layer === 'O1').length,
+            O2: g.nodes.filter((n) => !n.draft && n.layer === 'O2').length,
+            O3: g.nodes.filter((n) => !n.draft && n.layer === 'O3').length,
+          }
+          const errN = (quality?.errors ?? []).length
+          const runHitN = g.nodes.filter((n) => n.runHit).length
 
           const canvasChildren: ReactNode[] = []
           if (graph) {
             canvasChildren.push(
               h(
                 'div',
-                { key: 'skel', className: 'ogc-skel' },
+                { key: 'skel', className: 'ogc-skel', style: { margin: 0, padding: 0 } },
                 h(Tag, {
                   text: t('skeleton'),
                   tone: graph.skeleton ? (graph.skeleton.confirmed ? 'ok' : 'warn') : undefined,
@@ -1810,17 +2664,17 @@ window.__ModuleLoader__.load({
                     ? `${graph.skeleton.confirmed ? t('skelConfirmed') : t('skelUnconfirmed')} · ${graph.skeleton.ids.length} ID`
                     : t('skelNone'),
                 ),
-                readOnly
+                readOnly || skelOpen
                   ? null
                   : h('button', {
                       className: 'ow-btn ghost',
                       disabled: !!busy,
-                      onClick: () => setSkelOpen((v) => !v),
+                      onClick: () => setSkelOpen(true),
                     }, t('skelEdit')),
                 skelOpen
                   ? h(
                       'div',
-                      { className: 'ow-form', style: { width: '100%' } },
+                      { className: 'ow-form', style: { width: '100%', marginTop: 6 } },
                       h(Field, { label: t('skelCode') },
                         h('input', {
                           className: 'ow-in',
@@ -1853,87 +2707,481 @@ window.__ModuleLoader__.load({
               ),
             )
           }
-          if (!readOnly) {
-            // 草拟单一入口在 dsh 主对话（P1：对话是入口，画布是状态）——此处只留引导。
-            canvasChildren.push(h('p', { key: 'hint', className: 'ow-note' }, t('draftHint')))
+
+          // 层过滤后的图（画布主表面）
+          let visNodes = layerFilter === 'all'
+            ? g.nodes
+            : g.nodes.filter((n) => n.draft || n.layer === layerFilter)
+          let visEdges = edgeKindFilter
+            ? g.edges.filter((e) => e.kind === edgeKindFilter)
+            : g.edges
+          // 场景步骤链：只显示焦点节点（横向编排更清晰）；其余模式保留全图靠 dim
+          if (focusSet && focusScenario) {
+            visNodes = visNodes.filter((n) => focusSet.has(n.id))
+            visEdges = visEdges.filter((e) => focusSet.has(e.from) && focusSet.has(e.to))
           }
-          canvasChildren.push(
+          const visibleGraph: OgGraph = { ...g, nodes: visNodes, edges: visEdges }
+
+          const layerBtn = (key: 'all' | 'O1' | 'O2' | 'O3', label: string, tip: string): ReactNode =>
+            h(
+              'button',
+              {
+                key,
+                type: 'button',
+                className: layerFilter === key ? 'lb on' : 'lb',
+                onClick: () => setLayerFilter(key),
+              },
+              label,
+              h('span', { className: 'tip' }, tip),
+            )
+
+          return h(
+            'div',
+            { className: 'ogc-studio' },
+            // 左层轨
+            h(
+              'aside',
+              { className: 'ogc-lrail', 'aria-label': t('modelLayers') },
+              layerBtn('all', '≡', t('modelLayers')),
+              layerBtn('O1', 'O1', 'O1'),
+              layerBtn('O2', 'O2', 'O2'),
+              layerBtn('O3', 'O3', 'O3'),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: derivedOpen ? 'lb on' : 'lb',
+                  onClick: () => {
+                    setDerivedOpen((v) => !v)
+                    if (!derivedOpen) void loadStatus()
+                  },
+                  title: t('derivedView'),
+                },
+                '◇',
+                h('span', { className: 'tip' }, t('derivedView')),
+              ),
+            ),
+            // 中央大画布
             h(
               'div',
-              { key: 'grid', className: 'ogc-grid' },
-              graph
-                ? h(
-                    'div',
-                    { className: 'ogc-box' },
-                    h(GraphCanvas, {
-                      t,
-                      graph,
-                      selected: selNode,
-                      onSelect: setSelNode,
-                      onDraftAction: draftAction,
-                      actionOff: !!busy || readOnly,
-                    }),
-                    h(
+              { className: 'ogc-stage' },
+              h(
+                'div',
+                { className: 'ogc-stage-top' },
+                h('span', {
+                  className: 'ogc-chip',
+                  title: t('primaryModelChip'),
+                  style: { maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                }, t('primaryModelChip')),
+                h('span', { className: 'ow-stat', title: t('draftCount') }, `⚡${draftCount}`),
+                !readOnly && draftCount > 0
+                  ? h('button', {
+                      className: 'ow-btn',
+                      disabled: !!busy,
+                      onClick: batchApprove,
+                      title: t('approveAll'),
+                    }, busy === 'batch' ? '…' : '✓')
+                  : null,
+                h('button', {
+                  className: 'ow-btn ghost',
+                  disabled: !!busy,
+                  onClick: () => void loadGraph(),
+                  title: t('refresh'),
+                }, '↻'),
+                h(
+                  'div',
+                  { className: 'ogc-search' },
+                  h('input', {
+                    placeholder: t('searchPh'),
+                    value: searchQ,
+                    onChange: (e: { target: { value: string } }) => setSearchQ(e.target.value),
+                    onKeyDown: (e: { key: string }) => {
+                      if (e.key === 'Enter') runSearch()
+                    },
+                  }),
+                  h('button', { className: 'ow-btn ghost', onClick: runSearch }, '⌕'),
+                  h('button', {
+                    className: 'ow-btn ghost',
+                    onClick: () => {
+                      clearGraphSel()
+                      setSearchQ('')
+                      setVpReset((n) => n + 1)
+                      setEdgeKindFilter(null)
+                    },
+                  }, t('resetView')),
+                ),
+                h(
+                  'div',
+                  {
+                    className: 'ogc-search',
+                    title: focusScenario ? t('scenarioFocusHint') : t('layoutMode'),
+                  },
+                  h('span', { className: 'ow-note' }, t('layoutMode')),
+                  h('select', {
+                    value: focusScenario ? 'chain' : layoutPref,
+                    disabled: !!focusScenario,
+                    onChange: (e: { target: { value: string } }) => {
+                      const v = e.target.value
+                      if (v === 'force' || v === 'column' || v === 'chain') setLayoutPref(v)
+                      setVpReset((n) => n + 1)
+                    },
+                    style: {
+                      padding: '5px 8px',
+                      borderRadius: 8,
+                      border: '1px solid #d1d5db',
+                      fontSize: 12.5,
+                      background: '#fff',
+                      color: 'inherit',
+                    },
+                  },
+                    h('option', { value: 'force' }, t('layoutForce')),
+                    h('option', { value: 'column' }, t('layoutColumn')),
+                    h('option', { value: 'chain', disabled: !focusScenario }, t('layoutChain')),
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'ogc-search', title: t('labelDensity') },
+                  h('span', { className: 'ow-note' }, t('labelDensity')),
+                  h('select', {
+                    value: labelMode,
+                    onChange: (e: { target: { value: string } }) => {
+                      const v = e.target.value
+                      if (v === 'main' || v === 'all' || v === 'hover') setLabelMode(v)
+                    },
+                    style: {
+                      padding: '5px 8px',
+                      borderRadius: 8,
+                      border: '1px solid #d1d5db',
+                      fontSize: 12.5,
+                      background: '#fff',
+                      color: 'inherit',
+                    },
+                  },
+                    h('option', { value: 'main' }, t('labelMain')),
+                    h('option', { value: 'all' }, t('labelAll')),
+                    h('option', { value: 'hover' }, t('labelHover')),
+                  ),
+                ),
+                readOnly ? h(Tag, { text: 'ISSUED', tone: 'ok' }) : null,
+              ),
+              h(
+                'div',
+                { className: 'ogc-stage-banners' },
+                h(ErrorBanner, { text: error }),
+                h(OkBanner, { text: info }),
+                focusScenario
+                  ? h(
                       'div',
-                      { className: 'ogc-legend' },
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O1, border: '1.5px solid #4a6fa5' } }), ' O1'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O2, border: '1.5px solid #e8933a' } }), ' O2'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: OG_FILL.O3, border: '1.5px solid #3d9970' } }), ' O3'),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px dashed #999' } }), ` ${t('queue')}`),
-                      h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #dc2626' } }), ' error / run-hit'),
+                      { className: 'ogc-focus-bar', style: { marginBottom: 8 } },
+                      h('span', null,
+                        `${t('focusScenario')}：`,
+                        h('b', null, activeSc ? String(activeSc['name'] ?? focusScenario) : focusScenario),
+                        ` · ${focusSet ? focusSet.size : 0} ${t('focusNodes')}`),
+                      h('button', { className: 'ow-btn ghost', onClick: exitScenarioFocus }, '✕'),
+                    )
+                  : null,
+                focusScenario && pipeline.length > 0
+                  ? h(
+                      'div',
+                      { className: 'ogc-playbar', style: { marginBottom: 8 } },
+                      h('button', {
+                        className: 'ow-btn ghost',
+                        onClick: () => setPlayIndex((i) => Math.max(0, i - 1)),
+                        disabled: playIndex <= 0,
+                      }, t('prevStep')),
+                      h('button', {
+                        className: 'ow-btn',
+                        onClick: () => {
+                          if (playIndex >= pipeline.length - 1) setPlayIndex(0)
+                          setPlaying((p) => !p)
+                        },
+                      }, playing ? t('pause') : t('play')),
+                      h('button', {
+                        className: 'ow-btn ghost',
+                        onClick: () => setPlayIndex((i) => Math.min(pipeline.length - 1, i + 1)),
+                        disabled: playIndex >= pipeline.length - 1,
+                      }, t('nextStep')),
+                      h('input', {
+                        type: 'range',
+                        min: 0,
+                        max: Math.max(0, pipeline.length - 1),
+                        value: Math.max(0, playIndex),
+                        onChange: (e: { target: { value: string } }) => {
+                          setPlaying(false)
+                          setPlayIndex(Number(e.target.value))
+                        },
+                        style: { flex: 1, minWidth: 120 },
+                      }),
+                      h('span', { className: 'ow-stat' },
+                        `${Math.max(0, playIndex) + (playIndex >= 0 ? 1 : 0)} / ${pipeline.length} ${t('stepOf')}`),
+                      h('label', { className: 'ow-note' }, t('speed')),
+                      h('select', {
+                        value: String(playSpeed),
+                        onChange: (e: { target: { value: string } }) => setPlaySpeed(Number(e.target.value)),
+                      },
+                        h('option', { value: '0.5' }, '0.5×'),
+                        h('option', { value: '1' }, '1×'),
+                        h('option', { value: '2' }, '2×'),
+                      ),
+                      playIndex >= 0 && pipeline[playIndex]
+                        ? h('span', { className: 'ow-stat' },
+                            h('b', null, pipeline[playIndex].stepId),
+                            ' ',
+                            pipeline[playIndex].stepType)
+                        : null,
+                    )
+                  : null,
+                focusScenario && pipeline.length === 0
+                  ? h('p', { className: 'ow-note' }, t('noPipeline'))
+                  : null,
+              ),
+              ...canvasChildren,
+              h(
+                'div',
+                { className: 'ogc-canvas-area' },
+                graph
+                  ? h(
+                      'div',
+                      { className: 'ogc-box', style: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, border: 'none' } },
+                      focusScenario && pipeline.length > 0
+                        ? h(
+                            'div',
+                            {
+                              className: 'ogc-step-bar',
+                              style: {
+                                display: 'flex',
+                                gap: 4,
+                                padding: '8px 8px 4px',
+                                overflowX: 'auto',
+                                flexShrink: 0,
+                              },
+                            },
+                            ...pipeline.map((step, i) =>
+                              h(
+                                'div',
+                                {
+                                  key: step.stepId || i,
+                                  style: {
+                                    flex: '1 0 auto',
+                                    minWidth: 72,
+                                    textAlign: 'center',
+                                    background: playIndex === i ? '#1d4ed8' : '#ffffff',
+                                    border: `1.5px solid ${playIndex === i ? '#1d4ed8' : '#3b6fd4'}`,
+                                    borderRadius: 8,
+                                    padding: '4px 6px',
+                                  },
+                                },
+                                h('div', {
+                                  style: {
+                                    fontSize: 12,
+                                    fontWeight: 750,
+                                    color: playIndex === i ? '#ffffff' : '#1d4ed8',
+                                    lineHeight: 1.2,
+                                  },
+                                }, step.stepId),
+                                h('div', {
+                                  style: {
+                                    fontSize: 10,
+                                    fontWeight: 650,
+                                    color: playIndex === i ? '#dbeafe' : '#374151',
+                                    lineHeight: 1.2,
+                                  },
+                                }, step.stepType.replace(/_/g, ' ')),
+                              ),
+                            ),
+                          )
+                        : null,
+                      h(GraphCanvas, {
+                        t,
+                        graph: visibleGraph,
+                        selected: selNode,
+                        selectedEdge,
+                        onSelect: (id: string | null) => {
+                          if (id) {
+                            const nd = g.nodes.find((n) => n.id === id)
+                            if (nd && nd.kind === 'scenario') {
+                              enterScenarioFocus(id)
+                              return
+                            }
+                          }
+                          setSelNode(id)
+                          if (id) {
+                            setSelectedEdge(null)
+                            if (focusScenario) exitScenarioFocus()
+                          }
+                        },
+                        onSelectEdge: (e: OgEdge | null) => {
+                          setSelectedEdge(e)
+                          if (e) setSelNode(null)
+                        },
+                        onDraftAction: draftAction,
+                        actionOff: !!busy || readOnly,
+                        focusId,
+                        onViewportResetKey: vpReset,
+                        focusSet,
+                        playSet,
+                        layoutMode: effectiveLayout,
+                        pipeline: focusScenario ? pipeline : undefined,
+                        scenarioId: focusScenario ?? undefined,
+                        labelMode,
+                      }),
+                      h(
+                        'div',
+                        { className: 'ogc-legend' },
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #3b6fd4' } }), ' O1'),
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #d97706' } }), ' O2'),
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #16a34a' } }), ' O3'),
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px dashed #999' } }), ` ${t('queue')}`),
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#fff', border: '1.5px solid #dc2626' } }), ' error / run-hit'),
+                        h('span', null, h('i', { className: 'ogc-dot', style: { background: '#f5f3ff', border: '1.5px dashed #7c3aed' } }), ` ${t('derivedView')}`),
+                      ),
+                      h(
+                        'div',
+                        { className: 'ogc-edge-legend', style: { width: '100%', borderTop: '1px solid #f0f1f4', marginTop: 4, paddingTop: 6 } },
+                        h('span', { style: { fontWeight: 650, marginRight: 4 } }, `${t('edgeLegend')}:`),
+                        ...edgeKinds.map((k) =>
+                          h(
+                            'button',
+                            {
+                              key: k,
+                              type: 'button',
+                              className: edgeKindFilter === k ? 'on' : '',
+                              onClick: () => setEdgeKindFilter(edgeKindFilter === k ? null : k),
+                              title: k,
+                            },
+                            h('i', { style: { borderTopColor: OG_EDGE[k] ?? '#a8b0c3' } }),
+                            k,
+                          ),
+                        ),
+                        edgeKindFilter
+                          ? h('button', { type: 'button', onClick: () => setEdgeKindFilter(null) }, '×')
+                          : null,
+                      ),
+                    )
+                  : h('p', { className: 'ow-note', style: { padding: 24 } }, t('loading')),
+              ),
+              // 状态板浮在画布右上
+              h(
+                'div',
+                { className: 'ogc-board' },
+                h('h4', null, t('statusBoard')),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('qualityScore')),
+                  h('b', { className: errN === 0 && quality ? 'ok' : 'warn' },
+                    quality && typeof quality.score === 'number' ? String(quality.score) : '—')),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('validateErrors')),
+                  h('b', { className: errN === 0 ? 'ok' : 'err' }, String(errN))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('deriveGate')),
+                  h('b', { className: gateOk === true ? 'ok' : gateOk === false ? 'err' : '' },
+                    gateOk === true ? t('gateOk') : gateOk === false ? t('drift') : t('gateUnknown'))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('draftCount')),
+                  h('b', { className: draftCount > 0 ? 'warn' : 'ok' }, String(draftCount))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('needReviewRuns')),
+                  h('b', null, needReviewN === null ? '—' : String(needReviewN))),
+                h(
+                  'div',
+                  { className: 'ogc-board-actions' },
+                  h('button', { disabled: !!busy, onClick: () => void loadStatus() }, t('validateBtn')),
+                  h('button', {
+                    disabled: !!busy,
+                    onClick: () => {
+                      const dApi = apis.remote['ontoDerive']
+                      if (!dApi || !selected) return
+                      void (async () => {
+                        setBusy('derive')
+                        try {
+                          unwrap(await dApi.derive({ name: selected.name, version: selected.version }))
+                          await loadStatus()
+                          setInfo(`✓ ${t('deriveBtn')}`)
+                        } catch (e) {
+                          setError(errText(e))
+                        } finally {
+                          setBusy('')
+                        }
+                      })()
+                    },
+                  }, t('deriveBtn')),
+                ),
+              ),
+              h(
+                'div',
+                { className: `ogc-derived${derivedOpen ? ' on' : ''}` },
+                h('h4', null, t('derivedView')),
+                h('p', { className: 'note' }, t('derivedHint')),
+                h(
+                  'div',
+                  { className: 'ow-row' },
+                  h('span', { className: 'ow-stat' }, `${t('modelLayers')} O1 ${layerCounts.O1} · O2 ${layerCounts.O2} · O3 ${layerCounts.O3}`),
+                  h('span', { className: 'ow-stat' }, `${t('derivedEvents')}: ${derivedRuns.length}`),
+                  h('span', { className: 'ow-stat' }, `run-hit ${runHitN}`),
+                ),
+                derivedRuns.length === 0
+                  ? h('p', { className: 'ow-note' }, t('derivedEmpty'))
+                  : h(
+                      'div',
+                      { className: 'ow-row', style: { alignItems: 'flex-start' } },
+                      ...derivedRuns.map((r, i) =>
+                        h(
+                          'div',
+                          {
+                            key: i,
+                            className: 'ow-stat',
+                            style: { flexDirection: 'column', alignItems: 'flex-start', gap: 2, maxWidth: 240 },
+                          },
+                          h('b', { className: 'ow-mono', style: { fontSize: 11 } }, String(r['runId'] ?? '—')),
+                          h('span', { className: 'ow-note' },
+                            `${String(r['scenarioId'] ?? r['scenario'] ?? '')} · ${String(r['auditPassed'] ?? r['passed'] ?? '')}`),
+                        ),
+                      ),
                     ),
-                  )
-                : h('p', { className: 'ow-note' }, t('loading')),
+              ),
+            ),
+            // 右检视器
+            h(
+              'div',
+              { className: 'ogc-side' },
               h(InspectorView, {
                 t,
                 graph: g,
                 node: nodeObj,
+                edge: selectedEdge,
                 pkg,
                 candidates,
                 busy,
                 readOnly,
                 onDraftAction: draftAction,
+                onClear: clearGraphSel,
+                stepDetail: focusScenario && playIndex >= 0 && pipeline[playIndex]
+                  ? {
+                      stepId: pipeline[playIndex].stepId,
+                      stepType: pipeline[playIndex].stepType,
+                      order: pipeline[playIndex].order,
+                      label: pipeline[playIndex].label,
+                      refs: Array.from(playSet ?? []),
+                    }
+                  : null,
               }),
-            ),
-          )
-          if (pkgIssues.length > 0) {
-            canvasChildren.push(
-              h(
-                'div',
-                { key: 'pkgissues', style: { marginTop: 8 } },
-                h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
-                ...pkgIssues.slice(0, 12).map((i, k) =>
-                  h(
+              pkgIssues.length > 0
+                ? h(
                     'div',
-                    { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
-                    h('b', null, i.code),
-                    ' ',
-                    i.message,
-                  )),
-              ),
-            )
-          }
-
-          return h(
-            'div',
-            { className: 'ogc-work' },
-            h(
-              'div',
-              { className: 'ow-row' },
-              h('span', { className: 'ow-stat' }, `${t('draftCount')} ${draftCount}`),
-              !readOnly && draftCount > 0
-                ? h('button', {
-                    className: 'ow-btn',
-                    disabled: !!busy,
-                    onClick: batchApprove,
-                  }, busy === 'batch' ? t('busy') : t('approveAll'))
+                    { style: { padding: '0 12px 12px' } },
+                    h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
+                    ...pkgIssues.slice(0, 8).map((i, k) =>
+                      h(
+                        'div',
+                        { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
+                        h('b', null, i.code),
+                        ' ',
+                        i.message,
+                      )),
+                  )
                 : null,
-              graph ? h('span', { className: 'ow-stat' }, `${t('revision')} ${graph.revision}`) : null,
-              h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => void loadGraph() }, t('refresh')),
             ),
-            h(ErrorBanner, { text: error }),
-            h(OkBanner, { text: info }),
-            ...canvasChildren,
           )
         }
 
@@ -2265,6 +3513,19 @@ window.__ModuleLoader__.load({
             return h('div', { className: 'ow-form' }, ...children)
           }
 
+          if (view === 'canvas') {
+            return h(
+              'div',
+              { className: 'ow-main canvas', style: { height: '100%' } },
+              h(ErrorBanner, { text: error }),
+              h(OkBanner, { text: info }),
+              readOnly
+                ? h('p', { className: 'ow-note', style: { padding: '8px 12px' }, }, `${t('issue')}: ISSUED — ${t('readme')}`)
+                : null,
+              h(GraphWorkbench, { key: 'gw', t, apis, selected, onChanged: reload }),
+            )
+          }
+
           return h(
             'div',
             { className: 'ow-card' },
@@ -2294,34 +3555,31 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ogc-toolbar', style: { marginTop: 10 } },
               h('button', {
-                className: view === 'canvas' ? 'ow-btn' : 'ow-btn ghost',
+                className: 'ow-btn ghost',
                 onClick: () => setView('canvas'),
               }, t('canvasView')),
               h('button', {
-                className: view === 'list' ? 'ow-btn' : 'ow-btn ghost',
+                className: 'ow-btn',
                 onClick: () => setView('list'),
               }, t('listView')),
             ),
-            ...(view === 'canvas'
-              ? [h(GraphWorkbench, { key: 'gw', t, apis, selected, onChanged: reload })]
-              : [
-                  // D4：待审草案先于物化清单可见（计数 + 明细 + 恢复提示）
-                  h(
-                    'div',
-                    { key: 'pending-drafts', className: 'ow-row', style: { flexDirection: 'column', alignItems: 'stretch', gap: 4, marginBottom: 8 } },
-                    h('b', { className: 'ow-note' }, `${t('draftCount')}：${pendingDrafts.length}`),
-                    h('span', { className: 'ow-note' }, t('draftHint')),
-                    ...pendingDrafts.slice(0, 40).map((d, i) =>
-                      h(
-                        'div',
-                        { key: `pd-${i}`, className: 'ow-note' },
-                        `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}${typeof (d.provenance as { runId?: string } | undefined)?.runId === 'string' ? ` · run:${(d.provenance as { runId: string }).runId}` : ''}`,
-                      )),
-                    pendingDrafts.length > 40
-                      ? h('span', { className: 'ow-note' }, `… +${pendingDrafts.length - 40}`)
-                      : null,
-                  ),
-                  ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
+            // list branch only below (canvas returned above)
+            h(
+              'div',
+              { key: 'pending-drafts', className: 'ow-row', style: { flexDirection: 'column', alignItems: 'stretch', gap: 4, marginBottom: 8 } },
+              h('b', { className: 'ow-note' }, `${t('draftCount')}：${pendingDrafts.length}`),
+              h('span', { className: 'ow-note' }, t('draftHint')),
+              ...pendingDrafts.slice(0, 40).map((d, i) =>
+                h(
+                  'div',
+                  { key: `pd-${i}`, className: 'ow-note' },
+                  `${String(d.name ?? d.id ?? '')} · ${String(d.targetKind ?? '')} · ${String(d.layer ?? '')} · conf ${String(d.confidence ?? '')}${d.conclusionLike === true ? ' · 结论性→RedLine' : ''}${typeof (d.provenance as { runId?: string } | undefined)?.runId === 'string' ? ` · run:${(d.provenance as { runId: string }).runId}` : ''}`,
+                )),
+              pendingDrafts.length > 40
+                ? h('span', { className: 'ow-note' }, `… +${pendingDrafts.length - 40}`)
+                : null,
+            ),
+            ...(['objects', 'relations', 'behaviors', 'scoreRules', 'exclusionRules', 'scenarios'] as ElemKind[]).map(elemTable),
             h(
               Card,
               { title: t('yamlImport') },
@@ -2392,8 +3650,6 @@ window.__ModuleLoader__.load({
                   ),
                 ]
               : []),
-            ]
-            )
           )
         }
 
@@ -3704,8 +4960,14 @@ window.__ModuleLoader__.load({
           const [tab, setTab] = useState('packages')
           const [versions, setVersions] = useState<VersionRow[]>([])
           // 与右栏图谱 tab 共享的包选中态（P1 修正）
-          const [selected, setSelected] = useSharedSelected()
+          const [selected, setSelectedRaw] = useSharedSelected()
           const [listError, setListError] = useState('')
+
+          // 选中包 → 直接进画布（不再停在包表格）
+          const setSelected = (s: { name: string; version: string } | null): void => {
+            setSelectedRaw(s)
+            if (s) setTab('model')
+          }
 
           const reload = useCallback(async () => {
             const api = apis.remote['ontoWorkspace']
@@ -3728,56 +4990,80 @@ window.__ModuleLoader__.load({
             void reload()
           }, [reload])
 
-          const tabs: Array<[string, string]> = [
-            ['packages', t('tabPackages')],
-            ['model', t('tabModel')],
-            ['knowledge', t('tabKnowledge')],
-            ['validate', t('tabValidate')],
-            ['run', t('tabRun')],
-            ['experience', t('tabExperience')],
+          // 已有选中包时默认进画布
+          useEffect(() => {
+            if (selected && tab === 'packages') setTab('model')
+          }, [selected])
+
+          const nav: Array<[string, string, string]> = [
+            ['model', t('tabModel'), '▣'],
+            ['packages', t('tabPackages'), '☰'],
+            ['knowledge', t('tabKnowledge'), '▤'],
+            ['validate', t('tabValidate'), '✓'],
+            ['run', t('tabRun'), '▶'],
+            ['experience', t('tabExperience'), '◎'],
           ]
+
+          const isCanvas = tab === 'model'
 
           return h(
             'div',
-            { className: 'ow-wrap' },
+            { className: 'ow-shell' },
             h(
-              'div',
-              { className: 'ow-head' },
-              h('h2', { className: 'ow-h1' }, t('title')),
-              h('span', { className: 'ow-sub' }, t('subtitle')),
-              selected
-                ? h('span', { className: 'ow-stat' }, `${t('selected')}: ${selected.name}@${selected.version}`)
-                : h('span', { className: 'ow-stat' }, t('none')),
-            ),
-            h(
-              'div',
-              { className: 'ow-tabs' },
-              ...tabs.map(([key, label]) =>
+              'nav',
+              { className: 'ow-nav', 'aria-label': t('title') },
+              h('div', { className: 'brand' }, 'dsh-onto'),
+              ...nav.map(([key, label, ico]) =>
                 h(
                   'button',
                   {
                     key,
-                    className: tab === key ? 'ow-tab on' : 'ow-tab',
+                    type: 'button',
+                    className: tab === key ? 'on' : '',
                     onClick: () => setTab(key),
+                    title: label,
                   },
+                  h('span', { className: 'ico' }, ico),
                   label,
                 ),
               ),
             ),
-            listError
-              ? h(ErrorBanner, { text: `包列表：${listError}` })
-              : null,
-            tab === 'packages'
-              ? h(PackagesPanel, { t, apis, versions, reload, selected, setSelected })
-              : tab === 'model'
-                ? h(ModelPanel, { t, apis, selected })
-                : tab === 'knowledge'
-                  ? h(KnowledgePanel, { t, apis, selected })
-                  : tab === 'validate'
-                    ? h(ValidatePanel, { t, apis, selected })
-                    : tab === 'experience'
-                      ? h(ExperiencePanel, { t, apis })
-                      : h(RunPanel, { t, apis, selected }),
+            h(
+              'div',
+              { className: isCanvas ? 'ow-main canvas' : 'ow-main' },
+              isCanvas
+                ? null
+                : h(
+                    'div',
+                    { className: 'ow-wrap', style: { paddingBottom: 8 } },
+                    h(
+                      'div',
+                      { className: 'ow-head' },
+                      h('h2', { className: 'ow-h1' }, t('title')),
+                      h('span', { className: 'ow-sub' }, t('subtitle')),
+                      selected
+                        ? h('span', { className: 'ow-stat' }, `${t('selected')}: ${selected.name}@${selected.version}`)
+                        : h('span', { className: 'ow-stat' }, t('none')),
+                    ),
+                  ),
+              isCanvas && listError ? h(ErrorBanner, { text: `包列表：${listError}` }) : null,
+              !isCanvas && listError ? h(ErrorBanner, { text: `包列表：${listError}` }) : null,
+              isCanvas
+                ? h(ModelPanel, { key: 'model', t, apis, selected })
+                : h(
+                    'div',
+                    { className: 'ow-wrap' },
+                    tab === 'packages'
+                      ? h(PackagesPanel, { t, apis, versions, reload, selected, setSelected })
+                      : tab === 'knowledge'
+                        ? h(KnowledgePanel, { t, apis, selected })
+                        : tab === 'validate'
+                          ? h(ValidatePanel, { t, apis, selected })
+                          : tab === 'experience'
+                            ? h(ExperiencePanel, { t, apis })
+                            : h(RunPanel, { t, apis, selected }),
+                  ),
+            ),
           )
         }
 
