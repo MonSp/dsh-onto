@@ -5,7 +5,7 @@
   "type": "module",
   "description": "dsh-onto 业务本体建模平台工作台：包管理 / 建模 / 知识库 / 校验派生 / 场景运行",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc --noEmit -p tsconfig.json && esbuild src/client.ts --bundle --format=iife --platform=browser --target=es2022 --charset=utf8 --outfile=dist/client.js && esbuild src/index.ts --format=esm --platform=neutral --target=es2022 --charset=utf8 --outfile=dist/index.js"
   },
   "exports": {
     ".": "./dist/index.js",
@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.1.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.9.2"
   },
   "dsh": {
