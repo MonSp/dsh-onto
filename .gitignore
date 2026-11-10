@@ -7,3 +7,13 @@ result.json
 .dump*.log
 # 本地方案/台账/压测笔记——不入库（历史 blob 暂不改写）
 docs/compose/
+# 本地设计稿/审计截图/OBM 试产物——不入库
+docs/design/
+docs/audit/
+ontology_aml/
+# 本地启服日志与临时脚本
+scripts/*.log
+scripts/*.log.err
+scripts/*.err
+scripts/start-dsh.bat
+scripts/restart-dsh.ps1
