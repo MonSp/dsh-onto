@@ -54,6 +54,7 @@ export const OG_EDGE: Record<string, string> = {
   'behavior-ref': '#7c9cbf',
   'score-ref': '#d4a574',
   'exclusion-ref': '#c48a8a',
+  feature: '#5b9fd4',
   ref: '#c5cbd6',
   applies: '#c5cbd6',
 }
@@ -61,7 +62,7 @@ export const OG_EDGE: Record<string, string> = {
 /** Cross-layer edge (O1-O2-O3): thicker for full-chain visibility. */
 export function isCrossLayerEdge(kind: string, fromLayer?: string, toLayer?: string): boolean {
   if (!fromLayer || !toLayer || fromLayer === toLayer) return false
-  return ['behavior-ref', 'score-ref', 'exclusion-ref', 'scenario-step', 'anchor', 'skill-rule', 'relation', 'ref'].includes(kind)
+  return ['behavior-ref', 'score-ref', 'exclusion-ref', 'feature', 'scenario-step', 'anchor', 'skill-rule', 'relation', 'ref'].includes(kind)
 }
 
 export type ScStepLike = { stepId: string; stepType: string; order?: string; skillRefs?: string[] }

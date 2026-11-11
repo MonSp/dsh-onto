@@ -76,6 +76,10 @@ function payloadRefTexts(payload: Record<string, unknown>): string[] {
     const v = payload[key]
     if (Array.isArray(v)) v.forEach(take)
   }
+  const fsrc = payload['featureSources']
+  if (fsrc && typeof fsrc === 'object' && !Array.isArray(fsrc)) {
+    for (const v of Object.values(fsrc as Record<string, unknown>)) take(v)
+  }
   const weights = payload['weights']
   if (weights && typeof weights === 'object' && !Array.isArray(weights)) {
     out.push(...Object.keys(weights))
@@ -199,9 +203,15 @@ export function buildModelGraph(input: {
   for (const r of pkg.scoreRules) {
     pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.expression ?? '', 'ref')
     if (r.evidenceTemplate) pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.evidenceTemplate, 'ref')
+    for (const [feat, objId] of Object.entries(r.featureSources ?? {})) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: r.id, to: objId, kind: 'feature', label: feat })
+    }
   }
   for (const r of pkg.exclusionRules) {
     pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.condition ?? '', 'ref')
+    for (const [feat, objId] of Object.entries(r.featureSources ?? {})) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: r.id, to: objId, kind: 'feature', label: feat })
+    }
   }
   // 草案 payload 里的语义引用位（anchor/from/to/refObject/scenarioId/weights 等）
   // 与 update 草案的 targetId（指向被修改的既有元素）

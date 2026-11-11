@@ -901,3 +901,17 @@ test('v0.2.1 全链路：场景 behaviorRefs/scoreRefs/exclusionRefs 入图', ()
     assert.ok(kinds.has(k), `场景出边含 ${k}`)
   }
 })
+
+test('featureSources 入图：规则→对象 feature 边', () => {
+  const pkg = minimalPkg({
+    scoreRules: [{ ...minimalPkg().scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+    exclusionRules: [{ ...minimalPkg().exclusionRules[0], featureSources: { tag: 'OBJ-TST-B' } }],
+  })
+  const graph = buildModelGraph({ pkg })
+  assert.ok(graph.edges.some((e) => e.from === 'RULE-TST-S1' && e.to === 'OBJ-TST-A' && e.kind === 'feature'))
+  assert.ok(graph.edges.some((e) => e.from === 'RULE-TST-E1' && e.to === 'OBJ-TST-B' && e.kind === 'feature'))
+  const idLayer = Object.fromEntries(graph.nodes.map((n) => [n.id, n.layer]))
+  const fe = graph.edges.find((e) => e.kind === 'feature')
+  assert.equal(idLayer[fe.from], 'O2')
+  assert.equal(idLayer[fe.to], 'O1')
+})

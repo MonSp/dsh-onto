@@ -195,7 +195,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 
 ## Current progress (2026-11-10)
 
-- Version **0.2.1**; full-chain graph (PR #11): scenario `behaviorRefs` / `scoreRefs` / `exclusionRefs` now emit graph edges (default = all, matching runtime), so O3→O2→O1 is traceable and exclusion rules are never isolated; workbench thickens cross-layer edges and legend covers the new kinds. Packages need no migration (graph is built at read time).
+- Version **0.2.1**; optional rule `featureSources` (feature → OBJ/REL) draws rule→object edges; full-chain graph (PR #11): scenario `behaviorRefs` / `scoreRefs` / `exclusionRefs` now emit graph edges (default = all, matching runtime), so O3→O2→O1 is traceable and exclusion rules are never isolated; workbench thickens cross-layer edges and legend covers the new kinds. Packages need no migration (graph is built at read time).
 - **0.2.0**; experience-loop (PR #6) and closed-loop (PR #7, in-node review,
   bulk materialize, skill body update channel) are merged.
 - A full Tabbit natural-language run through every feature (six tabs + right-rail graph +

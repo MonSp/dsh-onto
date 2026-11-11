@@ -124,7 +124,7 @@ node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-
 
 ## 当前进展（2026-11-10）
 
-- 版本 **0.2.1**；全链路图谱：场景 `behaviorRefs`/`scoreRefs`/`exclusionRefs` 入图（缺省=全部，与运行时一致），O3→O2→O1 可追踪、排除规则不再孤立；画布跨层边加粗、图例含新 kind。读侧构图，已签发包零迁移。
+- 版本 **0.2.1**；可选规则 `featureSources`（特征→OBJ/REL）画规则→对象边；全链路图谱：场景 `behaviorRefs`/`scoreRefs`/`exclusionRefs` 入图（缺省=全部，与运行时一致），O3→O2→O1 可追踪、排除规则不再孤立；画布跨层边加粗、图例含新 kind。读侧构图，已签发包零迁移。
 - **0.2.0**；已合入经验闭环（PR#6）与 closed-loop（PR#7，含画布内嵌人审、批量物化、正文更新通道）。
 - Tabbit 全功能自然语言实测走通全流程（六 tab + 右栏图谱 + agent 工具链），据此修复：
   签发门禁（空壳/坏包不再可签）、状态迁移同事务重派生（送审/签发不再 `DERIVED_DRIFT`）、

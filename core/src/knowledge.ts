@@ -79,6 +79,18 @@ export function validateDraftItem(item: unknown): string | null {
   }
   const rationale = it['rationale']
   if (rationale !== undefined && rationale !== null && typeof rationale !== 'string') return 'bad rationale'
+  // featureSources：须为 {特征名: OBJ-*/REL-*} 对象（起草即拒脏类型）
+  if (it['targetKind'] === 'ScoreRule' || it['targetKind'] === 'ExclusionRule') {
+    const fsmap = (payload as Record<string, unknown>)['featureSources']
+    if (fsmap !== undefined && fsmap !== null) {
+      if (typeof fsmap !== 'object' || Array.isArray(fsmap)) return 'bad payload.featureSources'
+      for (const v of Object.values(fsmap as Record<string, unknown>)) {
+        if (typeof v !== 'string' || !/^(OBJ|REL)-[A-Z0-9-]+$/.test(v)) {
+          return 'bad payload.featureSources（值须为 OBJ-*/REL-* 字符串）'
+        }
+      }
+    }
+  }
   // 已知数值字段：出现即须为有限数字（null/缺省视作未填，由物化侧默认）
   const numericFields: Record<string, string[]> = {
     ScoreRule: ['weight', 'threshold'],
@@ -131,6 +143,17 @@ export class KnowledgeError extends Error {
  */
 const REDLINE_HOWTO =
   '（正确路径：新草案 targetKind=RedLine、targetId=场景ID、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）'
+
+/** payload.featureSources 规范化：非对象/空 → undefined；过滤非字符串值。 */
+function featureSourcesOf(p: Record<string, unknown>): { featureSources?: Record<string, string> } {
+  const raw = p['featureSources']
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'string' && v) out[k] = v
+  }
+  return Object.keys(out).length > 0 ? { featureSources: out } : {}
+}
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
@@ -835,8 +858,8 @@ const UPDATABLE: Record<string, string[]> = {
   Attribute: ['name', 'type', 'refObject', 'enumValuesRef'],
   Dictionary: ['name', 'values'],
   BehaviorType: ['name', 'anchor', 'relations', 'states', 'trigger'],
-  ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate'],
-  ExclusionRule: ['name', 'action', 'factor', 'condition'],
+  ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate', 'featureSources'],
+  ExclusionRule: ['name', 'action', 'factor', 'condition', 'featureSources'],
   SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
   ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
@@ -1119,6 +1142,7 @@ export function applyDraftToPackage(
         expression: String(p['expression'] ?? '1'),
         threshold: Number.isFinite(p['threshold'] as number) ? (p['threshold'] as number) : undefined,
         evidenceTemplate: typeof p['evidenceTemplate'] === 'string' ? p['evidenceTemplate'] : undefined,
+        ...featureSourcesOf(p),
       })
       return id
     }
@@ -1130,6 +1154,7 @@ export function applyDraftToPackage(
         action: p['action'] === 'downweight' ? 'downweight' : 'drop',
         factor: Number.isFinite(p['factor'] as number) ? (p['factor'] as number) : undefined,
         condition: String(p['condition'] ?? "tag == 'unknown'"),
+        ...featureSourcesOf(p),
       })
       return id
     }

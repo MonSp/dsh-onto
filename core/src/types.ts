@@ -89,6 +89,11 @@ export interface O2ScoreRule {
   threshold?: number
   /** 证据模板，占位符 {featureName} 以特征值回填。 */
   evidenceTemplate?: string
+  /**
+   * 特征 → 对象/关系 ID（可选，v0.2.1 全链路）：图谱据此画规则→O1 边。
+   * 仅图谱/文档语义，不参与打分；值须闭合到 OBJ-* / REL-*。
+   */
+  featureSources?: Record<string, string>
 }
 
 export interface O2ExclusionRule {
@@ -100,6 +105,8 @@ export interface O2ExclusionRule {
   /** 条件表达式，打分前执行。 */
   condition: string
   description?: string
+  /** 特征 → 对象/关系 ID（可选，同 O2ScoreRule.featureSources）。 */
+  featureSources?: Record<string, string>
 }
 
 export interface O2SkillTemplate {
