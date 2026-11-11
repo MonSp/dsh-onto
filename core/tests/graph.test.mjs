@@ -869,3 +869,35 @@ test('scoreRefs：场景卡 create/update 携带并持久化（UPDATABLE 白名�
     rmWorkspace(root)
   }
 })
+
+
+test('v0.2.1 全链路：场景 behaviorRefs/scoreRefs/exclusionRefs 入图', () => {
+  const explicit = minimalPkg({
+    scenarios: [
+      {
+        ...minimalPkg().scenarios[0],
+        behaviorRefs: ['BHV-TST-X'],
+        scoreRefs: ['RULE-TST-S1'],
+        exclusionRefs: ['RULE-TST-E1'],
+      },
+    ],
+  })
+  const gEx = buildModelGraph({ pkg: explicit })
+  assert.ok(gEx.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'BHV-TST-X' && e.kind === 'behavior-ref'))
+  assert.ok(gEx.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'RULE-TST-S1' && e.kind === 'score-ref'))
+  assert.ok(gEx.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'RULE-TST-E1' && e.kind === 'exclusion-ref'))
+
+  const gAll = buildModelGraph({ pkg: minimalPkg() })
+  assert.ok(gAll.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'BHV-TST-X' && e.kind === 'behavior-ref'))
+  assert.ok(gAll.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'RULE-TST-S1' && e.kind === 'score-ref'))
+  assert.ok(gAll.edges.some((e) => e.from === 'SCN-TST-1' && e.to === 'RULE-TST-E1' && e.kind === 'exclusion-ref'))
+
+  const deg = (g, id) => g.edges.filter((e) => e.from === id || e.to === id).length
+  assert.ok(deg(gEx, 'RULE-TST-E1') >= 1, '显式 exclusionRefs 下排除规则非孤立')
+  assert.ok(deg(gAll, 'RULE-TST-E1') >= 1, '缺省 exclusionRefs 下排除规则非孤立')
+
+  const kinds = new Set(gEx.edges.filter((e) => e.from === 'SCN-TST-1').map((e) => e.kind))
+  for (const k of ['behavior-ref', 'score-ref', 'exclusion-ref', 'scenario-step']) {
+    assert.ok(kinds.has(k), `场景出边含 ${k}`)
+  }
+})

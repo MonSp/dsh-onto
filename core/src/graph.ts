@@ -180,6 +180,17 @@ export function buildModelGraph(input: {
         pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: skillId, kind: 'scenario-step', label: step.stepId })
       }
     }
+    // v0.2.1 全链路：场景语义引用位入图（与 scenario.ts 执行缺省对齐——省略 = 全部）。
+    // 此前 behaviorRefs/scoreRefs/exclusionRefs 只进校验与运行，图上 O3→O2 断链、排除规则可孤立。
+    for (const id of sc.behaviorRefs ?? pkg.behaviors.map((b) => b.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'behavior-ref', label: '行为' })
+    }
+    for (const id of sc.scoreRefs ?? pkg.scoreRules.map((r) => r.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'score-ref', label: '打分' })
+    }
+    for (const id of sc.exclusionRefs ?? pkg.exclusionRules.map((r) => r.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'exclusion-ref', label: '排除' })
+    }
   }
   for (const f of pkg.fieldMaps) {
     const m = f.target.match(/^([A-Z]+-[A-Z0-9-]+)(?:\.[A-Za-z0-9_-]+)?$/)
