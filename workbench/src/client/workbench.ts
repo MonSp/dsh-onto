@@ -4,7 +4,7 @@ import type { Ctx } from './types'
 import { Tag, Field, ErrorBanner, OkBanner, Loading, Row, Card } from './ui'
 import { unwrap, errText, fmt } from './helpers'
 import {
-  GraphCanvas, OG_EDGE,
+  GraphCanvas, OG_EDGE, isCrossLayerEdge,
   type OgGraph, type OgNode, type OgEdge, type ScStepLike,
 } from './graph'
 import { InspectorView } from './inspector'
@@ -346,10 +346,11 @@ export function GraphWorkbench(props: {
       if (e.from === focusScenario) set.add(e.to)
       if (e.to === focusScenario) set.add(e.from)
     }
-    // 两跳：技能→规则、行为→锚点对象
+    // 两跳：技能→规则、行为→锚点、场景 refs→目标（v0.2.1 全链路）
+    const twoHop = new Set(['skill-rule', 'anchor', 'ref', 'behavior-ref', 'score-ref', 'exclusion-ref', 'scenario-step'])
     for (const e of g.edges) {
-      if ((e.kind === 'skill-rule' || e.kind === 'anchor' || e.kind === 'ref') && set.has(e.from)) set.add(e.to)
-      if ((e.kind === 'skill-rule' || e.kind === 'anchor' || e.kind === 'ref') && set.has(e.to)) set.add(e.from)
+      if (twoHop.has(e.kind) && set.has(e.from)) set.add(e.to)
+      if (twoHop.has(e.kind) && set.has(e.to)) set.add(e.from)
     }
     // 行为锚定的对象
     for (const e of g.edges) {
@@ -500,9 +501,13 @@ export function GraphWorkbench(props: {
   let visNodes = layerFilter === 'all'
     ? g.nodes
     : g.nodes.filter((n) => n.draft || n.layer === layerFilter)
-  let visEdges = edgeKindFilter
-    ? g.edges.filter((e) => e.kind === edgeKindFilter)
-    : g.edges
+  const layerById = new Map(g.nodes.map((n) => [n.id, n.layer] as const))
+  let visEdges =
+    edgeKindFilter === 'cross'
+      ? g.edges.filter((e) => isCrossLayerEdge(e.kind, layerById.get(e.from), layerById.get(e.to)))
+      : edgeKindFilter
+        ? g.edges.filter((e) => e.kind === edgeKindFilter)
+        : g.edges
   // 场景步骤链：只显示焦点节点（横向编排更清晰）；其余模式保留全图靠 dim
   if (focusSet && focusScenario) {
     visNodes = visNodes.filter((n) => focusSet.has(n.id))
@@ -828,6 +833,18 @@ export function GraphWorkbench(props: {
                 'div',
                 { className: 'ogc-edge-legend', style: { width: '100%', borderTop: '1px solid #f0f1f4', marginTop: 4, paddingTop: 6 } },
                 h('span', { style: { fontWeight: 650, marginRight: 4 } }, `${t('edgeLegend')}:`),
+                h(
+                  'button',
+                  {
+                    key: 'cross',
+                    type: 'button',
+                    className: edgeKindFilter === 'cross' ? 'on' : '',
+                    onClick: () => setEdgeKindFilter(edgeKindFilter === 'cross' ? null : 'cross'),
+                    title: 'cross-layer O1-O2-O3',
+                  },
+                  h('i', { style: { borderTopColor: '#3b6fd4', borderTopWidth: 3 } }),
+                  t('edgeCross'),
+                ),
                 ...edgeKinds.map((k) =>
                   h(
                     'button',

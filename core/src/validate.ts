@@ -151,6 +151,18 @@ export function validatePackage(
       if (!resolved(ruleId)) err('REF_UNCLOSED', `SKL ${s.id}`, `weights 引用未闭合: ${ruleId}`)
     }
   }
+  // featureSources（v0.2.1）：规则 → O1 引用位；值须为 OBJ-*/REL-* 且闭合
+  for (const r of [...pkg.scoreRules, ...pkg.exclusionRules]) {
+    const fsmap = r.featureSources
+    if (!fsmap) continue
+    for (const [feat, target] of Object.entries(fsmap)) {
+      if (typeof target !== 'string' || !/^(OBJ|REL)-[A-Z0-9-]+$/.test(target)) {
+        err('REF_UNCLOSED', r.id, `featureSources.${feat} 须指向 OBJ-*/REL-*: ${String(target)}`)
+      } else if (!resolved(target)) {
+        err('REF_UNCLOSED', r.id, `featureSources.${feat} 引用未闭合: ${target}`)
+      }
+    }
+  }
   for (const sc of pkg.scenarios) {
     for (const step of sc.pipeline) {
       for (const skillId of step.skillRefs ?? []) {

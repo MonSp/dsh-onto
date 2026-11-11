@@ -50,8 +50,19 @@ export const OG_EDGE: Record<string, string> = {
   dict: '#c4b5a0',
   'skill-rule': '#c4b5a0',
   'scenario-step': '#a8b0c3',
+  // v0.2.1 full-chain: scenario semantic refs (synced with core buildModelGraph)
+  'behavior-ref': '#7c9cbf',
+  'score-ref': '#d4a574',
+  'exclusion-ref': '#c48a8a',
+  feature: '#5b9fd4',
   ref: '#c5cbd6',
   applies: '#c5cbd6',
+}
+
+/** Cross-layer edge (O1-O2-O3): thicker for full-chain visibility. */
+export function isCrossLayerEdge(kind: string, fromLayer?: string, toLayer?: string): boolean {
+  if (!fromLayer || !toLayer || fromLayer === toLayer) return false
+  return ['behavior-ref', 'score-ref', 'exclusion-ref', 'feature', 'scenario-step', 'anchor', 'skill-rule', 'relation', 'ref'].includes(kind)
 }
 
 export type ScStepLike = { stepId: string; stepType: string; order?: string; skillRefs?: string[] }
@@ -518,18 +529,22 @@ export function GraphCanvas(props: {
           const hot = !!(selectedEdge && selectedEdge.from === e.from && selectedEdge.to === e.to && selectedEdge.kind === e.kind)
 const dimE = (!!focusSet || !!selected) && !on
           const d = edgePath(a, b)
+          const layerOf = (id: string): string | undefined => graph.nodes.find((n) => n.id === id)?.layer
+          const cross = isCrossLayerEdge(e.kind, layerOf(e.from), layerOf(e.to))
+          const playing = !!(playSet && (playSet.has(e.from) || playSet.has(e.to)))
+          const op = hitKind && e.kind !== hitKind && !hot ? 0.12 : dimE ? 0.12 : cross ? 0.92 : 0.75
+          
           return h(
             'g',
             { key: `eg-${i}` },
             h('path', {
-              className: `ogc-edge${dimE ? ' dim' : ''}${hot ? ' hot' : ''}`,
+              className: `ogc-edge${dimE ? ' dim' : ''}${hot ? ' hot' : ''}${cross ? ' cross' : ''}`,
               d,
               fill: 'none',
               stroke: OG_EDGE[e.kind] ?? '#c5cbd6',
-              strokeWidth: hot || (playSet && (playSet.has(e.from) || playSet.has(e.to))) ? 2.4 : 1.15,
-              opacity: hitKind && e.kind !== hitKind && !hot ? 0.12 : dimE ? 0.12 : 0.75,
+              strokeWidth: hot || playing ? 2.4 : cross ? 1.6 : 1.15,
               markerEnd: 'url(#ogc-ar)',
-              style: { pointerEvents: 'none' },
+              style: { pointerEvents: 'none', opacity: op },
             }),
             h('path', {
               className: 'ogc-edge-hit',

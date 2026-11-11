@@ -53,7 +53,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 | `runstore.ts` | RunRecord 运行留痕（runs/ 落盘 + phrase 持久后端）+ 两轮对比 + 审计归档 |
 | `experience.ts` | TaskSignature/ExperienceNote 结构检索 + 差异表 + 人审回填 + 抽象巩固/压缩（经验闭环） |
 | `knowledge.ts` / `llm.ts` | 六类原料解析（含 CONVERSATION 对话轮次）、人审队列、物化（含修改/接线与权重归一）、对话草案与骨架门（I6）；HeuristicLlm / DeepSeekLlm |
-| `graph.ts` | 图谱构建（画布数据源）、issue 节点定位（I3） |
+| `graph.ts` | 图谱构建（画布数据源）、issue 节点定位（I3）、场景 refs 全链路边（v0.2.1） |
 | `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge/exp` |
 
 ## 常见故障

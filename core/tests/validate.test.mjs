@@ -385,3 +385,19 @@ test('assertIssueReady：校验错误 → ISSUE_GATE_VALIDATION（先于派生�
     rmWorkspace(root)
   }
 })
+
+test('featureSources：规则→O1 引用闭合（v0.2.1）', () => {
+  const ok = minimalPkg({
+    scoreRules: [{ ...minimalPkg().scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+    exclusionRules: [{ ...minimalPkg().exclusionRules[0], featureSources: { tag: 'REL-TST-AB' } }],
+  })
+  const v1 = validatePackage(ok)
+  assert.ok(!v1.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('featureSources')), JSON.stringify(v1.errors))
+
+  const bad = minimalPkg({
+    scoreRules: [{ ...minimalPkg().scoreRules[0], featureSources: { f1: 'OBJ-TST-GONE', f2: 'not-an-id' } }],
+  })
+  const v2 = validatePackage(bad)
+  assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('OBJ-TST-GONE')), 'dangling OBJ')
+  assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('not-an-id')), 'non OBJ/REL form')
+})

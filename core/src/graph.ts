@@ -76,6 +76,10 @@ function payloadRefTexts(payload: Record<string, unknown>): string[] {
     const v = payload[key]
     if (Array.isArray(v)) v.forEach(take)
   }
+  const fsrc = payload['featureSources']
+  if (fsrc && typeof fsrc === 'object' && !Array.isArray(fsrc)) {
+    for (const v of Object.values(fsrc as Record<string, unknown>)) take(v)
+  }
   const weights = payload['weights']
   if (weights && typeof weights === 'object' && !Array.isArray(weights)) {
     out.push(...Object.keys(weights))
@@ -180,6 +184,17 @@ export function buildModelGraph(input: {
         pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: skillId, kind: 'scenario-step', label: step.stepId })
       }
     }
+    // v0.2.1 全链路：场景语义引用位入图（与 scenario.ts 执行缺省对齐——省略 = 全部）。
+    // 此前 behaviorRefs/scoreRefs/exclusionRefs 只进校验与运行，图上 O3→O2 断链、排除规则可孤立。
+    for (const id of sc.behaviorRefs ?? pkg.behaviors.map((b) => b.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'behavior-ref', label: '行为' })
+    }
+    for (const id of sc.scoreRefs ?? pkg.scoreRules.map((r) => r.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'score-ref', label: '打分' })
+    }
+    for (const id of sc.exclusionRefs ?? pkg.exclusionRules.map((r) => r.id)) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: sc.id, to: id, kind: 'exclusion-ref', label: '排除' })
+    }
   }
   for (const f of pkg.fieldMaps) {
     const m = f.target.match(/^([A-Z]+-[A-Z0-9-]+)(?:\.[A-Za-z0-9_-]+)?$/)
@@ -188,9 +203,15 @@ export function buildModelGraph(input: {
   for (const r of pkg.scoreRules) {
     pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.expression ?? '', 'ref')
     if (r.evidenceTemplate) pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.evidenceTemplate, 'ref')
+    for (const [feat, objId] of Object.entries(r.featureSources ?? {})) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: r.id, to: objId, kind: 'feature', label: feat })
+    }
   }
   for (const r of pkg.exclusionRules) {
     pushIdRefs(edges, edgeSeen, nodeIds, r.id, r.condition ?? '', 'ref')
+    for (const [feat, objId] of Object.entries(r.featureSources ?? {})) {
+      pushEdge(edges, edgeSeen, nodeIds, { from: r.id, to: objId, kind: 'feature', label: feat })
+    }
   }
   // 草案 payload 里的语义引用位（anchor/from/to/refObject/scenarioId/weights 等）
   // 与 update 草案的 targetId（指向被修改的既有元素）

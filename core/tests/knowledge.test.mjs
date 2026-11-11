@@ -1129,3 +1129,22 @@ test('D6：物化成功即自动重派生，loadgate 不再 DERIVED_DRIFT；未�
     rmWorkspace(root)
   }
 })
+
+test('ScoreRule 草案 featureSources 形状（v0.2.1）', () => {
+  const ok = validateDraftItem({
+    layer: 'O2',
+    targetKind: 'ScoreRule',
+    name: 'with-source',
+    payload: { weight: 0.2, expression: '1', featureSources: { f1: 'OBJ-TST-A' } },
+    confidence: 0.9,
+  })
+  assert.equal(ok, null)
+  const bad = validateDraftItem({
+    layer: 'O2',
+    targetKind: 'ScoreRule',
+    name: 'bad-source',
+    payload: { weight: 0.2, expression: '1', featureSources: { f1: 'nope' } },
+    confidence: 0.9,
+  })
+  assert.match(String(bad), /featureSources/)
+})
