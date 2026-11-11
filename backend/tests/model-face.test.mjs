@@ -2,7 +2,7 @@
  * 对话式建模 · 专家面验收（conversational-modeling P4/P6；I3/I5/I7）：
  * 图谱组装、能力清单、专家 Profile、I7 duties 断言、guard 白名单与描述符登记。
  */
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,6 +48,22 @@ import {
 } from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
+
+/** workbench 源：PR#10 拆分后入口 + client/**（源断言扫全量）。 */
+function readWorkbenchClientSrc() {
+  const root = join(REPO, 'workbench', 'src')
+  const parts = []
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const fp = join(dir, name)
+      if (statSync(fp).isDirectory()) walk(fp)
+      else if (name.endsWith('.ts')) parts.push(readFileSync(fp, 'utf8'))
+    }
+  }
+  walk(root)
+  return parts.join('\n')
+}
+
 const AML_DIR = join(REPO, 'packages', 'aml', '1.0.0')
 const AML_RUN = join(REPO, 'examples', 'aml-run.json')
 const NEW_TOOLS = [
@@ -522,13 +538,13 @@ test('P1 修复源断言：wire save/writeSource 自动重派生 + create_packag
   assert.ok(grants.includes("'list_runs'"), 'list_runs 须入 ONTOOL_NAMES')
   assert.ok(grants.includes("'list_drafts'"), 'list_drafts 须入 ONTOOL_NAMES')
 
-  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  const wb = readWorkbenchClientSrc()
   assert.ok(wb.includes('issueConfirm'), 'issue 须 confirm 文案')
   assert.ok(wb.includes("window.confirm(`${t('issueConfirm')}"), 'issue 按钮须 window.confirm')
 
   for (const pkg of ['core', 'backend', 'workbench']) {
     const pj = JSON.parse(readFileSync(join(REPO, pkg, 'package.json'), 'utf8'))
-    assert.equal(pj.version, '0.2.0', `${pkg} package.json version 须 0.2.0`)
+    assert.equal(pj.version, '0.2.1', `${pkg} package.json version 须 0.2.1`)
   }
 })
 
@@ -559,7 +575,7 @@ test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化
   const kb = readFileSync(join(REPO, 'core', 'src', 'knowledge.ts'), 'utf8')
   assert.ok(kb.includes('getCandidate(id: string)'), 'KnowledgeStore 须暴露 getCandidate 供端点前置校验')
 
-  const wb = readFileSync(join(REPO, 'workbench', 'src', 'client.ts'), 'utf8')
+  const wb = readWorkbenchClientSrc()
   assert.ok(wb.includes("approveSkip: '批准已记录，但物化未落地（被跳过）'"), '物化跳过须错误条上墙（不得绿勾吞掉）')
   assert.ok(wb.includes("setError(`${t('approveSkip')}"), '单条批准全跳过须走 setError')
   assert.ok(wb.includes("|| (formMis !== '' && !formBy.trim())"), '误迁移回填 by 前端必拦')
