@@ -55,6 +55,19 @@ test('addDraft：草案只入队列不写包，带 provenance，幂等（I1）',
     const again = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 'turn-2' } })
     assert.equal(again.id, c.id)
 
+    // pending 同 key 重提 = 就地更新载荷（对话轮改文案；此前静默返回旧草案）
+    const revised = store.addDraft({
+      packageId: 'test-pkg',
+      item: { ...item, payload: { id: 'OBJ-TST-NEW', attributes: [{ name: 'a1', type: 'string' }] }, confidence: 0.8, rationale: '补属性' },
+      provenance: { turnId: 'turn-2b' },
+    })
+    assert.equal(revised.id, c.id, '同 key 仍复用同一候选 ID')
+    assert.equal(revised.payload.attributes.length, 1, 'payload 须被新载荷覆盖')
+    assert.equal(revised.rationale, '补属性')
+    assert.equal(revised.confidence, 0.8)
+    assert.equal(revised.provenance.turnId, 'turn-2b', 'provenance 合并更新')
+    assert.equal(store.getCandidate(c.id).payload.attributes.length, 1, '队列已持久化更新')
+
     // 置信度 < 0.75 → 强制人审
     const low = store.addDraft({
       packageId: 'test-pkg',
@@ -802,9 +815,16 @@ test('D6：驳回后同名可重新起草（恢复路径）；pending/merged 仍
       payload: { id: 'OBJ-TST-RETRY', attributes: [] }, confidence: 0.9,
     }
     const c1 = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-1' } })
-    // pending 幂等：同名返回同一条
-    const again = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-2' } })
-    assert.equal(again.id, c1.id, 'pending 仍幂等')
+    // pending 同 key：ID 幂等复用，载荷就地更新（不静默吞掉改文案）
+    const samePayload = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-2' } })
+    assert.equal(samePayload.id, c1.id, 'pending 同 key ID 仍幂等')
+    const fixed = store.addDraft({
+      packageId: 'test-pkg',
+      item: { ...item, payload: { id: 'OBJ-TST-RETRY', attributes: [{ name: 'x', type: 'string' }] } },
+      provenance: { turnId: 't-2b' },
+    })
+    assert.equal(fixed.id, c1.id)
+    assert.equal(fixed.payload.attributes.length, 1, '重提须覆盖旧 payload')
 
     // 驳回
     store.reviewCandidate(c1.id, 'reject')
@@ -815,7 +835,7 @@ test('D6：驳回后同名可重新起草（恢复路径）；pending/merged 仍
     assert.notEqual(c2.id, c1.id, '驳回后同名必须产生新候选 ID')
     assert.equal(c2.status, 'pending')
 
-    // 重试草案自身幂等
+    // 重试草案自身幂等（同 payload 重提仅复用 ID）
     const again2 = store.addDraft({ packageId: 'test-pkg', item, provenance: { turnId: 't-4' } })
     assert.equal(again2.id, c2.id)
 
