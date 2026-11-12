@@ -39,6 +39,7 @@ export function KnowledgePanel(props: {
 
   const reload = useCallback(async () => {
     if (!api || !packageId) return
+    // 不在这里清 error：act/物化可能刚写入 skipped 提示，reload 成功路径不得吞掉
     try {
       const s = unwrap<{ sources: Array<{ id: string; name: string; sourceType: string; parseStatus: string }> }>(
         await api.listSources({ packageId }),
@@ -99,6 +100,7 @@ export function KnowledgePanel(props: {
 
   const doBatchUpload = async () => {
     if (!selected || batchFiles.length === 0) return
+    setError('')
     const items: Array<{ sourceType: string; name: string; content: string }> = []
     try {
       for (const f of batchFiles) {
@@ -129,6 +131,7 @@ export function KnowledgePanel(props: {
   }
 
   const saveDraft = async () => {
+    setError('')
     let parsed: { name?: string; payload?: Record<string, unknown>; rationale?: string; confidence?: number }
     try {
       parsed = JSON.parse(editText)

@@ -42,7 +42,7 @@
       '.ow-textarea{width:100%;min-height:110px;padding:8px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:12px;font-family:var(--dsw-font-mono,monospace);background:transparent;color:inherit;box-sizing:border-box;}',
       '.ow-sel{padding:6px 10px;border:1px solid var(--dsw-alias-line,#d1d5db);border-radius:8px;font-size:13px;background:transparent;color:inherit;}',
       '.ow-stat{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:8px;background:var(--dsw-alias-fill,#f3f4f6);font-size:12px;}',
-      '/* toast fixed top-right, dismissible */',
+      '/* toast fixed top-right（top 由 ui.ts 栈索引内联覆盖，实现竖排堆叠）; dismissible */',
       '.ow-toast{position:fixed;top:14px;right:14px;z-index:1200;display:flex;align-items:flex-start;gap:8px;max-width:min(420px,calc(100vw - 28px));padding:10px 12px 10px 14px;border-radius:10px;box-shadow:0 12px 32px rgba(28,35,51,.18);font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;animation:ow-toast-in .18s ease-out;}',
       '.ow-toast.err{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;z-index:1201;}',
       '.ow-toast.ok{background:#dcfce7;color:#166534;border:1px solid #bbf7d0;}',

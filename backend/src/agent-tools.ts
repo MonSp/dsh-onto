@@ -2727,9 +2727,10 @@ export function apply(ctx: Context): void {
       execute: toolExecute(
         (args: { name: string; version: string }) => {
           let dir: string
+          let pkg: ReturnType<typeof loadPackage>
           try {
             dir = ws.versionDir(args.name, args.version)
-            loadPackage(dir)
+            pkg = loadPackage(dir)
           } catch {
             throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.name}@${args.version}`)
           }
@@ -2747,7 +2748,7 @@ export function apply(ctx: Context): void {
                 warnings: report.warnings.slice(0, 50),
                 reportFile: 'quality-report.json',
               },
-              phrasesOfPkg(loadPackage(dir)),
+              phrasesOfPkg(pkg),
             ),
           )
         },

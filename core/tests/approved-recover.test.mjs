@@ -40,13 +40,17 @@ test('reject：approved（已批未物化）可驳回——中断残留恢复路
   const { root, store } = mkStore()
   try {
     const c = addDict(store, 'pkg-r', 'dict-r-a', '字典甲')
-    store.reviewCandidate(c.id, 'approve')
+    store.reviewCandidate(c.id, 'approve', { reviewedBy: 'workbench' })
     assert.equal(store.getCandidate(c.id).status, 'approved')
     const done = store.reviewCandidate(c.id, 'reject', { reviewedBy: 'agent-tool' })
     assert.equal(done.status, 'rejected')
     assert.equal(done.reviewedBy, 'agent-tool')
+    // 驳回覆盖 reviewedBy 前，原批准留痕挪到 approvedBy/approvedAt
+    assert.equal(done.approvedBy, 'workbench')
+    assert.ok(typeof done.approvedAt === 'string' && done.approvedAt !== '', 'approvedAt 有值')
     const again = store.reviewCandidate(c.id, 'reject')
     assert.equal(again.status, 'rejected')
+    assert.equal(again.approvedBy, 'workbench', '幂等 reject 不丢批准留痕')
   } finally {
     rm(root)
   }

@@ -512,6 +512,11 @@ export class KnowledgeStore {
       if (c.status === 'merged') {
         throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
       }
+      // 驳回会覆盖 reviewedBy：先把原批准留痕挪到 approvedBy/approvedAt，审计链不断。
+      if (c.status === 'approved' && c.reviewedBy !== undefined) {
+        c.approvedBy = c.reviewedBy
+        c.approvedAt = c.reviewedAt
+      }
       c.status = 'rejected'
     } else {
       // merge 仍仅 pending 可入（与 updateCandidate 同口径）
