@@ -134,6 +134,7 @@ export function ModelPanel(props: {
 
   const doSaveEdit = () => {
     if (!edit || readOnly) return
+    setError('')
     let el: Record<string, unknown>
     try {
       el = fromFormData(edit.kind, edit.data)

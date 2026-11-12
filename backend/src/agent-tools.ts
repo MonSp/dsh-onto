@@ -39,6 +39,7 @@ import {
   saveExperienceNote,
   saveRunRecord,
   verifyDerived,
+  writeQualityReport,
   type DraftCandidate,
   type DraftItem,
   type ExperienceNote,
@@ -1542,6 +1543,7 @@ export function apply(ctx: Context): void {
                   name: { type: 'string', required: true },
                   status: { type: 'string', required: true },
                   forcedReview: { type: 'boolean', required: true },
+                  appliedAs: { type: 'string' },
                 },
               },
             },
@@ -1555,7 +1557,9 @@ export function apply(ctx: Context): void {
               .map(
                 (d) =>
                   `- ${String(d.id)} · ${String(d.packageId)} · [${String(d.targetKind)}] ${String(d.name)}`
-                  + ` · ${String(d.status)}${d.forcedReview === true ? ' · 强制人审' : ''}`,
+                  + ` · ${String(d.status)}`
+                  + (typeof d.appliedAs === 'string' && d.appliedAs !== '' ? ` → ${d.appliedAs}` : '')
+                  + `${d.forcedReview === true ? ' · 强制人审' : ''}`,
               )
               .join('\n'),
           )
@@ -1579,6 +1583,7 @@ export function apply(ctx: Context): void {
           name: c.name,
           status: c.status,
           forcedReview: c.forcedReview,
+          ...(typeof c.appliedAs === 'string' && c.appliedAs !== '' ? { appliedAs: c.appliedAs } : {}),
         }))
         return toolOut({ drafts })
       }),
@@ -2368,6 +2373,8 @@ export function apply(ctx: Context): void {
         + '恢复/推进类台词（按提案落盘/继续弄）、包形态与业务范围选择、骨架确认均不构成批准，'
         + '不得引用其作为 humanApproved 依据——未见明确批准先问一句再传。'
         + '物化被门禁跳过时草案保持 approved 可重试；返回每条结果与物化元素 ID。'
+        + '整批先预检（结论性表述/包归属/状态）再 approve，预检失败零状态变更；'
+        + '已 approved 未物化的草案跳过 review 直接重试物化（与工作台同口径）。'
         + '物化成功后自动重派生（无需再手动 derive），包立刻过加载门禁可直接运行/列技能。',
       parameters: {
         candidateIds: { type: 'array', required: true, description: '草案 ID 数组（dc-…）；同批归一，多条权重更新务必一次传入' },
@@ -2390,6 +2397,17 @@ export function apply(ctx: Context): void {
             results: { type: 'array', required: true, items: { type: 'json' } },
             materialized: { type: 'array', required: true, items: { type: 'string' } },
             skipped: { type: 'array', required: true, items: { type: 'json' } },
+            summary: {
+              type: 'object',
+              required: true,
+              additionalProperties: true,
+              properties: {
+                requested: { type: 'number', required: true },
+                merged: { type: 'number', required: true },
+                materializedCount: { type: 'number', required: true },
+                skippedCount: { type: 'number', required: true },
+              },
+            },
             notes: { type: 'array', items: { type: 'string' } },
           },
         },
@@ -2398,11 +2416,13 @@ export function apply(ctx: Context): void {
             results: Array<{ candidateId: string; status: string; appliedAs: string | null }>
             materialized: string[]
             skipped: Array<{ id: string; reason: string }>
+            summary: { requested: number; merged: number; materializedCount: number; skippedCount: number }
             notes?: string[]
           }
+          const s = v.summary
           const lines = v.results.map((r) => `- ${r.candidateId} → ${r.status}${r.appliedAs ? `（${r.appliedAs}）` : ''}`)
-          const head = `同批 ${v.results.length} 条，物化 ${v.materialized.length}：`
-          const skips = v.skipped.map((s) => `跳过 ${s.id}：${s.reason}`)
+          const head = `同批申请 ${s.requested} · merged ${s.merged} · 新物化 ${s.materializedCount} · 跳过 ${s.skippedCount}`
+          const skips = v.skipped.map((s2) => `跳过 ${s2.id}：${s2.reason}`)
           const notes = (v.notes ?? []).map((n) => `注意：${n}`)
           return textBlock([head, ...lines, ...skips, ...notes].join('\n'))
         },
@@ -2418,6 +2438,8 @@ export function apply(ctx: Context): void {
           if (pkg.meta.status === 'ISSUED') {
             throw new AgentToolError('INVALID_ARGS', `${args.name}@${args.version} 已签发只读：请 fork 新版本（P1）`)
           }
+          // 预检整批（状态 + 结论性表述 + 包归属）——任一不过则零状态变更，
+          // 避免「先逐条 approve、中途 CONCLUSION_BLOCKED → 前半已 approved 卡死」。
           for (const id of args.candidateIds) {
             const before = knowledge.getCandidate(id)
             if (normalizePkgId(before.packageId) !== args.name) {
@@ -2426,10 +2448,27 @@ export function apply(ctx: Context): void {
                 `package mismatch: 草案 ${id} 属于 ${before.packageId}，目标包为 ${args.name}`,
               )
             }
+            if (before.status === 'rejected') {
+              throw new AgentToolError(
+                'INVALID_ARGS',
+                `草案 ${id} 已 rejected，不可物化；请重新 draft_elements 后再批`,
+              )
+            }
+            if (before.conclusionLike && before.targetKind !== 'RedLine') {
+              throw new AgentToolError(
+                'CONCLUSION_BLOCKED',
+                `结论性表述禁止进入 ${before.targetKind}（只能落 RedLine 红线）`
+                + '（正确路径：新草案 targetKind=RedLine、targetId=场景ID、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）',
+              )
+            }
           }
-          // approve 与物化同一动作（S1 闭环）；同批一次 materialize → 权重归一按批语义。
+          // 仅 pending 走 review；已 approved（前次中断残留）跳过 review 直接进 materialize
+          // ——与工作台 draftAction 同口径，防 CANDIDATE_FINALIZED 打断重试。
           for (const id of args.candidateIds) {
-            knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'agent-tool' })
+            const c = knowledge.getCandidate(id)
+            if (c.status === 'pending') {
+              knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'agent-tool' })
+            }
           }
           const res = knowledge.materialize(dir, args.candidateIds)
           const results = args.candidateIds.map((id) => {
@@ -2441,6 +2480,7 @@ export function apply(ctx: Context): void {
             }
           })
           const materialized = results.flatMap((r) => (r.appliedAs !== null ? [r.appliedAs] : []))
+          const merged = results.filter((r) => r.status === 'merged').length
           return toolOut(
             enforceOutputPolicy(
               {
@@ -2448,6 +2488,12 @@ export function apply(ctx: Context): void {
                 results,
                 materialized,
                 skipped: res.skipped,
+                summary: {
+                  requested: args.candidateIds.length,
+                  merged,
+                  materializedCount: materialized.length,
+                  skippedCount: res.skipped.length,
+                },
                 // P3-3：接线等结构位回执（多场景未接线等），不静默吞掉
                 ...(res.notes && res.notes.length > 0 ? { notes: res.notes } : {}),
               },
@@ -2466,6 +2512,7 @@ export function apply(ctx: Context): void {
       name: 'reject_draft',
       description:
         '人审动作：驳回一条待审草案（状态置 rejected，留痕可回看；不写包）。'
+        + '允许 pending 或已 approved 未物化（恢复「已批未写」卡死）；merged 拒绝。'
         + 'humanApproved 同 apply_draft 人审契约：仅当用户明确指示驳回时传 true。',
       parameters: {
         candidateId: { type: 'string', required: true, description: '草案 ID（dc-…）' },
@@ -2627,6 +2674,83 @@ export function apply(ctx: Context): void {
           const cap = capabilitiesFor(ws, args.name, args.version)
           const pkg = loadPackage(ws.versionDir(args.name, args.version))
           return toolOut(enforceOutputPolicy(cap, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // 质量报告落盘（对话收尾；与工作台校验视图同源 writeQualityReport）
+  ctx.tools.register(
+    defineTool({
+      name: 'write_quality_report',
+      description:
+        '校验并落盘 quality-report.json（包根，与工作台校验视图同源）。'
+        + '物化/改权重后收尾调用；返回 score/passed/errors/warnings 摘要。'
+        + '只写报告文件，不改模型源、不触发派生；ISSUED 亦可重算报告。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            package: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            score: { type: 'number', required: true },
+            passed: { type: 'boolean', required: true },
+            errorCount: { type: 'number', required: true },
+            warningCount: { type: 'number', required: true },
+            errors: { type: 'array', required: true, items: { type: 'json' } },
+            warnings: { type: 'array', required: true, items: { type: 'json' } },
+            reportFile: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            package: string
+            version: string
+            score: number
+            passed: boolean
+            errorCount: number
+            warningCount: number
+          }
+          const head = v.passed
+            ? `校验通过：${v.package}@${v.version} score=${v.score}（0 error / ${v.warningCount} warn）`
+            : `校验未过：${v.package}@${v.version} score=${v.score}（${v.errorCount} error / ${v.warningCount} warn）——先修 error 再送审`
+          return textBlock(`${head}；已写盘 quality-report.json`)
+        },
+      },
+      execute: toolExecute(
+        (args: { name: string; version: string }) => {
+          let dir: string
+          let pkg: ReturnType<typeof loadPackage>
+          try {
+            dir = ws.versionDir(args.name, args.version)
+            pkg = loadPackage(dir)
+          } catch {
+            throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.name}@${args.version}`)
+          }
+          const report = writeQualityReport(dir)
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                package: report.package,
+                version: report.version,
+                score: report.score,
+                passed: report.passed,
+                errorCount: report.errors.length,
+                warningCount: report.warnings.length,
+                errors: report.errors.slice(0, 50),
+                warnings: report.warnings.slice(0, 50),
+                reportFile: 'quality-report.json',
+              },
+              phrasesOfPkg(pkg),
+            ),
+          )
         },
         [],
         (args) => redlines(args),

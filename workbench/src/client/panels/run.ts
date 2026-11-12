@@ -41,6 +41,7 @@ export function RunPanel(props: {
   const loadRuns = () => {
     if (!api) return
     void (async () => {
+      setError('')
       try {
         const out = unwrap<{ runs: typeof runs }>(await api.listRuns())
         setRuns(out.runs)
@@ -53,6 +54,7 @@ export function RunPanel(props: {
   useEffect(() => {
     if (!api || !selected) return
     void (async () => {
+      setError('')
       try {
         const out = unwrap<{ scenarios: Array<{ id: string; name: string; goal: string }> }>(
           await api.listScenarios({ name: selected.name, version: selected.version }),

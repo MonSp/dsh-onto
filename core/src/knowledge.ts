@@ -494,10 +494,10 @@ export class KnowledgeStore {
     const queue = this.loadQueue()
     const c = queue.find((x) => x.id === id)
     if (!c) throw new KnowledgeError('CANDIDATE_NOT_FOUND', `candidate ${id} not found`)
-    if (c.status !== 'pending') {
-      throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
-    }
     if (action === 'approve') {
+      if (c.status !== 'pending') {
+        throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
+      }
       // 结论性表述不允许批准进任何非 RedLine 目标（§5.3.2）
       if (c.conclusionLike && c.targetKind !== 'RedLine') {
         throw new KnowledgeError(
@@ -507,8 +507,22 @@ export class KnowledgeStore {
       }
       c.status = 'approved'
     } else if (action === 'reject') {
+      // merged 不可驳回；pending/approved（已批未物化，恢复路径）/已 rejected 幂等 → rejected。
+      // approved 可驳回：中断残留的「已批未写」不能卡死在 CANDIDATE_FINALIZED。
+      if (c.status === 'merged') {
+        throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
+      }
+      // 驳回会覆盖 reviewedBy：先把原批准留痕挪到 approvedBy/approvedAt，审计链不断。
+      if (c.status === 'approved' && c.reviewedBy !== undefined) {
+        c.approvedBy = c.reviewedBy
+        c.approvedAt = c.reviewedAt
+      }
       c.status = 'rejected'
     } else {
+      // merge 仍仅 pending 可入（与 updateCandidate 同口径）
+      if (c.status !== 'pending') {
+        throw new KnowledgeError('CANDIDATE_FINALIZED', `candidate ${id} already ${c.status}`)
+      }
       if (!opts.mergeIntoName) {
         throw new KnowledgeError('MERGE_TARGET_REQUIRED', 'merge requires mergeIntoName')
       }
