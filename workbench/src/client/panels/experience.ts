@@ -41,6 +41,7 @@ export function ExperiencePanel(props: {
   const load = () => {
     if (!api) return
     void (async () => {
+      setError('')
       try {
         const out = unwrap<{ experiences: typeof rows }>(await api.listExperiences())
         setRows(out.experiences)

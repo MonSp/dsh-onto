@@ -469,6 +469,9 @@ export interface DraftCandidate extends DraftItem {
   /** 人审留痕：动作执行面（'workbench' 人工直操 / 'agent-tool' 会话代执行）与时间。 */
   reviewedBy?: string
   reviewedAt?: string
+  /** approved→rejected 时保留原批准人/时间（单字段 reviewedBy 会被驳回覆盖，审计链不断）。 */
+  approvedBy?: string
+  approvedAt?: string
   createdAt: string
 }
 

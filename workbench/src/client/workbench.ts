@@ -61,7 +61,7 @@ export function GraphWorkbench(props: {
   })
   const [boardCollapsed, setBoardCollapsed] = useState(false)
   const [derivedCollapsed, setDerivedCollapsed] = useState(false)
-  const panelDragRef = useRef<{ key: string; dx: number; dy: number } | null>(null)
+  const panelDragRef = useRef<{ key: string; dx: number; dy: number; stage: HTMLElement } | null>(null)
 
   const onPanelHandleDown = (e: {
     clientX: number
@@ -89,7 +89,13 @@ export function GraphWorkbench(props: {
     const cur = panelPos[key]
     const left = cur ? cur.left : rRect.left - sRect.left
     const top = cur ? cur.top : rRect.top - sRect.top
-    panelDragRef.current = { key, dx: e.clientX - sRect.left - left, dy: e.clientY - sRect.top - top }
+    // stage 存进 ref：move 不再 document.querySelector（多实例/时序安全）
+    panelDragRef.current = {
+      key,
+      dx: e.clientX - sRect.left - left,
+      dy: e.clientY - sRect.top - top,
+      stage,
+    }
     if (typeof e.pointerId === 'number' && handle.setPointerCapture) {
       try { handle.setPointerCapture(e.pointerId) } catch { /* ignore */ }
     }
@@ -98,9 +104,7 @@ export function GraphWorkbench(props: {
   const onPanelHandleMove = (e: { clientX: number; clientY: number }) => {
     const drag = panelDragRef.current
     if (!drag) return
-    const stage = document.querySelector('.ogc-stage') as HTMLElement | null
-    if (!stage) return
-    const sRect = stage.getBoundingClientRect()
+    const sRect = drag.stage.getBoundingClientRect()
     const left = Math.max(0, Math.min(e.clientX - sRect.left - drag.dx, sRect.width - 100))
     const top = Math.max(0, Math.min(e.clientY - sRect.top - drag.dy, sRect.height - 36))
     setPanelPos((m) => ({ ...m, [drag.key]: { left, top } }))
@@ -108,6 +112,20 @@ export function GraphWorkbench(props: {
 
   const onPanelHandleUp = () => {
     panelDragRef.current = null
+  }
+
+  /** 双击把手 → 回 CSS 默认位（清掉拖拽 left/top）。 */
+  const onPanelHandleDoubleClick = (e: { currentTarget: EventTarget; target?: EventTarget | null; stopPropagation?: () => void }) => {
+    const tgt = (e.target ?? null) as HTMLElement | null
+    if (tgt?.closest?.('.ogc-float-toggle, .ogc-float-close')) {
+      e.stopPropagation?.()
+      return
+    }
+    const handle = e.currentTarget as HTMLElement
+    const root = handle.closest('[data-panel]') as HTMLElement | null
+    const key = root?.getAttribute('data-panel') || ''
+    if (!key) return
+    setPanelPos((m) => ({ ...m, [key]: null }))
   }
 
   const panelStyle = (key: string): { left?: number; top?: number; right?: string; bottom?: string } | undefined => {
@@ -946,7 +964,8 @@ export function GraphWorkbench(props: {
               onPointerMove: onPanelHandleMove,
               onPointerUp: onPanelHandleUp,
               onPointerCancel: onPanelHandleUp,
-              title: '拖动',
+              onDoubleClick: onPanelHandleDoubleClick,
+              title: '拖动；双击复位',
             },
             h('h4', null, t('statusBoard')),
             h(
@@ -997,6 +1016,8 @@ export function GraphWorkbench(props: {
                       if (!dApi || !selected) return
                       void (async () => {
                         setBusy('derive')
+                        setError('')
+                        setInfo('')
                         try {
                           unwrap(await dApi.derive({ name: selected.name, version: selected.version }))
                           await loadStatus()
@@ -1067,7 +1088,8 @@ export function GraphWorkbench(props: {
             onPointerMove: onPanelHandleMove,
             onPointerUp: onPanelHandleUp,
             onPointerCancel: onPanelHandleUp,
-            title: '拖动',
+            onDoubleClick: onPanelHandleDoubleClick,
+            title: '拖动；双击复位',
           },
           h('h4', null, t('derivedView')),
           h(
