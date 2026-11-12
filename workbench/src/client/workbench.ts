@@ -54,6 +54,67 @@ export function GraphWorkbench(props: {
   /** 用户布局偏好；聚焦场景时强制步骤链。 */
   const [layoutPref, setLayoutPref] = useState<'force' | 'column' | 'chain'>('force')
   const [labelMode, setLabelMode] = useState<'main' | 'all' | 'hover'>('main')
+  /** 悬浮面板拖拽位置（相对 .ogc-stage）；key = floats | derived；null = CSS 默认位。 */
+  const [panelPos, setPanelPos] = useState<Record<string, { left: number; top: number } | null>>({
+    floats: null,
+    derived: null,
+  })
+  const [boardCollapsed, setBoardCollapsed] = useState(false)
+  const [derivedCollapsed, setDerivedCollapsed] = useState(false)
+  const panelDragRef = useRef<{ key: string; dx: number; dy: number } | null>(null)
+
+  const onPanelHandleDown = (e: {
+    clientX: number
+    clientY: number
+    currentTarget: EventTarget
+    target?: EventTarget | null
+    pointerId?: number
+    preventDefault?: () => void
+    stopPropagation?: () => void
+  }) => {
+    // 折叠/关闭按钮在把手内：不进入拖拽，避免 pointer capture 吞掉 click
+    const tgt = (e.target ?? null) as HTMLElement | null
+    if (tgt?.closest?.('.ogc-float-toggle, .ogc-float-close')) {
+      e.stopPropagation?.()
+      return
+    }
+    const handle = e.currentTarget as HTMLElement
+    const root = handle.closest('[data-panel]') as HTMLElement | null
+    const stage = root?.closest('.ogc-stage') as HTMLElement | null
+    if (!root || !stage) return
+    const key = root.getAttribute('data-panel') || ''
+    e.preventDefault?.()
+    const rRect = root.getBoundingClientRect()
+    const sRect = stage.getBoundingClientRect()
+    const cur = panelPos[key]
+    const left = cur ? cur.left : rRect.left - sRect.left
+    const top = cur ? cur.top : rRect.top - sRect.top
+    panelDragRef.current = { key, dx: e.clientX - sRect.left - left, dy: e.clientY - sRect.top - top }
+    if (typeof e.pointerId === 'number' && handle.setPointerCapture) {
+      try { handle.setPointerCapture(e.pointerId) } catch { /* ignore */ }
+    }
+  }
+
+  const onPanelHandleMove = (e: { clientX: number; clientY: number }) => {
+    const drag = panelDragRef.current
+    if (!drag) return
+    const stage = document.querySelector('.ogc-stage') as HTMLElement | null
+    if (!stage) return
+    const sRect = stage.getBoundingClientRect()
+    const left = Math.max(0, Math.min(e.clientX - sRect.left - drag.dx, sRect.width - 100))
+    const top = Math.max(0, Math.min(e.clientY - sRect.top - drag.dy, sRect.height - 36))
+    setPanelPos((m) => ({ ...m, [drag.key]: { left, top } }))
+  }
+
+  const onPanelHandleUp = () => {
+    panelDragRef.current = null
+  }
+
+  const panelStyle = (key: string): { left?: number; top?: number; right?: string; bottom?: string } | undefined => {
+    const p = panelPos[key]
+    if (!p) return undefined
+    return { left: p.left, top: p.top, right: 'auto', bottom: 'auto' }
+  }
 
   const loadGraph = useCallback(async () => {
     if (!api || !kApi || !selected) return
@@ -866,126 +927,217 @@ export function GraphWorkbench(props: {
             )
           : h('p', { className: 'ow-note', style: { padding: 24 } }, t('loading')),
       ),
-      // 状态板浮在画布右上
+      // 悬浮栈：状态板 +（有选中时）检视器/包问题——可拖拽、状态板可折叠
       h(
         'div',
-        { className: 'ogc-board' },
-        h('h4', null, t('statusBoard')),
-        h('div', { className: 'sb-row' },
-          h('span', null, t('qualityScore')),
-          h('b', { className: errN === 0 && quality ? 'ok' : 'warn' },
-            quality && typeof quality.score === 'number' ? String(quality.score) : '—')),
-        h('div', { className: 'sb-row' },
-          h('span', null, t('validateErrors')),
-          h('b', { className: errN === 0 ? 'ok' : 'err' }, String(errN))),
-        h('div', { className: 'sb-row' },
-          h('span', null, t('deriveGate')),
-          h('b', { className: gateOk === true ? 'ok' : gateOk === false ? 'err' : '' },
-            gateOk === true ? t('gateOk') : gateOk === false ? t('drift') : t('gateUnknown'))),
-        h('div', { className: 'sb-row' },
-          h('span', null, t('draftCount')),
-          h('b', { className: draftCount > 0 ? 'warn' : 'ok' }, String(draftCount))),
-        h('div', { className: 'sb-row' },
-          h('span', null, t('needReviewRuns')),
-          h('b', null, needReviewN === null ? '—' : String(needReviewN))),
+        {
+          className: 'ogc-floats',
+          'data-panel': 'floats',
+          style: panelStyle('floats'),
+        },
         h(
           'div',
-          { className: 'ogc-board-actions' },
-          h('button', { disabled: !!busy, onClick: () => void loadStatus() }, t('validateBtn')),
-          h('button', {
-            disabled: !!busy,
-            onClick: () => {
-              const dApi = apis.remote['ontoDerive']
-              if (!dApi || !selected) return
-              void (async () => {
-                setBusy('derive')
-                try {
-                  unwrap(await dApi.derive({ name: selected.name, version: selected.version }))
-                  await loadStatus()
-                  setInfo(`✓ ${t('deriveBtn')}`)
-                } catch (e) {
-                  setError(errText(e))
-                } finally {
-                  setBusy('')
-                }
-              })()
+          { className: `ogc-board${boardCollapsed ? ' collapsed' : ''}` },
+          h(
+            'div',
+            {
+              className: 'ogc-float-handle',
+              onPointerDown: onPanelHandleDown,
+              onPointerMove: onPanelHandleMove,
+              onPointerUp: onPanelHandleUp,
+              onPointerCancel: onPanelHandleUp,
+              title: '拖动',
             },
-          }, t('deriveBtn')),
-        ),
-      ),
-      h(
-        'div',
-        { className: `ogc-derived${derivedOpen ? ' on' : ''}` },
-        h('h4', null, t('derivedView')),
-        h('p', { className: 'note' }, t('derivedHint')),
-        h(
-          'div',
-          { className: 'ow-row' },
-          h('span', { className: 'ow-stat' }, `${t('modelLayers')} O1 ${layerCounts.O1} · O2 ${layerCounts.O2} · O3 ${layerCounts.O3}`),
-          h('span', { className: 'ow-stat' }, `${t('derivedEvents')}: ${derivedRuns.length}`),
-          h('span', { className: 'ow-stat' }, `run-hit ${runHitN}`),
-        ),
-        derivedRuns.length === 0
-          ? h('p', { className: 'ow-note' }, t('derivedEmpty'))
-          : h(
-              'div',
-              { className: 'ow-row', style: { alignItems: 'flex-start' } },
-              ...derivedRuns.map((r, i) =>
+            h('h4', null, t('statusBoard')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'ogc-float-toggle',
+                onPointerDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
+                onClick: (e: { stopPropagation?: () => void }) => {
+                  e.stopPropagation?.()
+                  setBoardCollapsed((v) => !v)
+                },
+                title: boardCollapsed ? '展开' : '收起',
+              },
+              boardCollapsed ? '+' : '−',
+            ),
+          ),
+          boardCollapsed
+            ? null
+            : h(
+                'div',
+                { className: 'ogc-board-body' },
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('qualityScore')),
+                  h('b', { className: errN === 0 && quality ? 'ok' : 'warn' },
+                    quality && typeof quality.score === 'number' ? String(quality.score) : '—')),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('validateErrors')),
+                  h('b', { className: errN === 0 ? 'ok' : 'err' }, String(errN))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('deriveGate')),
+                  h('b', { className: gateOk === true ? 'ok' : gateOk === false ? 'err' : '' },
+                    gateOk === true ? t('gateOk') : gateOk === false ? t('drift') : t('gateUnknown'))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('draftCount')),
+                  h('b', { className: draftCount > 0 ? 'warn' : 'ok' }, String(draftCount))),
+                h('div', { className: 'sb-row' },
+                  h('span', null, t('needReviewRuns')),
+                  h('b', null, needReviewN === null ? '—' : String(needReviewN))),
                 h(
                   'div',
-                  {
-                    key: i,
-                    className: 'ow-stat',
-                    style: { flexDirection: 'column', alignItems: 'flex-start', gap: 2, maxWidth: 240 },
-                  },
-                  h('b', { className: 'ow-mono', style: { fontSize: 11 } }, String(r['runId'] ?? '—')),
-                  h('span', { className: 'ow-note' },
-                    `${String(r['scenarioId'] ?? r['scenario'] ?? '')} · ${String(r['auditPassed'] ?? r['passed'] ?? '')}`),
+                  { className: 'ogc-board-actions' },
+                  h('button', { disabled: !!busy, onClick: () => void loadStatus() }, t('validateBtn')),
+                  h('button', {
+                    disabled: !!busy,
+                    onClick: () => {
+                      const dApi = apis.remote['ontoDerive']
+                      if (!dApi || !selected) return
+                      void (async () => {
+                        setBusy('derive')
+                        try {
+                          unwrap(await dApi.derive({ name: selected.name, version: selected.version }))
+                          await loadStatus()
+                          setInfo(`✓ ${t('deriveBtn')}`)
+                        } catch (e) {
+                          setError(errText(e))
+                        } finally {
+                          setBusy('')
+                        }
+                      })()
+                    },
+                  }, t('deriveBtn')),
                 ),
               ),
-            ),
-      ),
-    ),
-    // 右检视器
-    h(
-      'div',
-      { className: 'ogc-side' },
-      h(InspectorView, {
-        t,
-        graph: g,
-        node: nodeObj,
-        edge: selectedEdge,
-        pkg,
-        candidates,
-        busy,
-        readOnly,
-        onDraftAction: draftAction,
-        onClear: clearGraphSel,
-        stepDetail: focusScenario && playIndex >= 0 && pipeline[playIndex]
-          ? {
-              stepId: pipeline[playIndex].stepId,
-              stepType: pipeline[playIndex].stepType,
-              order: pipeline[playIndex].order,
-              label: pipeline[playIndex].label,
-              refs: Array.from(playSet ?? []),
-            }
+        ),
+        // 有选中才浮出详情；未选中不占位
+        nodeObj || selectedEdge || (focusScenario && playIndex >= 0 && pipeline[playIndex])
+          ? h(InspectorView, {
+              t,
+              graph: g,
+              node: nodeObj,
+              edge: selectedEdge,
+              pkg,
+              candidates,
+              busy,
+              readOnly,
+              onDraftAction: draftAction,
+              onClear: clearGraphSel,
+              stepDetail: focusScenario && playIndex >= 0 && pipeline[playIndex]
+                ? {
+                    stepId: pipeline[playIndex].stepId,
+                    stepType: pipeline[playIndex].stepType,
+                    order: pipeline[playIndex].order,
+                    label: pipeline[playIndex].label,
+                    refs: Array.from(playSet ?? []),
+                  }
+                : null,
+            })
           : null,
-      }),
-      pkgIssues.length > 0
-        ? h(
-            'div',
-            { style: { padding: '0 12px 12px' } },
-            h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
-            ...pkgIssues.slice(0, 8).map((i, k) =>
+        pkgIssues.length > 0
+          ? h(
+              'div',
+              { className: 'ogc-float-issues' },
+              h('b', { className: 'ow-note' }, `${t('pkgIssues')}（${pkgIssues.length}）`),
+              ...pkgIssues.slice(0, 8).map((i, k) =>
+                h(
+                  'div',
+                  { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
+                  h('b', null, i.code),
+                  ' ',
+                  i.message,
+                )),
+            )
+          : null,
+      ),
+      h(
+        'div',
+        {
+          className: `ogc-derived${derivedOpen ? ' on' : ''}${derivedCollapsed ? ' collapsed' : ''}`,
+          'data-panel': 'derived',
+          style: panelStyle('derived'),
+        },
+        h(
+          'div',
+          {
+            className: 'ogc-float-handle',
+            onPointerDown: onPanelHandleDown,
+            onPointerMove: onPanelHandleMove,
+            onPointerUp: onPanelHandleUp,
+            onPointerCancel: onPanelHandleUp,
+            title: '拖动',
+          },
+          h('h4', null, t('derivedView')),
+          h(
+            'span',
+            { className: 'ogc-float-btns' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'ogc-float-toggle',
+                onPointerDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
+                onClick: (e: { stopPropagation?: () => void }) => {
+                  e.stopPropagation?.()
+                  setDerivedCollapsed((v) => !v)
+                },
+                title: derivedCollapsed ? '展开' : '收起',
+              },
+              derivedCollapsed ? '+' : '−',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'ogc-float-toggle',
+                onPointerDown: (e: { stopPropagation?: () => void }) => e.stopPropagation?.(),
+                onClick: (e: { stopPropagation?: () => void }) => {
+                  e.stopPropagation?.()
+                  setDerivedOpen(false)
+                  setDerivedCollapsed(false)
+                },
+                title: '关闭',
+              },
+              '×',
+            ),
+          ),
+        ),
+        derivedCollapsed
+          ? null
+          : h(
+              'div',
+              { className: 'ogc-derived-body' },
+              h('p', { className: 'note' }, t('derivedHint')),
               h(
                 'div',
-                { key: k, className: i.level === 'warn' ? 'ogc-issue warn' : 'ogc-issue' },
-                h('b', null, i.code),
-                ' ',
-                i.message,
-              )),
-          )
-        : null,
+                { className: 'ow-row' },
+                h('span', { className: 'ow-stat' }, `${t('modelLayers')} O1 ${layerCounts.O1} · O2 ${layerCounts.O2} · O3 ${layerCounts.O3}`),
+                h('span', { className: 'ow-stat' }, `${t('derivedEvents')}: ${derivedRuns.length}`),
+                h('span', { className: 'ow-stat' }, `run-hit ${runHitN}`),
+              ),
+              derivedRuns.length === 0
+                ? h('p', { className: 'ow-note' }, t('derivedEmpty'))
+                : h(
+                    'div',
+                    { className: 'ow-row', style: { alignItems: 'flex-start' } },
+                    ...derivedRuns.map((r, i) =>
+                      h(
+                        'div',
+                        {
+                          key: i,
+                          className: 'ow-stat',
+                          style: { flexDirection: 'column', alignItems: 'flex-start', gap: 2, maxWidth: 240 },
+                        },
+                        h('b', { className: 'ow-mono', style: { fontSize: 11 } }, String(r['runId'] ?? '—')),
+                        h('span', { className: 'ow-note' },
+                          `${String(r['scenarioId'] ?? r['scenario'] ?? '')} · ${String(r['auditPassed'] ?? r['passed'] ?? '')}`),
+                      ),
+                    ),
+                  ),
+            ),
+      ),
     ),
   )
 }

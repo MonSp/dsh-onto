@@ -46,6 +46,7 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   // D3：对话建包 / 骨架落盘（人审契约同族；缺登记则 guard 静默跳过）
   'create_package',
   'save_skeleton',
+  'write_quality_report',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

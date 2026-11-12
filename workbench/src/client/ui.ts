@@ -1,4 +1,4 @@
-import { h } from './react'
+import { h, useState, useEffect } from './react'
 import type { ReactNode } from './types'
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -28,16 +28,41 @@ export function Card(props: { title?: string; children?: ReactNode }) {
   )
 }
 
-/** 统一错误条：所有面板的错误一律走这里，可见不吞。 */
-export function ErrorBanner(props: { text: string }) {
-  if (!props.text) return null
-  return h('p', { className: 'ow-err', role: 'alert' }, props.text)
+/** 悬浮提示壳：fixed 右上角、可点 × 关闭；text 变更时重新露出。 */
+function Toast(props: { text: string; kind: 'err' | 'ok'; role?: string }) {
+  const [hidden, setHidden] = useState(false)
+  const text = props.text
+  useEffect(() => {
+    setHidden(false)
+  }, [text])
+  if (!text || hidden) return null
+  return h(
+    'div',
+    { className: `ow-toast ${props.kind}`, role: props.role },
+    h('span', { className: 'ow-toast-msg' }, text),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'ow-toast-x',
+        'aria-label': 'close',
+        onClick: () => setHidden(true),
+      },
+      '×',
+    ),
+  )
 }
 
-/** 统一成功/信息条。 */
+/** 统一错误悬浮提示：所有面板的错误一律走这里，可见不吞、可关闭。 */
+export function ErrorBanner(props: { text: string }) {
+  if (!props.text) return null
+  return h(Toast, { text: props.text, kind: 'err', role: 'alert' })
+}
+
+/** 统一成功/信息悬浮提示。 */
 export function OkBanner(props: { text: string }) {
   if (!props.text) return null
-  return h('p', { className: 'ow-ok' }, props.text)
+  return h(Toast, { text: props.text, kind: 'ok' })
 }
 
 /** 统一加载态。 */

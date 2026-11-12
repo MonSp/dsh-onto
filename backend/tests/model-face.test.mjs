@@ -76,6 +76,7 @@ const NEW_TOOLS = [
   'invoke_expert',
   'create_package',
   'save_skeleton',
+  'write_quality_report',
   'recall_experience',
   'annotate_experience',
   'abstract_experience',
@@ -533,10 +534,17 @@ test('P1 修复源断言：wire save/writeSource 自动重派生 + create_packag
   assert.ok(at.includes('骨架未确认，不得对话起草'), 'draft_elements 须已确认骨架')
   assert.ok(at.includes("name: 'list_runs'"), 'list_runs 须注册')
   assert.ok(at.includes("name: 'list_drafts'"), 'list_drafts 须注册')
+  assert.ok(at.includes("name: 'write_quality_report'"), 'write_quality_report 须注册')
+  assert.ok(at.includes('materializedCount'), 'apply_draft 须回 summary.materializedCount')
+  assert.ok(at.includes('appliedAs'), 'list_drafts 须投影 appliedAs')
+  // 已批未写恢复：预检整批 + 跳过已 approved 的 review（防 CANDIDATE_FINALIZED 卡死）
+  assert.ok(at.includes('预检整批'), 'apply_draft 须整批预检后再 approve')
+  assert.ok(at.includes("c.status === 'pending'"), 'apply_draft 仅对 pending 走 review')
 
   const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
   assert.ok(grants.includes("'list_runs'"), 'list_runs 须入 ONTOOL_NAMES')
   assert.ok(grants.includes("'list_drafts'"), 'list_drafts 须入 ONTOOL_NAMES')
+  assert.ok(grants.includes("'write_quality_report'"), 'write_quality_report 须入 ONTOOL_NAMES')
 
   const wb = readWorkbenchClientSrc()
   assert.ok(wb.includes('issueConfirm'), 'issue 须 confirm 文案')
