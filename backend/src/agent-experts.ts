@@ -397,8 +397,17 @@ export function registerExpertTools(
             const { cards, phrases } = buildExpertIndex(ws.listVersions())
             return toolOut(enforceOutputPolicy({ experts: [], derived: false, index: cards }, phrases))
           }
-          const out = buildExpertProfiles(ws.versionDir(args.name as string, args.version as string))
-          const pkg = loadPackage(ws.versionDir(args.name as string, args.version as string))
+          // 不存在/损坏包统一 NOT_FOUND（versionDir 对缺失路径返回 direct 不抛，
+          // loadPackage 会报 PACKAGE_MALFORMED——与 loadToolPackage 同口径，不回显底层原因）。
+          let out: ReturnType<typeof buildExpertProfiles>
+          let pkg: ReturnType<typeof loadPackage>
+          try {
+            const versionDir = ws.versionDir(args.name as string, args.version as string)
+            out = buildExpertProfiles(versionDir)
+            pkg = loadPackage(versionDir)
+          } catch {
+            throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.name}@${args.version}`)
+          }
           return toolOut(enforceOutputPolicy(out, phrasesOf(pkg)))
         },
         [],

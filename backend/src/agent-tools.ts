@@ -2265,6 +2265,8 @@ export function apply(ctx: Context): void {
         + '标量字段覆盖、weights 按键并入、数组整替，append.<字段>=[…] 追加去重（如给行为接关系）。'
         + '改 ScoreRule.weight 会联动归一（显式权重为准，未动规则吸收残差，并同步技能模板权重）。'
         + '置信度 <0.75 自动 forcedReview；结论性表述只能 targetKind=RedLine。'
+        + '同 (包+层+kind+name) 对 pending 草案重提会就地更新载荷（改文案直接再 draft 同名即可）；'
+        + 'approved/merged 不覆盖——须 reject_draft 后重提，或对既有元素用 op=update。'
         + '平台建模全流程（骨架人工确认 → 分片起草 → 人审 → 签发派生）见 onto-modeling 技能正文。'
         + '可选 turnText 同时落 CONVERSATION 原料留痕（P3，含 turnId/rationale）。ISSUED 包拒绝（先 fork）。',
       parameters: {
@@ -2458,7 +2460,7 @@ export function apply(ctx: Context): void {
               throw new AgentToolError(
                 'CONCLUSION_BLOCKED',
                 `结论性表述禁止进入 ${before.targetKind}（只能落 RedLine 红线）`
-                + '（正确路径：新草案 targetKind=RedLine、targetId=场景ID、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）',
+                + '（正确路径：新草案 targetKind=RedLine、targetId=场景ID 或 payload.scenarioId、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）',
               )
             }
           }

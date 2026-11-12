@@ -748,6 +748,125 @@ test('E1-3 多场景无 scenarioId 不猜接线；单场景缺省接线', () => 
   assert.ok(refs.includes('SKL-TST-EXP-S'))
 })
 
+/* ── RedLine 定位：targetId / payload.scenarioId；多场景不猜 ────────────── */
+
+test('RedLine 物化：targetId 与 payload.scenarioId 等价定位；单场景缺省仍可落', () => {
+  const viaTarget = minimalPkg()
+  applyDraftToPackage(viaTarget, {
+    layer: 'O3', targetKind: 'RedLine', name: '禁语A',
+    targetId: 'SCN-TST-1',
+    payload: { phrases: ['认定甲违规'] },
+    confidence: 0.9, rationale: '', conclusionLike: true,
+  })
+  assert.ok(viaTarget.scenarios[0].outputContract.forbiddenPhrases.includes('认定甲违规'))
+
+  const viaPayload = minimalPkg()
+  applyDraftToPackage(viaPayload, {
+    layer: 'O3', targetKind: 'RedLine', name: '禁语B',
+    payload: { scenarioId: 'SCN-TST-1', phrases: ['确定为乙'] },
+    confidence: 0.9, rationale: '', conclusionLike: true,
+  })
+  assert.ok(viaPayload.scenarios[0].outputContract.forbiddenPhrases.includes('确定为乙'))
+
+  const single = minimalPkg()
+  applyDraftToPackage(single, {
+    layer: 'O3', targetKind: 'RedLine', name: '禁语C',
+    payload: { phrases: ['已构成丙'] },
+    confidence: 0.9, rationale: '', conclusionLike: true,
+  })
+  assert.ok(single.scenarios[0].outputContract.forbiddenPhrases.includes('已构成丙'))
+})
+
+test('RedLine 多场景：无显式场景 ID fail-loud；显式 targetId 落对场景', () => {
+  const base = minimalPkg()
+  const sc2 = JSON.parse(JSON.stringify(base.scenarios[0]))
+  sc2.id = 'SCN-TST-2'
+  sc2.name = '第二场景'
+  sc2.outputContract = { mustInclude: ['candidateList'], forbiddenPhrases: [] }
+  const multi = minimalPkg({ scenarios: [base.scenarios[0], sc2] })
+
+  assert.throws(
+    () => applyDraftToPackage(multi, {
+      layer: 'O3', targetKind: 'RedLine', name: '无定位',
+      payload: { phrases: ['认定错挂'] },
+      confidence: 0.9, rationale: '', conclusionLike: true,
+    }),
+    /REDLINE_NEEDS_SCENARIO|多场景包红线须显式/,
+  )
+  assert.ok(!multi.scenarios[0].outputContract.forbiddenPhrases.includes('认定错挂'), '不得静默挂首场景')
+  assert.ok(!multi.scenarios[1].outputContract.forbiddenPhrases.includes('认定错挂'))
+
+  applyDraftToPackage(multi, {
+    layer: 'O3', targetKind: 'RedLine', name: '挂二场景',
+    targetId: 'SCN-TST-2',
+    payload: { phrases: ['认定错挂'] },
+    confidence: 0.9, rationale: '', conclusionLike: true,
+  })
+  assert.ok(multi.scenarios[1].outputContract.forbiddenPhrases.includes('认定错挂'))
+  assert.ok(!multi.scenarios[0].outputContract.forbiddenPhrases.includes('认定错挂'))
+
+  assert.throws(
+    () => applyDraftToPackage(multi, {
+      layer: 'O3', targetKind: 'RedLine', name: '坏场景',
+      targetId: 'SCN-NOPE',
+      payload: { phrases: ['认定不存在'] },
+      confidence: 0.9, rationale: '', conclusionLike: true,
+    }),
+    /红线目标场景不存在/,
+  )
+})
+
+test('ScenarioCard create：outputContract.mustInclude 与顶层 mustInclude 同源归一', () => {
+  const top = minimalPkg()
+  top.scenarios = []
+  applyDraftToPackage(top, {
+    layer: 'O3', targetKind: 'ScenarioCard', name: '场景顶',
+    payload: {
+      id: 'SCN-TST-NEW-T', name: '顶', goal: 'g', boundary: 'b',
+      inputs: [], outputs: { fields: [] }, pipeline: [],
+      mustInclude: ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks'],
+    },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.deepEqual(
+    top.scenarios[0].outputContract.mustInclude,
+    ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks'],
+  )
+
+  const nested = minimalPkg()
+  nested.scenarios = []
+  applyDraftToPackage(nested, {
+    layer: 'O3', targetKind: 'ScenarioCard', name: '场景嵌',
+    payload: {
+      id: 'SCN-TST-NEW-N', name: '嵌', goal: 'g', boundary: 'b',
+      inputs: [], outputs: { fields: [] }, pipeline: [],
+      outputContract: {
+        mustInclude: ['candidateList', 'riskScore', 'hitRuleIds', 'evidenceChains', 'pendingChecks'],
+        forbiddenPhrases: [],
+      },
+    },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.deepEqual(
+    nested.scenarios[0].outputContract.mustInclude,
+    ['candidateList', 'riskScore', 'hitRuleIds', 'evidenceChains', 'pendingChecks'],
+    'outputContract.mustInclude 须生效而非默认四键',
+  )
+  assert.deepEqual(nested.scenarios[0].outputContract.forbiddenPhrases, [])
+
+  const def = minimalPkg()
+  def.scenarios = []
+  applyDraftToPackage(def, {
+    layer: 'O3', targetKind: 'ScenarioCard', name: '场景缺',
+    payload: { id: 'SCN-TST-NEW-D', name: '缺', goal: 'g', boundary: 'b', inputs: [], outputs: { fields: [] }, pipeline: [] },
+    confidence: 0.9, rationale: '', conclusionLike: false,
+  })
+  assert.deepEqual(
+    def.scenarios[0].outputContract.mustInclude,
+    ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks'],
+  )
+})
+
 /* ── P3-3：SkillTemplate 接线结果经 materialize notes 上墙 ── */
 
 test('P3-3：多场景无 scenarioId 物化回执 notes 提示未接线；带 scenarioId 则接线且无 notes', () => {

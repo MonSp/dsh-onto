@@ -638,3 +638,45 @@ test('L4 空全局索引：render 走 index 分支（不落明细「duties 未�
     'render 须以 index 键存在与否分支，而非 length>0',
   )
 })
+
+test('list_experts：不存在包统一 NOT_FOUND（不回显 PACKAGE_MALFORMED/missing package.yaml meta）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-onto-mf-ne-'))
+  try {
+    const ws = new PackageWorkspace(join(root, 'workspace'))
+    const tools = new Map()
+    const ctx = { tools: { register: (def) => void tools.set(def.name, def) } }
+    registerExpertTools(ctx, {
+      ws,
+      loadGated: (name, version) => loadToolPackage(ws, name, version),
+      redlines: () => [],
+      loadDatasetFromArgs,
+      textBlock: (text) => [{ type: 'text', text }],
+      toolOut: (v) => v,
+    })
+    const list = tools.get('list_experts')
+    assert.ok(list, 'list_experts 须注册')
+
+    const idx = await list.execute({})
+    assert.deepEqual(idx.index, [])
+
+    try {
+      await list.execute({ name: 'no-such-pkg', version: '9.9.9' })
+      assert.fail('期望抛出 NOT_FOUND')
+    } catch (e) {
+      assert.equal(e.code, 'NOT_FOUND', `实际 code=${e.code}: ${e.message}`)
+      assert.match(e.message, /no-such-pkg@9\.9\.9/)
+      assert.ok(!/missing package\.yaml|PACKAGE_MALFORMED/i.test(e.message), '不得回显底层原因')
+    }
+
+    for (const name of ['aml-analysis', 'tax-risk', 'med-safety']) {
+      try {
+        await list.execute({ name, version: '1.0.0' })
+        assert.fail(`${name} 期望 NOT_FOUND`)
+      } catch (e) {
+        assert.equal(e.code, 'NOT_FOUND', `${name}: ${e.code}`)
+      }
+    }
+  } finally {
+    cleanup(root)
+  }
+})

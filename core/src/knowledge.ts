@@ -142,7 +142,7 @@ export class KnowledgeError extends Error {
  * 此前只说「只能落 RedLine」，恢复路径靠调用方自悟。
  */
 const REDLINE_HOWTO =
-  '（正确路径：新草案 targetKind=RedLine、targetId=场景ID、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases）'
+  '（正确路径：新草案 targetKind=RedLine、targetId=场景ID 或 payload.scenarioId、payload.phrases=[短语…]，追加进该场景 forbiddenPhrases；多场景必须显式给场景 ID）'
 
 /** payload.featureSources 规范化：非对象/空 → undefined；过滤非字符串值。 */
 function featureSourcesOf(p: Record<string, unknown>): { featureSources?: Record<string, string> } {
@@ -403,10 +403,26 @@ export class KnowledgeStore {
       c.op === 'update'
         ? `${c.packageId}|${c.layer}|${c.targetKind}|${c.targetId}|${c.sourceName ?? c.name}` === key
         : `${c.packageId}|${c.layer}|${c.targetKind}|${c.sourceName ?? c.name}` === key
-    // 幂等只挡在途/已定稿；rejected 同名允许重新起草（驳回→修复→重提的恢复路径，D6）
+    // 幂等只挡在途/已定稿；rejected 同名允许重新起草（驳回→修复→重提的恢复路径，D6）。
+    // pending 同 key 重提 = 就地更新载荷（对话轮改文案/修字段的主路径）——此前静默返回旧草案，
+    // 模型重提无效后被迫翻源码才发现。approved/merged 已定稿不覆盖（须 reject 或走人审编辑）。
     const matches = queue.filter(sameKey)
     const live = matches.find((c) => c.status !== 'rejected')
-    if (live) return live
+    if (live) {
+      if (live.status === 'pending') {
+        live.payload = item.payload
+        live.name = item.name
+        if (item.rationale !== undefined) live.rationale = item.rationale
+        live.confidence = item.confidence
+        live.forcedReview = live.confidence < 0.75
+        live.conclusionLike = isConclusionLike(live)
+        if (input.provenance !== undefined) {
+          live.provenance = { ...(live.provenance ?? {}), ...input.provenance }
+        }
+        this.saveQueue(queue)
+      }
+      return live
+    }
     const retries = matches.length
     const cand: DraftCandidate = {
       ...item,
@@ -1063,11 +1079,26 @@ export function applyDraftToPackage(
     const phrases: string[] = Array.isArray(p['phrases'])
       ? (p['phrases'] as string[]).map(String)
       : [String(p['phrase'] ?? c.name)]
-    const scenarioId = typeof p['scenarioId'] === 'string' ? p['scenarioId'] : undefined
-    let scenario = scenarioId ? pkg.scenarios.find((s) => s.id === scenarioId) : undefined
-    if (!scenario) scenario = pkg.scenarios[0]
+    // 文档/错误文案承诺 targetId=场景ID；payload.scenarioId 同为显式定位（与技能接线同源）。
+    // 多场景无显式定位不再静默落 scenarios[0]——曾导致三组禁语全挂首场景。
+    const explicit =
+      (typeof p['scenarioId'] === 'string' && p['scenarioId'].trim()) ||
+      (typeof c.targetId === 'string' && c.targetId.trim()) ||
+      ''
+    let scenario = explicit ? pkg.scenarios.find((s) => s.id === explicit) : undefined
+    if (explicit && !scenario) {
+      throw new KnowledgeError('REDLINE_NEEDS_SCENARIO', `红线目标场景不存在: ${explicit}`)
+    }
     if (!scenario) {
-      throw new KnowledgeError('REDLINE_NEEDS_SCENARIO', '红线物化需要已有场景卡（或 payload.scenarioId）')
+      if (pkg.scenarios.length === 1) scenario = pkg.scenarios[0]
+      else if (pkg.scenarios.length === 0) {
+        throw new KnowledgeError('REDLINE_NEEDS_SCENARIO', '红线物化需要已有场景卡（或 targetId/payload.scenarioId）')
+      } else {
+        throw new KnowledgeError(
+          'REDLINE_NEEDS_SCENARIO',
+          '多场景包红线须显式 targetId=场景ID 或 payload.scenarioId（不猜目标场景）',
+        )
+      }
     }
     for (const phrase of phrases) {
       if (phrase && !scenario.outputContract.forbiddenPhrases.includes(phrase)) {
@@ -1223,11 +1254,25 @@ export function applyDraftToPackage(
         ...(Array.isArray(p['scoreRefs']) && (p['scoreRefs'] as unknown[]).length > 0
           ? { scoreRefs: (p['scoreRefs'] as string[]).map(String) }
           : {}),
-        // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里
+        // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里。
+        // mustInclude：顶层或 outputContract 内均可（技能文案承诺双路径；update 已有归一，create 曾只读顶层）。
         outputContract: {
-          mustInclude: Array.isArray(p['mustInclude'])
-            ? (p['mustInclude'] as string[]).filter((m) => !isConclusionLike({ name: m, payload: {}, rationale: '' }))
-            : ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks'],
+          mustInclude: (() => {
+            const clean = (raw: unknown): string[] | null =>
+              Array.isArray(raw)
+                ? (raw as unknown[]).filter(
+                    (m) => !isConclusionLike({ name: String(m), payload: {}, rationale: '' }),
+                  ).map(String)
+                : null
+            const fromTop = clean(p['mustInclude'])
+            if (fromTop) return fromTop
+            const oc = p['outputContract']
+            const fromOc =
+              oc !== null && typeof oc === 'object' && !Array.isArray(oc)
+                ? clean((oc as Record<string, unknown>)['mustInclude'])
+                : null
+            return fromOc ?? ['candidateList', 'riskScore', 'evidenceChains', 'pendingChecks']
+          })(),
           forbiddenPhrases: Array.isArray((p['outputContract'] as { forbiddenPhrases?: string[] })?.forbiddenPhrases)
             ? (p['outputContract'] as { forbiddenPhrases: string[] }).forbiddenPhrases
             : [],
