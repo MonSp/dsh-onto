@@ -263,6 +263,8 @@ test('D1：平台建模引导技能内置提供方（list/get/拒 spoof/正文�
     '建包', '骨架', 'draft_elements', 'apply_draft', 'RedLine', 'humanApproved',
     'ISSUED', 'ontology-business-map', 'mustInclude', 'candidateId', 'behaviorRefs', 'scoreRefs',
     'SKELETON_OUT_OF_SCOPE',
+    'payload.id 必须显式', 'write_quality_report', '禁止全盘扫盘',
+    'ID 语法', 'apply_draft 回执', 'isValidId', 'list_drafts status=pending',
   ]) {
     assert.ok(def.content.includes(marker), '引导正文缺少要点: ' + marker)
   }

@@ -238,7 +238,11 @@ export function createPlugin(React: typeof import('react')): PluginModule {
           ),
           listError ? h(ErrorBanner, { text: listError }) : null,
           selected
-            ? h(GraphWorkbench, { t, apis: ctx, selected })
+            ? h(
+                'div',
+                { className: 'ogc-right-fill' },
+                h(GraphWorkbench, { t, apis: ctx, selected }),
+              )
             : h('p', { className: 'ow-note' }, t('none')),
         )
       }
