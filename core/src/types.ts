@@ -217,6 +217,11 @@ export interface ScenarioPrepSummary {
   }
   projectedWrites?: number
   derived?: string[]
+  /**
+   * since 派生时间基准 ISO（与本轮 startedAt 同源，单次捕获）。
+   * 双 digest 只能发现数据变化，此字段还原「按哪个时刻算 since」的计算条件。
+   */
+  sinceBasis?: string
 }
 
 /** 确定性特征配方（PR#18 features.ts；scenario-prep S2.2 包级复用同一类型）。 */

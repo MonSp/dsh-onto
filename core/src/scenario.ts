@@ -132,10 +132,12 @@ export function runScenario(
   }
 
   const startedAt = now().toISOString()
+  // since 派生基准与 startedAt 同源单次捕获（评审缺陷4）：回放可还原计算条件。
+  const sinceBasis = startedAt
   const runId = `run-${randomUUID().slice(0, 8)}`
   const config = ruleEngineConfigOf(pkg, scenario)
 
-  /* ── prep（S2.3）：DATA_INGEST 后固定顺序 expand → project → derive ── */
+  /* ── prep（S2.3）：expand → project → derive；必须先于排除/评分 ── */
   let effective: RuntimeDataset = dataset
   let prepSummary: ScenarioPrepSummary | undefined
   let prepApplied = false
@@ -177,17 +179,17 @@ export function runScenario(
       let candidates = proj.candidates
       summary.projectedWrites = proj.projected.reduce((n, p) => n + p.keys.length, 0)
       const recipes = pkg.featureRecipes
-      if (recipes !== undefined && recipes.length > 0) {
-        // A-10：包级配方禁 now；执行层用与 ruleHitLog 同源的 now 注入（回放确定性）。
-        const nowIso = now().toISOString()
+      if (recipes !== undefined && recipes.length > 0 && Array.isArray(recipes)) {
+        // A-10/缺陷4：包级配方禁 now；执行层注入本轮 sinceBasis（与 startedAt 同源，可回放）。
         const ready = recipes.map((r) =>
           r.kind === 'since' && (r.now === undefined || r.now === null)
-            ? { ...r, now: nowIso }
+            ? { ...r, now: sinceBasis }
             : r,
         )
         const der = deriveFeatures(candidates, next, ready)
         candidates = der.candidates
         summary.derived = der.derived
+        summary.sinceBasis = sinceBasis
       }
       next = { ...next, candidates }
     }
@@ -204,16 +206,23 @@ export function runScenario(
   let scored: RuleEvalResult | null = null
   let survivors = effective.candidates.map((c) => ({ ...c, weightFactor: 1 }))
   let scoringDone = false
+  const resetSurvivors = (): void => {
+    survivors = effective.candidates.map((c) => ({ ...c, weightFactor: 1 }))
+  }
 
-  /* ── 最小步派发（§9.1 编排载体 = 场景解释器，不另起重型工作流引擎） ── */
+  /* ── 最小步派发（§9.1）：prep 保证先于任何排除/评分（评审缺陷2） ── */
   for (const step of scenario.pipeline) {
+    // 打分/排除段入口：prep 未应用则先做（无 DATA_INGEST / 顺序异常均兜住）
+    if (step.stepType === 'RULE_EVALUATE' && !prepApplied) {
+      applyPrep()
+      resetSurvivors()
+    }
     switch (step.stepType) {
       case 'DATA_INGEST': {
         ingestProblems = ingestDataset(pkg, effective)
-        // S2.3：准备固定在 DATA_INGEST 完成后执行（非 pipeline 新槽位）。
+        // S2.3：正常路径在 DATA_INGEST 完成后立即 prep（非 pipeline 新槽位）。
         applyPrep()
-        // prep 可能改写候选集合 → 重建排除段初始 survivors
-        survivors = effective.candidates.map((c) => ({ ...c, weightFactor: 1 }))
+        resetSurvivors()
         break
       }
       case 'BEHAVIOR_CALL': {
@@ -258,9 +267,12 @@ export function runScenario(
     }
   }
 
-  // pipeline 无 DATA_INGEST 时 prep 仍须在打分前生效（有 prep 声明的场景都应有 ingest；
-  // 防御：装配前若未应用则补一次）。
-  applyPrep()
+  // 防御：畸形 pipeline（有 prep 但既无 DATA_INGEST 也无 RULE_EVALUATE）不得静默丢 prep。
+  // 正常有打分段时 prep 已在 RULE_EVALUATE 入口强制应用；此处不覆盖「已打分后才补」路径。
+  if (!prepApplied && (scenario.prep?.expand !== undefined || scenario.prep?.features === true)) {
+    applyPrep()
+    resetSurvivors()
+  }
 
   if (!scoringDone || scored === null) {
     throw new ScenarioRunError(

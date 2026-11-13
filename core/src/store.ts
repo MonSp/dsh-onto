@@ -292,8 +292,10 @@ function normalizeScenario(raw: Record<string, unknown>): OntologyPackage['scena
     ...(Array.isArray(raw['behaviorRefs']) ? { behaviorRefs: raw['behaviorRefs'] as string[] } : {}),
     ...(Array.isArray(raw['exclusionRefs']) ? { exclusionRefs: raw['exclusionRefs'] as string[] } : {}),
     ...(Array.isArray(raw['scoreRefs']) ? { scoreRefs: raw['scoreRefs'] as string[] } : {}),
-    // scenario-prep S2.1：prep 可选；对象形态才落键（错型留给 validate）
-    ...(isPlainObject(raw['prep']) ? { prep: normalizePrep(raw['prep'] as Record<string, unknown>) } : {}),
+    // scenario-prep S2.1：prep 归一保留错型，validate 报 PREP_INVALID
+    ...(normalizeScenarioPrep(raw['prep']) !== undefined
+      ? { prep: normalizeScenarioPrep(raw['prep'])! }
+      : {}),
     outputContract,
     reviewGate,
     auditChecks: (raw['auditChecks'] as string[]) ?? [],
@@ -304,19 +306,25 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-/** prep 键归一：只透传已知子键形态；枚举/范围非法值留给 validate 报 PREP_INVALID。 */
-function normalizePrep(raw: Record<string, unknown>): NonNullable<OntologyPackage['scenarios'][number]['prep']> {
+/**
+ * prep 键归一：**保留原始值形态**（含错型），由 validate 报 PREP_INVALID。
+ * 曾按类型白名单静默丢弃 `hops:"2"` / 数值 direction 等 → 目录校验零错误（评审缺陷3）。
+ */
+export function normalizeScenarioPrep(
+  raw: unknown,
+): NonNullable<OntologyPackage['scenarios'][number]['prep']> | undefined {
+  if (!isPlainObject(raw)) return undefined
   const out: NonNullable<OntologyPackage['scenarios'][number]['prep']> = {}
   if (isPlainObject(raw['expand'])) {
-    const e = raw['expand'] as Record<string, unknown>
-    const expand: NonNullable<NonNullable<OntologyPackage['scenarios'][number]['prep']>['expand']> = {}
-    if (typeof e['hops'] === 'number') expand.hops = e['hops']
-    // direction 原样透传（string 才收），坏值由 validate 拦
-    if (typeof e['direction'] === 'string') expand.direction = e['direction'] as 'out' | 'in' | 'both'
-    if (Array.isArray(e['relationTypes'])) expand.relationTypes = e['relationTypes'] as string[]
-    out.expand = expand
+    const e = raw['expand']
+    const expand: Record<string, unknown> = {}
+    // 有键即透传（错型也收），validate 拦
+    if ('hops' in e) expand['hops'] = e['hops']
+    if ('direction' in e) expand['direction'] = e['direction']
+    if ('relationTypes' in e) expand['relationTypes'] = e['relationTypes']
+    out.expand = expand as NonNullable<NonNullable<OntologyPackage['scenarios'][number]['prep']>['expand']>
   }
-  if (typeof raw['features'] === 'boolean') out.features = raw['features']
+  if ('features' in raw) out.features = raw['features'] as boolean
   return out
 }
 
@@ -384,9 +392,10 @@ export function loadPackage(versionDir: string): OntologyPackage {
     .maps ?? []
   const apiSources = readYamlFile<ApiSourcesDoc>(join(versionDir, SOURCE_FILE_LAYOUT.apiSources), {})
     .sources ?? []
-  // package.yaml 顶层 featureRecipes（scenario-prep S2.2）；错型/缺 now 由 validate 拦。
+  // package.yaml 顶层 featureRecipes（scenario-prep S2.2）。
+  // 有键即透传（非数组也收）——错型由 validate 报 FEATURE_RECIPE_INVALID，不静默丢（评审缺陷3）。
   const metaDoc = readYamlFile<Record<string, unknown>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
-  const featureRecipes = Array.isArray(metaDoc['featureRecipes'])
+  const featureRecipes = 'featureRecipes' in metaDoc
     ? (metaDoc['featureRecipes'] as OntologyPackage['featureRecipes'])
     : undefined
 
@@ -402,7 +411,7 @@ export function loadPackage(versionDir: string): OntologyPackage {
     scenarios,
     fieldMaps,
     apiSources,
-    ...(featureRecipes !== undefined && featureRecipes.length > 0 ? { featureRecipes } : {}),
+    ...(featureRecipes !== undefined ? { featureRecipes } : {}),
   }
 }
 
