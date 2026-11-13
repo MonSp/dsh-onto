@@ -153,12 +153,19 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
     const short = scenarioShortName(sc.id)
     for (const step of sc.pipeline) {
       const duty = STEP_DUTY[step.stepType] ?? { stageDuty: step.stepType, llm: 'allowed' as const, usesTools: true }
+      // P2-3：同为 RULE_EVALUATE，排除段与打分段职责文案区分（曾双双写「排除/打分」难读）
+      const stageDuty =
+        step.stepType === 'RULE_EVALUATE' && step.order === 'before-scoring'
+          ? '排除段（before-scoring，drop/downweight）'
+          : step.stepType === 'RULE_EVALUATE'
+            ? '打分段（加权汇总 riskScore）'
+            : duty.stageDuty
       duties.push({
         id: `AGT-${tag}-${short}-${step.stepId}`,
         scenario: sc.id,
         stepId: step.stepId,
         stepType: step.stepType,
-        stageDuty: duty.stageDuty,
+        stageDuty,
         toolRefs: duty.usesTools ? objectToolIds : [],
         llm: duty.llm,
         humanGate: step.stepType === 'HUMAN_REVIEW',

@@ -366,7 +366,7 @@ export function renderRunText(result: ScenarioRunResult, phrases?: readonly stri
   const lines: string[] = []
   lines.push(`场景 ${idFace('scenarioId', result.scenarioId)} · 运行 ${idFace('runId', result.runId)}`)
   for (const c of result.candidates) {
-    lines.push(`- ${idFace('candidateId', c.candidateId)}（${idFace('objectRef', c.objectRef)}）riskScore=${c.riskScore}`)
+    lines.push(`- ${idFace('candidateId', c.candidateId)}（${idFace('objectRef', c.objectRef)}）riskScore=${c.riskScore} riskLevel=${c.riskLevel ?? '—'}`)
     lines.push(`  命中规则: ${c.hitRuleIds.map((id) => idFace('hitRuleIds', id)).join(', ') || '—'}`)
     for (const e of c.evidenceChains) {
       lines.push(`  证据[${idFace('ruleId', e.ruleId)}] ${face(e.evidence)} (score=${e.score})`)
@@ -417,6 +417,10 @@ export function assertRunContract(result: ScenarioRunResult): void {
     // Number.isFinite 同时拒 NaN/Infinity 与非数字（typeof NaN === 'number'，纯 typeof 拦不住）。
     if (!Number.isFinite(c.riskScore)) {
       throw invalidOutput(`${c.candidateId} riskScore 非有限数`)
+    }
+    // riskLevel 可选（旧包/直调路径可能缺），但有则必须是字符串——render 直接插值。
+    if (c.riskLevel !== undefined && typeof c.riskLevel !== 'string') {
+      throw invalidOutput(`${c.candidateId} riskLevel 需要字符串`)
     }
     for (const key of ['hitRuleIds', 'evidenceChains', 'pendingChecks', 'narrative'] as const) {
       if (!Array.isArray(c[key])) {

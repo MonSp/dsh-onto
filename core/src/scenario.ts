@@ -19,6 +19,7 @@ import { verifyDerived } from './loadgate.js'
 import {
   applyExclusions,
   fillTemplate,
+  riskLevelOf,
   type RuleEngineConfig,
   type RuleEvalResult,
   scoreCandidates,
@@ -106,6 +107,7 @@ export function runScenario(
   let ingestProblems: string[] = []
   const behaviorInstances: RuntimeBehaviorInstance[] = []
   let excluded: RuleEvalResult['excluded'] = []
+  const exclusionFeatureGaps: RuleEvalResult['exclusionFeatureGaps'] = []
   let scored: RuleEvalResult | null = null
   let survivors = dataset.candidates.map((c) => ({ ...c, weightFactor: 1 }))
   let scoringDone = false
@@ -125,12 +127,19 @@ export function runScenario(
         if (step.order === 'before-scoring') {
           // 排除段
           const excludedOut: RuleEvalResult['excluded'] = []
-          survivors = applyExclusions(config.exclusion, dataset.candidates, excludedOut)
+          const gaps: RuleEvalResult['exclusionFeatureGaps'] = []
+          survivors = applyExclusions(config.exclusion, dataset.candidates, excludedOut, gaps)
           excluded = excludedOut
+          exclusionFeatureGaps.push(...gaps)
         } else {
           // 打分段
           const out = scoreCandidates(config.scoring, survivors, now)
-          scored = { candidates: out.candidates, excluded, ruleHitLog: out.ruleHitLog }
+          scored = {
+            candidates: out.candidates,
+            excluded,
+            ruleHitLog: out.ruleHitLog,
+            exclusionFeatureGaps,
+          }
           scoringDone = true
         }
         break
@@ -167,11 +176,19 @@ export function runScenario(
 
   const candidates: CandidateResult[] = scored.candidates.map((c) => {
     const candInput = dataset.candidates.find((x) => x.candidateId === c.candidateId)
-    const narrative = buildNarrative(skills, { ...c }, candInput?.features ?? {})
+    const obj = dataset.objects.find((o) => o.id === c.objectRef)
+    const objectAttrs: Record<string, unknown> = obj?.attrs ?? {}
+    const narrative = buildNarrative(
+      skills,
+      { ...c },
+      candInput?.features ?? {},
+      { threshold: scenario.reviewGate.threshold, objectAttrs },
+    )
     return {
       candidateId: c.candidateId,
       objectRef: c.objectRef,
       riskScore: c.riskScore,
+      riskLevel: riskLevelOf(c.riskScore, scenario.reviewGate.threshold),
       hitRuleIds: c.hitRuleIds,
       evidenceChains: c.evidenceChains,
       narrative,
@@ -179,6 +196,20 @@ export function runScenario(
       pendingVerification: c.pendingVerification,
     }
   })
+
+  // 排除条件特征未投影进 features → 显式待核实（不再静默不匹配）；
+  // 存活候选挂 pendingChecks，被 drop 候选的缺口保留在 result.exclusionFeatureGaps（不静默丢弃）
+  const allGaps = scored.exclusionFeatureGaps ?? []
+  for (const gap of allGaps) {
+    const c = candidates.find((x) => x.candidateId === gap.candidateId)
+    if (!c) continue
+    c.pendingChecks.push({
+      ruleId: gap.ruleId,
+      missing: gap.missing,
+      note: `排除规则 ${gap.ruleId} 条件特征 [${gap.missing.join(', ')}] 不在候选 features——接入层须从对象 attrs 投影，否则该规则对该候选不生效`,
+    })
+    c.pendingVerification = true
+  }
 
   /* ── 输出契约 mustInclude 检查 + 人工复核字段 ─────────────────────── */
   const requireReviewFor = candidates
@@ -201,6 +232,7 @@ export function runScenario(
     startedAt,
     candidates,
     excluded,
+    exclusionFeatureGaps: allGaps,
     humanReviewRequired: true,
     reviewGate: {
       threshold: scenario.reviewGate.threshold,
@@ -294,17 +326,31 @@ function buildNarrative(
   skills: OntologyPackage['skillTemplates'],
   c: {
     candidateId: string
+    objectRef: string
     hitRuleIds: string[]
     riskScore: number
     evidenceChains: Array<{ ruleId: string; evidence: string }>
   },
   features: Record<string, number | string>,
+  opts?: { threshold?: number; objectAttrs?: Record<string, unknown> },
 ): string[] {
   const lines: string[] = []
+  const attrs = opts?.objectAttrs ?? {}
+  const threshold = opts?.threshold ?? 0.75
   const fillVars: Record<string, number | string> = {
+    // 对象 attrs 标量值作模板变量（通用机制；业务字段名如 binNo 不进 core）
+    ...Object.fromEntries(
+      Object.entries(attrs).filter(
+        (e): e is [string, number | string] =>
+          typeof e[1] === 'string' || (typeof e[1] === 'number' && Number.isFinite(e[1])),
+      ),
+    ),
     ...features,
     candidateId: c.candidateId,
-    riskScore: c.riskScore,
+    objectRef: c.objectRef,
+    // 模板侧两位小数；result.riskScore 仍保持引擎全精度供闸门比较
+    riskScore: Number(c.riskScore.toFixed(2)),
+    riskLevel: riskLevelOf(c.riskScore, threshold),
     hitCount: c.hitRuleIds.length,
     ruleIds: c.hitRuleIds.join(',') || '无',
   }

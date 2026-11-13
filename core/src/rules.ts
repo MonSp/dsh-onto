@@ -432,14 +432,25 @@ export interface RuleEvalResult {
   candidates: RuleEvalCandidateResult[]
   excluded: Array<{ candidateId: string; ruleId: string }>
   ruleHitLog: Array<{ ruleId: string; candidateId: string; score: number; ts: string }>
+  /** P0-3：排除条件引用了候选 features 里没有的字段（静默不匹配 → 显式上墙）。 */
+  exclusionFeatureGaps: Array<{ candidateId: string; ruleId: string; missing: string[] }>
 }
 
-/** 回填证据模板 `{feature}` 占位符。 */
+/** 回填证据模板 `{feature}` 占位符；浮点默认两位小数（P0-5 输出可读）。 */
 export function fillTemplate(template: string, features: Record<string, number | string>): string {
   return template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
     const v = features[name]
-    return v === undefined ? '未知' : String(v)
+    if (v === undefined) return '未知'
+    if (typeof v === 'number' && Number.isFinite(v) && !Number.isInteger(v)) return v.toFixed(2)
+    return String(v)
   })
+}
+
+/** 复核阈值 → 中文等级（P0-5）：≥阈值=高（需复核），≥阈值×0.5=中，否则低。 */
+export function riskLevelOf(riskScore: number, threshold: number): string {
+  if (riskScore >= threshold) return '高'
+  if (riskScore >= threshold * 0.5) return '中'
+  return '低'
 }
 
 /**
@@ -452,9 +463,10 @@ export function evaluateRules(
   now: () => Date = () => new Date(),
 ): RuleEvalResult {
   const excluded: RuleEvalResult['excluded'] = []
-  const survivors = applyExclusions(config.exclusion, candidates, excluded)
+  const exclusionFeatureGaps: RuleEvalResult['exclusionFeatureGaps'] = []
+  const survivors = applyExclusions(config.exclusion, candidates, excluded, exclusionFeatureGaps)
   const scored = scoreCandidates(config.scoring, survivors, now)
-  return { candidates: scored.candidates, excluded, ruleHitLog: scored.ruleHitLog }
+  return { candidates: scored.candidates, excluded, ruleHitLog: scored.ruleHitLog, exclusionFeatureGaps }
 }
 
 /** 排除段（before-scoring）：drop 剔除 / downweight 降权。 */
@@ -462,6 +474,7 @@ export function applyExclusions(
   exclusion: RuleEngineConfig['exclusion'],
   candidates: RuleCandidateInput[],
   excludedOut: RuleEvalResult['excluded'] = [],
+  featureGapsOut: RuleEvalResult['exclusionFeatureGaps'] = [],
 ): Array<RuleCandidateInput & { weightFactor: number }> {
   const out: Array<RuleCandidateInput & { weightFactor: number }> = []
   for (const cand of candidates) {
@@ -469,6 +482,17 @@ export function applyExclusions(
     let dropped = false
     let weightFactor = 1
     for (const rule of exclusion) {
+      // P0-3：条件特征不在 features → 不再静默「不匹配」，记 gap（接入层未投影）
+      try {
+        const needed = referencedFeatures(rule.condition).filter(
+          (f) => f !== 'tag' && cand.features[f] === undefined,
+        )
+        if (needed.length > 0) {
+          featureGapsOut.push({ candidateId: cand.candidateId, ruleId: rule.id, missing: needed })
+        }
+      } catch {
+        /* 语法错误由 validate 拦；运行侧跳过扫描 */
+      }
       let matched = false
       try {
         matched = truthy(evaluateLoose(rule.condition, env))
