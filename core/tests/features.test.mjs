@@ -129,6 +129,10 @@ test('deriveFeatures count：按 candidate objectRef 关联实例 + type 过滤'
     { name: 'z', kind: 'count', source: 'behaviors', filter: { type: 'BHV-TST-NOPE' } },
   ])
   assert.equal(zero.candidates.find((c) => c.candidateId === 'c1').features.z, 0)
+  // core 裸调：count 缺 source（工具面已拦）→ 跳过不写，不静默落 0
+  const badSrc = deriveFeatures(ds.candidates, ds, [{ name: 'z', kind: 'count' }])
+  assert.ok(!('z' in badSrc.candidates[0].features))
+  assert.deepEqual(badSrc.derived, [])
 })
 
 test('deriveFeatures ratio：num/den；minDen 不足或 0 分母跳过；可消费先前派生值', () => {

@@ -129,7 +129,8 @@ const pkg = {
     },
     {
       // 混投事件类型（subgraph-expansion P4）：适配层把快照 mixEvents 物化为该类型行为，
-      // hazardMixCount = count(behaviors, type=BHV-WST-MIX)；观察性数据，不进场景 behaviorRefs。
+      // hazardMixCount = count(behaviors, type=BHV-WST-MIX)；挂入 behaviorRefs 消
+      // ID_UNREFERENCED（审计面可见其锚点，计数由 deriveFeatures 直读 dataset.behaviors）。
       id: 'BHV-WST-MIX',
       name: '混投',
       anchor: 'OBJ-WST-BIN',

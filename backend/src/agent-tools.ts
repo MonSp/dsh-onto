@@ -2112,8 +2112,8 @@ export function apply(ctx: Context): void {
         '沿实例图关系从种子实体 BFS 扩出邻域子 dataset（数据准备，不打分；打分用 run_scenario）。'
         + 'hops 默认 1、硬上限 3；direction 默认 both（out|in|both 可收敛单向）；relationTypes 可只沿指定类型行走。'
         + '种子须存在于 dataset（非空 ≤32）；truncated=true 表示触及跳数上限仍有外沿。'
-        + '回执为邻域成员清单（统计 + 对象/关系/候选/行为 ID，不含 attrs 明细）：'
-        + '子 dataset = 按清单过滤你的输入 dataset（对象 ID 命中、边两端命中、候选/行为引用命中即保留）后交 run_scenario。',
+        + '回执为邻域摘要（统计 + 种子/对象 ID 清单，不含 attrs 明细与边/候选清单）：'
+        + '子 dataset = 按对象清单过滤你的输入 dataset（对象命中、边两端命中、候选/行为引用命中即保留）后交 run_scenario。',
       parameters: {
         name: { type: 'string', required: true, description: '包名（收权清单按包核对）' },
         version: { type: 'string', required: true, description: '版本号' },
@@ -2162,8 +2162,9 @@ export function apply(ctx: Context): void {
       description:
         '按包 featureSources 把对象 attrs 投影进候选 features，并按 recipes 派生 since/count/ratio 特征'
         + '（数据准备，不打分；典型链路 expand_entity → project_features → run_scenario）。'
-        + '已存在特征默认不覆盖（overwrite=true 才覆盖）；since 的 now 缺省取当前时刻，'
-        + '显式传 now 可保证回放逐字节一致。投影后 COND_FEATURE_UNDECLARED 与排除特征缺口自然收敛。',
+        + '投影不覆盖已存在特征（overwrite=true 才覆盖）；派生配方以计算值写入（配方即显式意图）。'
+        + 'since 的 now 缺省取当前时刻，显式传 now 可保证回放逐字节一致。'
+        + '投影后 COND_FEATURE_UNDECLARED 与排除特征缺口自然收敛。',
       parameters: {
         name: { type: 'string', required: true, description: '包名（featureSources 来源 + 收权清单）' },
         version: { type: 'string', required: true, description: '版本号' },

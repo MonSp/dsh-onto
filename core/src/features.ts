@@ -106,7 +106,8 @@ function computeCount(
   recipe: FeatureRecipe,
   cand: RuntimeCandidate,
   dataset: RuntimeDataset,
-): number {
+): number | typeof SKIP {
+  if (recipe.source !== 'behaviors' && recipe.source !== 'relations') return SKIP
   const filter = recipe.filter
   const match = (linked: boolean, inst: RuntimeBehaviorInstance | RuntimeRelationInstance): boolean => {
     if (!linked) return false
@@ -130,7 +131,7 @@ function computeCount(
     for (const b of dataset.behaviors ?? []) {
       if (match(b.anchorRef === cand.objectRef || b.objectRef === cand.objectRef, b)) n++
     }
-  } else if (recipe.source === 'relations') {
+  } else {
     for (const r of dataset.relations) {
       if (match(r.from === cand.objectRef || r.to === cand.objectRef, r)) n++
     }
@@ -151,6 +152,7 @@ function computeRatio(recipe: FeatureRecipe, cand: RuntimeCandidate): number | t
 
 /**
  * 按配方派生特征写入候选 features（配方顺序生效，后续配方可见先前写入）。
+ * 派生写入以配方计算值为准（配方即显式意图，不适用 projectFeatures 的不覆盖语义）。
  * `now` 必须由配方注入：同输入两次运行逐字节一致（验收 3 / A-7）。
  */
 export function deriveFeatures(
