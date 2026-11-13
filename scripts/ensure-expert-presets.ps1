@@ -24,6 +24,10 @@ if (-not (Test-Path $TemplatePath)) { throw "standard plugins template not found
 
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $text = [System.IO.File]::ReadAllText($patchFile, $utf8)
+# Fresh web templates ship cordis.patch.yml as a bare `[]` empty document. Appending
+# the sequence block after it would yield two YAML documents (parse fails at the
+# second `- insert:`); strip the standalone [] line so the file stays one sequence.
+$text = [regex]::Replace($text, '(?m)^\[\]\s*$', '')
 $data = [System.IO.File]::ReadAllText($DataPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $templateLines = [System.IO.File]::ReadAllLines($TemplatePath, [System.Text.Encoding]::UTF8)
 

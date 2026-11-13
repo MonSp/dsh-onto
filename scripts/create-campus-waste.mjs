@@ -127,6 +127,16 @@ const pkg = {
       states: ['planned', 'done'],
       trigger: 'route start',
     },
+    {
+      // 混投事件类型（subgraph-expansion P4）：适配层把快照 mixEvents 物化为该类型行为，
+      // hazardMixCount = count(behaviors, type=BHV-WST-MIX)；观察性数据，不进场景 behaviorRefs。
+      id: 'BHV-WST-MIX',
+      name: '混投',
+      anchor: 'OBJ-WST-BIN',
+      states: ['idle', 'flagged'],
+      trigger: 'hazardous mix reported',
+      description: '危化混投事件（计数特征数据源）',
+    },
   ],
   scoreRules: [
     {
@@ -211,7 +221,7 @@ const pkg = {
         forbiddenPhrases: ['认定该桶违规投放', '已构成环保违法', '确定为危废'],
       },
       reviewGate: { required: true, threshold: 0.6 },
-      behaviorRefs: ['BHV-WST-DUMP', 'BHV-WST-COLLECT'],
+      behaviorRefs: ['BHV-WST-DUMP', 'BHV-WST-COLLECT', 'BHV-WST-MIX'],
       exclusionRefs: ['RULE-WST-EX-MAINT', 'RULE-WST-EX-LAB', 'RULE-WST-EX-WHITELIST'],
       auditChecks: ['O1_CLOSED', 'O2_CLOSED', 'O3_CLOSED'],
     },
