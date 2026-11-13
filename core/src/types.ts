@@ -393,6 +393,11 @@ export interface ScenarioRunResult {
   startedAt: string
   candidates: CandidateResult[]
   excluded: Array<{ candidateId: string; ruleId: string }>
+  /**
+   * 排除条件特征缺口全量（含已 drop 候选——存活候选另挂 pendingChecks）。
+   * 接入层投影缺失的审计面；模型面渲染按需摘要。
+   */
+  exclusionFeatureGaps?: Array<{ candidateId: string; ruleId: string; missing: string[] }>
   /** 永远为 true —— 认定出口只在人工（§12.1）。 */
   humanReviewRequired: true
   reviewGate: { threshold: number; required: boolean; requireReviewFor: string[] }

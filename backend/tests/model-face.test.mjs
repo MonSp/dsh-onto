@@ -256,7 +256,12 @@ test('buildExpertProfiles：派生后 duties 上墙，打分步 llm:forbidden、
     const text = renderExperts({ experts, derived })
     assert.ok(text.includes('SCN-AML-FIND-CLUES'))
     // render 即模型可见面：步级收权（toolCount/llm/人审闸）必须上墙（I7 可发现）
-    assert.match(text, /- \S+ RULE_EVALUATE · (排除段|打分段|规则引擎判定)/, '打分步 render 含 stageDuty、工具 0 与 llm:forbidden')
+    // stageDuty 分段文案（P2-3）：排除段/打分段，尾巴的工具 0 · llm:forbidden 断言不可丢
+    assert.match(
+      text,
+      /- \S+ RULE_EVALUATE · (排除段|打分段)（[^）]*） · 工具 0 · llm:forbidden/,
+      '打分步 render 含分段 stageDuty、工具 0 与 llm:forbidden',
+    )
   assert.match(text, /HUMAN_REVIEW · 人工复核（认定唯一出口）/, '人审步 stageDuty 上墙（每一步谁干什么可读）')
     assert.match(text, /- \S+ DATA_INGEST · 数据归一、建图 · 工具 [1-9]\d* · llm:allowed/, '数据步 render 含 stageDuty 与非零工具数')
   } finally {

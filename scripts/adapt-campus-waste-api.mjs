@@ -8,7 +8,9 @@
  *
  * 职责（方案 §2.2 P0-3 / P0-4）：
  * 1. 把排除/打分需要的字段从对象 attrs 投影进 candidate.features（zone 必进）
- * 2. 同 objectRef 同快照去重（保留最后一条 = 最新）
+ * 2. 同 objectRef 同快照去重：候选保留**首条**（主候选），后到的同桶条目视为
+ *    重复丢弃——快照注释标了「同桶重复候选，适配层应去重」的就是后到条目；
+ *    反向 keep-last 会丢掉正牌候选、留下重复项（再被白名单规则排掉 → 整桶消失）
  * 3. 由 lastEmptiedAt / mixEvents 回算 overdueHours、hazardMixCount（不收裸数字）
  * 4. 输出标准 RuntimeDataset JSON，可直接 CLI run / run_scenario
  */
@@ -24,7 +26,7 @@ if (!inPath) {
 const raw = JSON.parse(readFileSync(resolve(inPath), 'utf8'))
 const snapshotAt = new Date(raw.snapshotAt ?? Date.now())
 
-/** 同桶去重：后写覆盖前写（快照内按数组序视为更新） */
+/** 对象实体：同 binId 后写覆盖前写（实体快照语义 = 最新状态） */
 const binsById = new Map()
 for (const b of raw.bins ?? []) binsById.set(b.binId, b)
 
@@ -92,10 +94,11 @@ function projectFeatures(bin) {
   return f
 }
 
-// 候选：同 binId 去重（保留最后）
+// 候选：同 binId 去重——保留首条主候选，丢弃后到重复项（见文件头职责 2）
 const candByBin = new Map()
 for (const c of raw.candidates ?? []) {
   if (!binsById.has(c.binId)) continue
+  if (candByBin.has(c.binId)) continue
   candByBin.set(c.binId, c)
 }
 

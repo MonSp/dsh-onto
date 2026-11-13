@@ -197,14 +197,16 @@ export function runScenario(
     }
   })
 
-  // P0-3：排除条件特征未投影进 features → 显式待核实（不再静默不匹配）
-  for (const gap of scored.exclusionFeatureGaps ?? []) {
+  // 排除条件特征未投影进 features → 显式待核实（不再静默不匹配）；
+  // 存活候选挂 pendingChecks，被 drop 候选的缺口保留在 result.exclusionFeatureGaps（不静默丢弃）
+  const allGaps = scored.exclusionFeatureGaps ?? []
+  for (const gap of allGaps) {
     const c = candidates.find((x) => x.candidateId === gap.candidateId)
     if (!c) continue
     c.pendingChecks.push({
       ruleId: gap.ruleId,
       missing: gap.missing,
-      note: `排除规则 ${gap.ruleId} 条件特征 [${gap.missing.join(', ')}] 不在候选 features——接入层须从对象 attrs 投影（P0-3），否则该规则对该候选不生效`,
+      note: `排除规则 ${gap.ruleId} 条件特征 [${gap.missing.join(', ')}] 不在候选 features——接入层须从对象 attrs 投影，否则该规则对该候选不生效`,
     })
     c.pendingVerification = true
   }
@@ -230,6 +232,7 @@ export function runScenario(
     startedAt,
     candidates,
     excluded,
+    exclusionFeatureGaps: allGaps,
     humanReviewRequired: true,
     reviewGate: {
       threshold: scenario.reviewGate.threshold,
@@ -333,16 +336,21 @@ function buildNarrative(
 ): string[] {
   const lines: string[] = []
   const attrs = opts?.objectAttrs ?? {}
-  const binNo = typeof attrs['binNo'] === 'string' ? attrs['binNo'] : (features['binNo'] ?? c.objectRef)
   const threshold = opts?.threshold ?? 0.75
   const fillVars: Record<string, number | string> = {
+    // 对象 attrs 标量值作模板变量（通用机制；业务字段名如 binNo 不进 core）
+    ...Object.fromEntries(
+      Object.entries(attrs).filter(
+        (e): e is [string, number | string] =>
+          typeof e[1] === 'string' || (typeof e[1] === 'number' && Number.isFinite(e[1])),
+      ),
+    ),
     ...features,
     candidateId: c.candidateId,
     objectRef: c.objectRef,
     // 模板侧两位小数；result.riskScore 仍保持引擎全精度供闸门比较
     riskScore: Number(c.riskScore.toFixed(2)),
     riskLevel: riskLevelOf(c.riskScore, threshold),
-    binNo: String(binNo),
     hitCount: c.hitRuleIds.length,
     ruleIds: c.hitRuleIds.join(',') || '无',
   }
