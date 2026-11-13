@@ -335,12 +335,33 @@ test('assertIssueReady：合法包通过并完成派生（签完即可加载）'
   const { assertIssueReady, verifyDerived } = await import('../dist/index.js')
   const { dir, root } = mkWorkspaceWithPkg()
   try {
+    // P0-2：有排除规则须显式 exclusionRefs 才能签发
+    savePackage(dir, minimalPkg({
+      scenarios: [{ ...minimalPkg().scenarios[0], exclusionRefs: ['RULE-TST-E1'] }],
+    }))
     const r = assertIssueReady(dir)
     assert.ok(r.score > 0)
     assert.ok(r.scenarios >= 1 && r.scoreRules >= 1)
     assert.ok(r.sources >= 1 && r.derived >= 1)
     const gate = verifyDerived(dir)
     assert.equal(gate.ok, true, `门禁须过: ${gate.reason}`)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('assertIssueReady：有排除规则但场景缺 exclusionRefs → ISSUE_GATE_EXCL_REFS', async () => {
+  const { assertIssueReady, PackageStoreError } = await import('../dist/index.js')
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    try {
+      assertIssueReady(dir)
+      assert.fail('缺 exclusionRefs 不得过签发门禁')
+    } catch (e) {
+      assert.ok(e instanceof PackageStoreError, String(e))
+      assert.equal(e.code, 'ISSUE_GATE_EXCL_REFS')
+      assert.match(e.message, /exclusionRefs/)
+    }
   } finally {
     rmWorkspace(root)
   }
@@ -400,4 +421,46 @@ test('featureSources：规则→O1 引用闭合（v0.2.1）', () => {
   const v2 = validatePackage(bad)
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('OBJ-TST-GONE')), 'dangling OBJ')
   assert.ok(v2.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('not-an-id')), 'non OBJ/REL form')
+})
+
+
+test('P0-2 validate：有排除规则但场景缺 exclusionRefs → EXCL_REFS_MISSING warn', () => {
+  const pkg = minimalPkg() // 默认场景无 exclusionRefs
+  const v = validatePackage(pkg)
+  assert.ok(v.warnings.some((w) => w.code === 'EXCL_REFS_MISSING'), JSON.stringify(v.warnings))
+  const ok = minimalPkg({
+    scenarios: [{ ...minimalPkg().scenarios[0], exclusionRefs: ['RULE-TST-E1'] }],
+  })
+  const v2 = validatePackage(ok)
+  assert.ok(!v2.warnings.some((w) => w.code === 'EXCL_REFS_MISSING'))
+})
+
+test('P0-1 方案A：排除条件特征未进 featureSources → COND_FEATURE_UNDECLARED warn', () => {
+  const pkg = minimalPkg({
+    exclusionRules: [
+      { id: 'RULE-TST-EX-ZONE', name: ' zone', action: 'downweight', factor: 0.5, condition: "zone == 'lab'" },
+    ],
+    scenarios: [{ ...minimalPkg().scenarios[0], exclusionRefs: ['RULE-TST-EX-ZONE'] }],
+  })
+  const v = validatePackage(pkg)
+  assert.ok(
+    v.warnings.some((w) => w.code === 'COND_FEATURE_UNDECLARED' && w.where === 'RULE-TST-EX-ZONE'),
+    JSON.stringify(v.warnings),
+  )
+  // featureSources 声明后消 warn
+  const ok = minimalPkg({
+    exclusionRules: [
+      {
+        id: 'RULE-TST-EX-ZONE', name: 'zone', action: 'downweight', factor: 0.5,
+        condition: "zone == 'lab'", featureSources: { zone: 'OBJ-TST-A' },
+      },
+    ],
+    scenarios: [{ ...minimalPkg().scenarios[0], exclusionRefs: ['RULE-TST-EX-ZONE'] }],
+  })
+  const v2 = validatePackage(ok)
+  assert.ok(!v2.warnings.some((w) => w.code === 'COND_FEATURE_UNDECLARED'))
+  // tag 条件不告警
+  const tagOnly = minimalPkg()
+  const v3 = validatePackage(tagOnly)
+  assert.ok(!v3.warnings.some((w) => w.code === 'COND_FEATURE_UNDECLARED'))
 })

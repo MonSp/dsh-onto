@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractAttrRefs, parseAttrRef, UNREFERENCED_EXEMPT_PREFIXES } from './ids.js'
-import { validateExpression } from './rules.js'
+import { referencedFeatures, validateExpression } from './rules.js'
 import { listSourceFiles, loadPackage, readPackageMeta, PackageStoreError, QUALITY_REPORT_FILE } from './store.js'
 import { derivePackage } from './derive.js'
 import { verifyDerived } from './loadgate.js'
@@ -14,6 +14,32 @@ import type { OntologyPackage, QualityReport, SkeletonRecord, ValidationIssue } 
 import { loadYaml } from './yamlio.js'
 
 const WEIGHT_SUM_TOLERANCE = 1e-6
+
+/** 条件/表达式标识符 → featureSources 键（P0-1 方案A 静态面）。`tag` 是成员判断保留字。 */
+function warnCondFeatures(
+  ruleId: string,
+  expr: string,
+  featureSources: Record<string, string> | undefined,
+  warn: (code: string, where: string, message: string) => void,
+  face: 'condition' | 'expression',
+): void {
+  let idents: string[]
+  try {
+    idents = referencedFeatures(expr).filter((n) => n !== 'tag')
+  } catch {
+    return // 语法错误由表达式校验另行报
+  }
+  if (idents.length === 0) return
+  const declared = new Set(Object.keys(featureSources ?? {}))
+  const missing = idents.filter((n) => !declared.has(n))
+  if (missing.length === 0) return
+  warn(
+    'COND_FEATURE_UNDECLARED',
+    ruleId,
+    `${face} 引用特征 [${missing.join(', ')}] 未在 featureSources 声明`
+      + '——运行时只读候选 features/tags（不读对象 attrs），接入层须投影；请补 featureSources 或改用 tags',
+  )
+}
 
 /** 校验可选项（conversational-modeling P3/I6）。 */
 export interface ValidateOptions {
@@ -163,6 +189,15 @@ export function validatePackage(
       }
     }
   }
+  // P0-1 方案A：排除/打分条件只读候选 features 与 tags（不读对象 attrs）。
+  // 条件里的特征名须在 featureSources 声明（接入层投影契约的静态面）；
+  // 打分表达式 featureSources 整体缺省时视为未启用图谱挂接、不强制（兼容 AML 等旧包）。
+  for (const r of pkg.exclusionRules) {
+    warnCondFeatures(r.id, r.condition, r.featureSources, warn, 'condition')
+  }
+  for (const r of pkg.scoreRules) {
+    if (r.featureSources) warnCondFeatures(r.id, r.expression, r.featureSources, warn, 'expression')
+  }
   for (const sc of pkg.scenarios) {
     for (const step of sc.pipeline) {
       for (const skillId of step.skillRefs ?? []) {
@@ -179,6 +214,15 @@ export function validatePackage(
       if (!pkg.exclusionRules.some((r) => r.id === ruleId)) {
         err('REF_UNCLOSED', `SCN ${sc.id}`, `exclusionRefs 引用未闭合: ${ruleId}`)
       }
+    }
+    // P0-2：包内有排除规则但场景未声明 exclusionRefs（缺省=全部）→ 归属不固定、
+    // 静态 ID_UNREFERENCED 与运行「全量应用」互相矛盾。签发门禁另升 error（ISSUE_GATE_EXCL_REFS）。
+    if (pkg.exclusionRules.length > 0 && sc.exclusionRefs === undefined) {
+      warn(
+        'EXCL_REFS_MISSING',
+        `SCN ${sc.id}`,
+        `包内有 ${pkg.exclusionRules.length} 条排除规则，场景未声明 exclusionRefs（缺省=全部，归属不固定）——请显式列出`,
+      )
     }
     // scoreRefs（D13 多场景协作）：缺省 = 全部；显式数组须非空且指向打分规则。
     // 空数组在运行侧 truthy 会收窄到 0 条规则（riskScore 恒 0、闸永不触发）——起草/校验即拒。
@@ -385,6 +429,42 @@ export function validatePackage(
     warn('ID_UNREFERENCED', id, `ID 未被引用: ${id}`)
   }
 
+  /* ── P1-5：模板语义风险 + 字典未引用（info/warn，不挡签发） ──────────── */
+
+  for (const s of pkg.skillTemplates) {
+    const texts = [s.outputTemplate ?? '', ...(s.steps ?? [])].filter(Boolean)
+    for (const t of texts) {
+      if (/(满溢|填充|占用).{0,12}\{riskScore\}|\{riskScore\}.{0,12}(满溢|填充|占用)/.test(t)) {
+        info.push({
+          level: 'info',
+          code: 'TEMPLATE_SEMANTIC_RISK',
+          where: `SKL ${s.id}`,
+          message: `模板可能把 riskScore 读成填充率/满溢率：「${t.slice(0, 60)}」——请改用「综合风险分」措辞`,
+        })
+        break
+      }
+    }
+  }
+
+  {
+    const dictUsed = new Set<string>()
+    for (const o of pkg.objects) {
+      for (const a of o.attributes) {
+        if (a.enumValuesRef) dictUsed.add(a.enumValuesRef)
+      }
+    }
+    for (const r of pkg.relations) {
+      for (const a of r.attributes ?? []) {
+        if (a.enumValuesRef) dictUsed.add(a.enumValuesRef)
+      }
+    }
+    for (const d of pkg.dictionaries) {
+      if (!dictUsed.has(d.id)) {
+        warn('DICT_UNREFERENCED', d.id, `字典未被任何属性 enumValuesRef 引用: ${d.id}——接线或删除`)
+      }
+    }
+  }
+
   /* ── info: 覆盖统计（§7.1） ─────────────────────────────────────────── */
 
   info.push({
@@ -467,6 +547,17 @@ export function assertIssueReady(versionDir: string): IssueGateResult {
   }
   if (pkg.scoreRules.length === 0) {
     throw new PackageStoreError('ISSUE_GATE_EMPTY', '签发被拒：包内没有任何打分规则（0 规则空壳不得签发）')
+  }
+  // P0-2：有排除规则则场景必须显式 exclusionRefs（validate 仅 warn，签发升 error）
+  if (pkg.exclusionRules.length > 0) {
+    const omitted = pkg.scenarios.filter((s) => s.exclusionRefs === undefined)
+    if (omitted.length > 0) {
+      const ids = omitted.map((s) => s.id).join(', ')
+      throw new PackageStoreError(
+        'ISSUE_GATE_EXCL_REFS',
+        `签发被拒：包内有排除规则，但场景未声明 exclusionRefs（${ids}）——请显式列出后再签发`,
+      )
+    }
   }
   const manifest = derivePackage(versionDir)
   const gate = verifyDerived(versionDir)

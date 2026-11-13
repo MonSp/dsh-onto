@@ -1,0 +1,48 @@
+{
+  "endpoint": "GET /api/v1/bin-snapshot",
+  "snapshotAt": "2026-11-12T16:00:00+08:00",
+  "bins": [
+    {
+      "binId": "BIN-01",
+      "binNo": "B01",
+      "zone": "canteen",
+      "wasteType": "kitchen",
+      "fillLevel": 0.92,
+      "lastEmptiedAt": "2026-11-11T10:00:00+08:00",
+      "mixEvents": []
+    },
+    {
+      "binId": "BIN-02",
+      "binNo": "B02",
+      "zone": "dorm",
+      "wasteType": "recyclable",
+      "fillLevel": 0.35,
+      "lastEmptiedAt": "2026-11-12T14:00:00+08:00",
+      "mixEvents": []
+    },
+    {
+      "binId": "BIN-03",
+      "binNo": "B03",
+      "zone": "lab",
+      "wasteType": "hazardous",
+      "fillLevel": 0.8,
+      "lastEmptiedAt": "2026-11-12T10:00:00+08:00",
+      "mixEvents": [
+        { "at": "2026-11-12T11:20:00+08:00", "kind": "hazardous-mix" },
+        { "at": "2026-11-12T13:05:00+08:00", "kind": "hazardous-mix" }
+      ]
+    }
+  ],
+  "routes": [
+    { "routeId": "ROUTE-1", "routeNo": "R01", "stopCount": 12, "plannedMinutes": 45, "covers": ["BIN-01"] }
+  ],
+  "dumps": [
+    { "binId": "BIN-01", "at": "2026-11-12T08:00:00+08:00" }
+  ],
+  "candidates": [
+    { "candidateId": "CAND-BIN-01", "binId": "BIN-01", "tags": [] },
+    { "candidateId": "CAND-BIN-02", "binId": "BIN-02", "tags": [] },
+    { "candidateId": "CAND-BIN-03", "binId": "BIN-03", "tags": [] },
+    { "candidateId": "CAND-BIN-04", "binId": "BIN-02", "tags": ["cleared-whitelist"], "note": "同桶重复候选，适配层应去重" }
+  ]
+}

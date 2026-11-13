@@ -359,6 +359,8 @@ export interface CandidateResult {
   candidateId: string
   objectRef: string
   riskScore: number
+  /** P0-5：按 reviewGate.threshold 推导的中文等级（高/中/低）。 */
+  riskLevel?: string
   hitRuleIds: string[]
   evidenceChains: EvidenceChainEntry[]
   narrative: string[]
