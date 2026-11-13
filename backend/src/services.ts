@@ -648,7 +648,8 @@ export class OntoRuntime extends TypertRemoteService {
         this.ws.root,
         buildRunRecord({
           package: { name: meta.name, version: meta.version },
-          dataset: request.dataset,
+          dataset: result.effectiveDataset ?? request.dataset,
+          inputDataset: request.dataset,
           result,
           redlines,
         }),

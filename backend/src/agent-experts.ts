@@ -426,7 +426,8 @@ export function registerExpertTools(
         + '（coldStart/hits 含 reviewFocus/advice——经验只提示不改分）；打分只在引擎，humanReviewRequired 恒 true。'
         + '数据 datasetPath/dataset 二选一：样例数据在 dsh-onto 源码检出目录的 examples/ 下'
         + '（aml-run.json / med-run.json / tax-run.json）——不在会话工作区、也不在平台进程工作目录，'
-        + '相对 datasetPath 会读不到；请先定位 dsh-onto 检出目录并读取文件内容，再用 dataset 内联传入。',
+        + '相对 datasetPath 会读不到；请先定位 dsh-onto 检出目录并读取文件内容，再用 dataset 内联传入。'
+        + '场景声明 prep 时可选 seedIds 圈定种子（与 run_scenario 同语义；未声明 prep.expand 传入 → INVALID_ARGS）。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '版本号' },
@@ -437,6 +438,10 @@ export function registerExpertTools(
             + ' examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: { type: 'json', description: '内联 RuntimeDataset（与 datasetPath 二选一）' },
+        seedIds: {
+          type: 'array',
+          description: '可选种子实体 ID（非空 ≤32）：场景声明 prep.expand 时用于扩图圈定范围',
+        },
       },
       output: {
         schema: {
@@ -459,13 +464,37 @@ export function registerExpertTools(
         render: (_args, value) => textBlock(renderInvoke(value)),
       },
       execute: toolExecute(
-        async (args: { name: string; version: string; scenarioId: string; datasetPath?: string; dataset?: unknown }) => {
+        async (args: {
+          name: string
+          version: string
+          scenarioId: string
+          datasetPath?: string
+          dataset?: unknown
+          seedIds?: unknown
+        }) => {
           const dataset = loadDatasetFromArgs(args)
+          // seedIds 与 run_scenario 同口径（A-8）；未声明 prep.expand 在 runScenario 内拒
+          let seedIds: string[] | undefined
+          if (args.seedIds !== undefined && args.seedIds !== null) {
+            if (!Array.isArray(args.seedIds) || args.seedIds.length === 0 || args.seedIds.length > 32) {
+              throw new AgentToolError('INVALID_ARGS', 'seedIds 须为非空数组且 ≤32')
+            }
+            if (args.seedIds.some((s) => typeof s !== 'string' || s === '')) {
+              throw new AgentToolError('INVALID_ARGS', 'seedIds 须为非空字符串条目')
+            }
+            seedIds = args.seedIds as string[]
+          }
           const pkg = loadGated(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
           if (scenario === undefined) {
             throw new AgentToolError('NOT_FOUND', `专家/场景不存在: ${args.scenarioId}`)
+          }
+          if (seedIds !== undefined && !scenario.prep?.expand) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `场景 ${args.scenarioId} 未声明 prep.expand，无法应用 seedIds`,
+            )
           }
           const duties = readAgentDuties(versionDir)
           if (duties === null) {
@@ -499,16 +528,18 @@ export function registerExpertTools(
             }
           }
 
-          const result = runScenario(versionDir, scenario.id, dataset)
+          const result = runScenario(versionDir, scenario.id, dataset, seedIds !== undefined ? { seedIds } : undefined)
           assertRunContract(result)
           const phrases = collectPhrases(result, scenario.outputContract.forbiddenPhrases)
           rememberPhrases(result.runId, phrases)
           // T5 缺陷修复：专家通道同样落 RunRecord（export_audit/annotate/compare 的留痕前提）。
+          const effective = result.effectiveDataset ?? dataset
           saveRunRecord(
             ws.root,
             buildRunRecord({
               package: { name: pkg.meta.name, version: pkg.meta.version },
-              dataset,
+              dataset: effective,
+              inputDataset: dataset,
               result,
               redlines: phrases,
             }),

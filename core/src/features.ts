@@ -6,26 +6,16 @@
  * 派生值写入 features 后即参与打分/排除（与 PR#17「可回算特征写入 features」口径一致）。
  * @module @dsh-onto/core/features
  */
-import type { OntologyPackage, RuntimeBehaviorInstance, RuntimeCandidate, RuntimeDataset, RuntimeRelationInstance } from './types.js'
+import type {
+  FeatureRecipe,
+  OntologyPackage,
+  RuntimeBehaviorInstance,
+  RuntimeCandidate,
+  RuntimeDataset,
+  RuntimeRelationInstance,
+} from './types.js'
 
-export interface FeatureRecipe {
-  /** 写入 features 的键。 */
-  name: string
-  kind: 'since' | 'count' | 'ratio'
-  /** since：对象上的时间戳属性名。 */
-  attr?: string
-  /** count：计数源。 */
-  source?: 'behaviors' | 'relations'
-  /** count：实例过滤（type 精确匹配；attr+equals 同时给出才过滤字段值）。 */
-  filter?: { type?: string; attr?: string; equals?: string | number }
-  /** ratio：分子/分母特征键。 */
-  num?: string
-  den?: string
-  /** ratio：分母下限，den < minDen → 缺省（待核实）。 */
-  minDen?: number
-  /** since：基准时刻 ISO；缺省 = 调用方注入（测试/回放固定 now）。 */
-  now?: string
-}
+export type { FeatureRecipe }
 
 /** 单配方对该候选算不出值时的哨兵。 */
 const SKIP = Symbol('skip')

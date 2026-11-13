@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { derivePackage } from './derive.js'
 import { draftCandidateId, knowledgeSourceId, isValidId } from './ids.js'
 import { isConclusionLike, parseWithFallback } from './llm.js'
-import { assertWritable, loadPackage, readPackageMeta, savePackage } from './store.js'
+import { assertWritable, loadPackage, normalizeScenarioPrep, readPackageMeta, savePackage } from './store.js'
 import type {
   DraftCandidate,
   DraftItem,
@@ -121,6 +121,41 @@ export function validateDraftItem(item: unknown): string | null {
     const scRefs = (payload as Record<string, unknown>)['scoreRefs']
     if (Array.isArray(scRefs) && scRefs.length === 0) {
       return 'bad payload.scoreRefs（显式空数组非法：缺省=全部请省略键；限定范围请至少列 1 条）'
+    }
+    // prep 结构起草即拒（与 validate PREP_INVALID 同口径；错型不得静默入队）
+    const prepRaw = (payload as Record<string, unknown>)['prep']
+    if (prepRaw !== undefined && prepRaw !== null) {
+      if (typeof prepRaw !== 'object' || Array.isArray(prepRaw)) return 'bad payload.prep（须为对象）'
+      const pr = prepRaw as Record<string, unknown>
+      if (pr['expand'] !== undefined && pr['expand'] !== null) {
+        const e = pr['expand']
+        if (typeof e !== 'object' || Array.isArray(e)) return 'bad payload.prep.expand（须为对象）'
+        const er = e as Record<string, unknown>
+        if (
+          'hops' in er
+          && (typeof er['hops'] !== 'number'
+            || !Number.isInteger(er['hops'])
+            || (er['hops'] as number) < 0
+            || (er['hops'] as number) > 3)
+        ) {
+          return 'bad payload.prep.expand.hops（须为 0..3 整数）'
+        }
+        if ('direction' in er && er['direction'] !== 'out' && er['direction'] !== 'in' && er['direction'] !== 'both') {
+          return 'bad payload.prep.expand.direction（须为 out|in|both）'
+        }
+        if ('relationTypes' in er) {
+          const rt = er['relationTypes']
+          if (!Array.isArray(rt) || (rt as unknown[]).some((t) => typeof t !== 'string' || t === '')) {
+            return 'bad payload.prep.expand.relationTypes（须为非空字符串数组）'
+          }
+        }
+      }
+      if ('features' in pr && typeof pr['features'] !== 'boolean') {
+        return 'bad payload.prep.features（须为布尔）'
+      }
+      if (pr['expand'] === undefined && pr['features'] === undefined) {
+        return 'bad payload.prep（至少须声明 expand 或 features 之一）'
+      }
     }
   }
   const conf = it['confidence']
@@ -891,7 +926,7 @@ const UPDATABLE: Record<string, string[]> = {
   ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate', 'featureSources'],
   ExclusionRule: ['name', 'action', 'factor', 'condition', 'featureSources'],
   SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
-  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'outputContract', 'reviewGate', 'auditChecks'],
+  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'prep', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
   ApiSource: ['name', 'sourceType', 'endpoint'],
 }
@@ -1253,6 +1288,10 @@ export function applyDraftToPackage(
           : {}),
         ...(Array.isArray(p['scoreRefs']) && (p['scoreRefs'] as unknown[]).length > 0
           ? { scoreRefs: (p['scoreRefs'] as string[]).map(String) }
+          : {}),
+        // scenario-prep：create 分支必须落 prep（评审缺陷1——曾只在 UPDATABLE 白名单、未写入）
+        ...(normalizeScenarioPrep(p['prep']) !== undefined
+          ? { prep: normalizeScenarioPrep(p['prep'])! }
           : {}),
         // 结论性表述绝不能出现在 mustInclude / forbidden 清洗后的契约里。
         // mustInclude：顶层或 outputContract 内均可（技能文案承诺双路径；update 已有归一，create 曾只读顶层）。

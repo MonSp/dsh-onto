@@ -182,10 +182,66 @@ export interface O3ScenarioCard {
    * 显式数组 = 只求值圈内规则——范围外规则不参与加权、不因缺特征落待核实。
    */
   scoreRefs?: string[]
+  /**
+   * 场景内含数据准备（scenario-prep S2.1）：种子由调用方经 run_scenario.seedIds 传入，
+   * 场景卡只声明怎么扩/是否投影派生。缺省 = 无准备（输入即全部，零回归）。
+   */
+  prep?: O3ScenarioPrep
   outputContract: O3OutputContract
   reviewGate: O3ReviewGate
   /** 三层闭合闸门清单，如 [O1_CLOSED, O2_CLOSED, O3_CLOSED]。 */
   auditChecks: string[]
+}
+
+/** 场景 prep 声明（S2.1）。`expand` 与 `features` 均可选；两者都缺省 = 无准备。 */
+export interface O3ScenarioPrep {
+  /** 扩图；声明后调用方可传 seedIds 圈定业务范围。无 seedIds 时不扩图（全量执行合法）。 */
+  expand?: {
+    /** 0..3，默认 1（沿 subgraph-expansion 硬上限）。 */
+    hops?: number
+    /** 默认 'both'。 */
+    direction?: 'out' | 'in' | 'both'
+    relationTypes?: string[]
+  }
+  /** 打分前执行 projectFeatures + 包级 featureRecipes；默认 false（零回归）。 */
+  features?: boolean
+}
+
+/** RunRecord 人审面对账用的 prep 摘要（S2.4；不进模型面）。 */
+export interface ScenarioPrepSummary {
+  expanded?: {
+    seeds: string[]
+    hops: number
+    objects: number
+    truncated: boolean
+  }
+  projectedWrites?: number
+  derived?: string[]
+  /**
+   * since 派生时间基准 ISO（与本轮 startedAt 同源，单次捕获）。
+   * 双 digest 只能发现数据变化，此字段还原「按哪个时刻算 since」的计算条件。
+   */
+  sinceBasis?: string
+}
+
+/** 确定性特征配方（PR#18 features.ts；scenario-prep S2.2 包级复用同一类型）。 */
+export interface FeatureRecipe {
+  /** 写入 features 的键。 */
+  name: string
+  kind: 'since' | 'count' | 'ratio'
+  /** since：对象上的时间戳属性名。 */
+  attr?: string
+  /** count：计数源。 */
+  source?: 'behaviors' | 'relations'
+  /** count：实例过滤（type 精确匹配；attr+equals 同时给出才过滤字段值）。 */
+  filter?: { type?: string; attr?: string; equals?: string | number }
+  /** ratio：分子/分母特征键。 */
+  num?: string
+  den?: string
+  /** ratio：分母下限，den < minDen → 缺省（待核实）。 */
+  minDen?: number
+  /** since：基准时刻 ISO；缺省 = 调用方注入（测试/回放固定 now）。包级配方禁写此字段。 */
+  now?: string
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -247,6 +303,11 @@ export interface OntologyPackage {
   scenarios: O3ScenarioCard[]
   fieldMaps: O1FieldMap[]
   apiSources: O1ApiSource[]
+  /**
+   * 包级特征配方（scenario-prep S2.2 / PR#18 P6）：落 package.yaml，自动进派生指纹。
+   * 仅当场景 prep.features=true 时由执行层注入 now 后执行 deriveFeatures；包内禁写 now。
+   */
+  featureRecipes?: FeatureRecipe[]
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -407,6 +468,13 @@ export interface ScenarioRunResult {
     forbiddenPhraseHits: ForbiddenPhraseHit[]
     passed: boolean
   }
+  /** 执行层 prep 摘要（scenario-prep S2.4；人审对账，无准备时缺省）。 */
+  prep?: ScenarioPrepSummary
+  /**
+   * 有 prep 时回填的 effective 数据集（buildRunRecord 双 digest 用）。
+   * enumerable:false——不进 JSON.stringify / 模型面 / RunRecord.result。
+   */
+  effectiveDataset?: RuntimeDataset
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

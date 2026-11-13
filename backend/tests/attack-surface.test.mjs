@@ -44,8 +44,9 @@ import {
   renderProjectText,
   runScenarioBatch,
   validateDatasetShape,
+  validateRunSeedIds,
 } from '../dist/agent-tools.js'
-import { dedupeSkillNames, isCurrentWinner, pickSkillSources } from '../dist/agent-skills.js'
+import { dedupeSkillNames, isCurrentWinner, pickSkillSources, renderModelingGuideBody } from '../dist/agent-skills.js'
 import {
   PackageStoreError,
   PackageWorkspace,
@@ -58,7 +59,9 @@ import {
   loadRunRecord,
   projectFeatures,
   runScenario,
+  savePackage,
   saveRunRecord,
+  validatePackageDir,
   writeSourceFile,
 } from '@dsh-onto/core'
 
@@ -1108,4 +1111,85 @@ test('A-3/A-6/A-7 core 面重放：诱导子图 / 默认不覆盖 / now 注入�
   assert.equal(a.candidates[0].features.h, 1)
   const noNow = deriveFeatures(cand, dsm, [{ name: 'h', kind: 'since', attr: 't' }])
   assert.ok(!('h' in noNow.candidates[0].features), '缺 now 不得回退 new Date()')
+})
+
+/* ── scenario-prep 攻击面表（S2.5 A-8…A-10 全表重放） ──────────────────── */
+
+test('A-8 run_scenario seedIds：上限 32、错型拒绝；未声明 prep.expand → INVALID_ARGS', () => {
+  assert.equal(validateRunSeedIds(undefined), undefined)
+  assert.equal(validateRunSeedIds(null), undefined)
+  expectCode(() => validateRunSeedIds([]), 'INVALID_ARGS')
+  expectCode(() => validateRunSeedIds(Array(33).fill('x')), 'INVALID_ARGS')
+  expectCode(() => validateRunSeedIds([42]), 'INVALID_ARGS')
+  expectCode(() => validateRunSeedIds(['', 'a']), 'INVALID_ARGS')
+  expectCode(() => validateRunSeedIds('not-array'), 'INVALID_ARGS')
+  assert.deepEqual(validateRunSeedIds(['ACCT-001']), ['ACCT-001'])
+
+  // 场景未声明 prep.expand 而传 seedIds → 批量该项 error（文案指明 prep.expand）
+  const ws = new PackageWorkspace(REPO)
+  try {
+    const pkg = loadPackage(AML_DIR)
+    const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+    const out = runScenarioBatch({
+      ws, pkg, versionDir: AML_DIR, dataset, ids: ['SCN-AML-FIND-CLUES'], seedIds: ['ACCT-001'],
+    })
+    assert.equal(out.results[0].status, 'error')
+    assert.equal(out.results[0].error.code, 'INVALID_ARGS')
+    assert.match(out.results[0].error.message, /prep\.expand/)
+  } finally {
+    rmSync(join(ws.root, 'runs'), { recursive: true, force: true })
+  }
+})
+
+test('A-9 无 prep 路径 RunRecord 与现状逐字节一致（无 inputDigest/prep 键）', () => {
+  const ws = new PackageWorkspace(REPO)
+  try {
+    const pkg = loadPackage(AML_DIR)
+    const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+    const out = runScenarioBatch({
+      ws, pkg, versionDir: AML_DIR, dataset, ids: ['SCN-AML-FIND-CLUES'],
+    })
+    assert.equal(out.results[0].status, 'ok')
+    const rec = loadRunRecord(ws.root, out.results[0].runId)
+    assert.equal('inputDigest' in rec, false, '无 prep 不得有 inputDigest')
+    assert.equal('prep' in rec, false, '无 prep 不得有 prep')
+    assert.equal(typeof rec.datasetDigest, 'string')
+    const keys = Object.keys(rec).sort()
+    assert.deepEqual(keys, [
+      'datasetDigest', 'datasetSummary', 'package', 'redlines', 'result', 'runId', 'savedAt', 'scenarioId', 'startedAt',
+    ])
+  } finally {
+    rmSync(join(ws.root, 'runs'), { recursive: true, force: true })
+  }
+})
+
+test('A-10 包级配方 validate 拒 now；deriveFeatures 注入后回放逐字节一致', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-onto-a10-'))
+  try {
+    cpSync(AML_DIR, dir, { recursive: true })
+    const pkg = loadPackage(dir)
+    pkg.featureRecipes = [{ name: 'x', kind: 'count', source: 'behaviors', now: '2026-01-01T00:00:00Z' }]
+    savePackage(dir, pkg)
+    const rep = validatePackageDir(dir)
+    assert.ok(
+      rep.errors.some((e) => e.code === 'FEATURE_RECIPE_INVALID' && /now/.test(e.message)),
+      '包级配方含 now 须 FEATURE_RECIPE_INVALID',
+    )
+    // 执行层注入路径：同注入 now 两次派生逐字节一致（A-10 回放）
+    const ds = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+    const cand = ds.candidates.map((c) => ({ ...c, features: { ...c.features } }))
+    const recipes = [{ name: 'h', kind: 'since', attr: 'openedAt', now: '2026-11-01T00:00:00Z' }]
+    const a = deriveFeatures(cand, ds, recipes)
+    const b = deriveFeatures(cand, ds, recipes)
+    assert.equal(JSON.stringify(a), JSON.stringify(b))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('skill 指引：开展场景 = 单次 run_scenario(seedIds)，旧两连调降级为探索性', () => {
+  const body = renderModelingGuideBody()
+  assert.ok(body.includes('单次 `run_scenario(seedIds?)`'), '须引导单次 run_scenario')
+  assert.ok(body.includes('两连调'), '须显式提及两连调已降级')
+  assert.ok(body.includes('探索性扩图'), '旧链路保留探索性定位')
 })

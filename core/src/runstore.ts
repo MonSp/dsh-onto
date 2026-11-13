@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInsideDir, isSafeRelPath, PackageStoreError } from './store.js'
-import type { RuntimeDataset, ScenarioRunResult } from './types.js'
+import type { RuntimeDataset, ScenarioPrepSummary, ScenarioRunResult } from './types.js'
 
 export const RUNS_DIR = 'runs'
 export const RUNS_EXPORTS_DIR = 'exports'
@@ -25,11 +25,18 @@ export interface RunRecord {
   package: { name: string; version: string }
   scenarioId: string
   startedAt: string
-  /** sha256(canonicalJson(dataset))：键序稳定，同数据同指纹。 */
+  /** sha256(canonicalJson(effectiveDataset))：键序稳定，同数据同指纹。 */
   datasetDigest: string
+  /**
+   * 调用方原始 dataset 的 digest（scenario-prep S2.4）。
+   * 无准备时 === datasetDigest；旧记录缺省视为相等（向后兼容）。
+   */
+  inputDigest?: string
   datasetSummary: { objects: number; relations: number; behaviors: number; candidates: number }
   /** 当轮双源短语清单（命中 ∪ 场景红线）——phraseRegistry 的落盘面。 */
   redlines: string[]
+  /** 执行层 prep 摘要（人审对账；无准备时缺省）。 */
+  prep?: ScenarioPrepSummary
   /** 掩蔽前完整结果（core/wire/CLI 人审面口径）。 */
   result: ScenarioRunResult
   savedAt: string
@@ -69,18 +76,30 @@ export function datasetDigest(dataset: RuntimeDataset): string {
 
 export function buildRunRecord(input: {
   package: { name: string; version: string }
+  /** 实际参与打分的数据集（准备后 effective；无准备 = 原输入）。 */
   dataset: RuntimeDataset
+  /** 调用方原输入；缺省 = dataset。有 prep 时必传以对账 inputDigest。 */
+  inputDataset?: RuntimeDataset
+  /** prep 摘要；缺省从 result.prep 取（runScenario 回填）。 */
+  prep?: ScenarioPrepSummary
   result: ScenarioRunResult
   redlines: readonly string[]
   savedAt?: string
 }): RunRecord {
   const { dataset, result } = input
+  const prep = input.prep ?? result.prep
+  // A-9：无 prep 路径不落 inputDigest/prep 键 → 与现状 RunRecord 逐字节一致；
+  // 有 prep 才双 digest（原输入只留 digest，effective 进 datasetDigest）。
+  const inputDs = input.inputDataset ?? dataset
+  const effDigest = datasetDigest(dataset)
+  const inputDigest = prep !== undefined ? datasetDigest(inputDs) : undefined
   return {
     runId: result.runId,
     package: { name: input.package.name, version: input.package.version },
     scenarioId: result.scenarioId,
     startedAt: result.startedAt,
-    datasetDigest: datasetDigest(dataset),
+    datasetDigest: effDigest,
+    ...(inputDigest !== undefined ? { inputDigest } : {}),
     datasetSummary: {
       objects: dataset.objects.length,
       relations: dataset.relations.length,
@@ -88,6 +107,7 @@ export function buildRunRecord(input: {
       candidates: dataset.candidates.length,
     },
     redlines: [...new Set(input.redlines.filter((p) => typeof p === 'string' && p !== ''))],
+    ...(prep !== undefined ? { prep } : {}),
     result,
     savedAt: input.savedAt ?? new Date().toISOString(),
   }

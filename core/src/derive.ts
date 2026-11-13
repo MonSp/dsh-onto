@@ -141,6 +141,9 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       name: s.name,
       weights: s.weights,
     })),
+    ...(pkg.featureRecipes !== undefined && pkg.featureRecipes.length > 0
+      ? { featureRecipes: pkg.featureRecipes }
+      : {}),
   }
 
   // O3 → 专家分工（阶段职责、工具权限、llm 禁止节点、人工门禁）
@@ -213,6 +216,7 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
       ...(sc.behaviorRefs ? { behaviorRefs: sc.behaviorRefs } : {}),
       ...(sc.exclusionRefs ? { exclusionRefs: sc.exclusionRefs } : {}),
       ...(sc.scoreRefs ? { scoreRefs: sc.scoreRefs } : {}),
+      ...(sc.prep ? { prep: sc.prep } : {}),
       outputContract: sc.outputContract,
       reviewGate: sc.reviewGate,
     })),
