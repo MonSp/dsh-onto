@@ -647,6 +647,7 @@ export function resolveBatchIds(scenarioIds: unknown, pkg: OntologyPackage): str
 /**
  * 批量执行（S2.3）：逐项复用 run_scenario 既有契约（装配断言/禁语/落盘），
  * 单项失败落受控信封不中断批次；包级前置失败（上限/门禁/收权）由调用方 fail-loud。
+ * seedIds 同组作用于批次；某场景未声明 prep.expand → 该项 error（沿批量失败隔离）。
  */
 export function runScenarioBatch(input: {
   ws: PackageWorkspace
@@ -654,8 +655,9 @@ export function runScenarioBatch(input: {
   versionDir: string
   dataset: RuntimeDataset
   ids: readonly string[]
+  seedIds?: string[]
 }): BatchRunOutput {
-  const { ws, pkg, versionDir, dataset, ids } = input
+  const { ws, pkg, versionDir, dataset, ids, seedIds } = input
   if (ids.length > BATCH_RUN_LIMIT) {
     throw new AgentToolError('INVALID_ARGS', `批量上限 ${BATCH_RUN_LIMIT} 个场景（收到 ${ids.length}）`)
   }
@@ -668,14 +670,19 @@ export function runScenarioBatch(input: {
       if (scenario === undefined) {
         throw new AgentToolError('NOT_FOUND', `场景 ${scenarioId} 不存在`)
       }
-      const result = runScenario(versionDir, scenarioId, dataset)
+      if (seedIds !== undefined && !scenario.prep?.expand) {
+        throw new AgentToolError('INVALID_ARGS', `场景 ${scenarioId} 未声明 prep.expand，无法应用 seedIds`)
+      }
+      const result = runScenario(versionDir, scenarioId, dataset, seedIds !== undefined ? { seedIds } : undefined)
       assertRunContract(result)
       const phrases = collectPhrases(result, reds)
+      const effective = result.effectiveDataset ?? dataset
       saveRunRecord(
         ws.root,
         buildRunRecord({
           package: { name: pkg.meta.name, version: pkg.meta.version },
-          dataset,
+          dataset: effective,
+          inputDataset: dataset,
           result,
           redlines: phrases,
         }),
@@ -696,9 +703,30 @@ export function runScenarioBatch(input: {
   return { results, humanReviewRequired: true }
 }
 
+/**
+ * run_scenario 的 seedIds 校验（A-8）：错型/空/超限 → INVALID_ARGS。
+ * 场景是否声明 prep.expand 由调用方在拿到场景后另查（错误文案须指明场景）。
+ */
+export function validateRunSeedIds(seedIds: unknown): string[] | undefined {
+  if (seedIds === undefined || seedIds === null) return undefined
+  if (!Array.isArray(seedIds)) {
+    throw new AgentToolError('INVALID_ARGS', 'seedIds 需要数组')
+  }
+  if (seedIds.length === 0) {
+    throw new AgentToolError('INVALID_ARGS', 'seedIds 必须为非空数组')
+  }
+  if (seedIds.length > EXPAND_SEED_LIMIT) {
+    throw new AgentToolError('INVALID_ARGS', `seedIds 上限 ${EXPAND_SEED_LIMIT} 个（收到 ${seedIds.length}）`)
+  }
+  if (seedIds.some((s) => typeof s !== 'string' || s === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'seedIds 须为非空字符串条目')
+  }
+  return seedIds as string[]
+}
+
 /* ─────────── 子图扩展与特征投影（subgraph-expansion S3.2/S4.3） ─────────── */
 
-/** seedIds 数量上限（A-2，防邻域爆炸的入参面）。 */
+/** seedIds 数量上限（A-2/A-8，防邻域爆炸的入参面）。 */
 export const EXPAND_SEED_LIMIT = 32
 /** project_features recipes 数量上限（A-2 同族）。 */
 export const PROJECT_RECIPE_LIMIT = 32
@@ -1929,6 +1957,8 @@ export function apply(ctx: Context): void {
         + '（aml-run.json / med-run.json / tax-run.json）——不在会话工作区、也不在平台进程工作目录，'
         + '相对 datasetPath 按平台进程工作目录解析会读不到；请先定位 dsh-onto 检出目录并读取文件内容，'
         + '再用 dataset 内联传入。'
+        + '场景声明 prep 时，本次调用会先按声明扩图/投影/派生再打分（可选 seedIds 圈定种子；'
+        + 'ad-hoc 扩图仍可用 expand_entity）。'
         + '返回候选风险分、命中规则 ID、证据链、待核实点、'
         + 'humanReviewRequired=true 与禁语扫描结果。',
       parameters: {
@@ -1941,6 +1971,11 @@ export function apply(ctx: Context): void {
             + '样例在 dsh-onto 检出目录 examples/ 下（非会话工作区），通常读不到，请读取文件内容后用 dataset 内联传入',
         },
         dataset: { type: 'json', description: '内联 RuntimeDataset（objects/relations/candidates）' },
+        seedIds: {
+          type: 'array',
+          description: '可选种子实体 ID（非空 ≤32）：场景声明 prep.expand 时用于扩图圈定范围；'
+            + '场景未声明 prep.expand 而传入 → INVALID_ARGS。开展场景时从会话提取种子后单次传入即可',
+        },
       },
       output: {
         schema: {
@@ -1967,23 +2002,38 @@ export function apply(ctx: Context): void {
           scenarioId: string
           datasetPath?: string
           dataset?: unknown
+          seedIds?: unknown
         }) => {
           const dataset = loadDatasetFromArgs(args)
+          const seedIds = validateRunSeedIds(args.seedIds)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
+          if (seedIds !== undefined && !scenario?.prep?.expand) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `场景 ${args.scenarioId} 未声明 prep.expand，无法应用 seedIds`,
+            )
+          }
           const contracts = readToolContracts(versionDir)
           assertDatasetGranted(dataset, contracts)
-          const result = runScenario(versionDir, args.scenarioId, dataset)
+          const result = runScenario(
+            versionDir,
+            args.scenarioId,
+            dataset,
+            seedIds !== undefined ? { seedIds } : undefined,
+          )
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
           const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
-          // 运行留痕（S2.1）：掩蔽前完整结果 + 双源红线落盘（人审面；模型面出口仍走掩蔽）。
+          // 运行留痕（S2.1/S2.4）：effective 进 datasetDigest，原输入只留 inputDigest。
+          const effective = result.effectiveDataset ?? dataset
           saveRunRecord(
             ws.root,
             buildRunRecord({
               package: { name: pkg.meta.name, version: pkg.meta.version },
-              dataset,
+              dataset: effective,
+              inputDataset: dataset,
               result,
               redlines: phrases,
             }),
@@ -2049,8 +2099,9 @@ export function apply(ctx: Context): void {
     defineTool({
       name: 'run_scenarios',
       description:
-        '批量运行包内场景（同一份数据多场景视角；scenarioIds 缺省为包内全部场景，上限 32）。' +
-        '单项失败不中断批次；完整结果落运行记录（run-xxxxxxxx），可跟 compare_runs / export_audit。',
+        '批量运行包内场景（同一份数据多场景视角；scenarioIds 缺省为包内全部场景，上限 32）。'
+        + '可选 seedIds 同组作用于批次内声明了 prep.expand 的场景；未声明的场景该项落 error。'
+        + '单项失败不中断批次；完整结果落运行记录（run-xxxxxxxx），可跟 compare_runs / export_audit。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
         version: { type: 'string', required: true, description: '包版本' },
@@ -2066,6 +2117,10 @@ export function apply(ctx: Context): void {
         dataset: {
           type: 'json',
           description: '内联 RuntimeDataset（与 datasetPath 二选一）',
+        },
+        seedIds: {
+          type: 'array',
+          description: '可选种子实体 ID（非空 ≤32）：作用于批次内声明了 prep.expand 的场景',
         },
       },
       output: {
@@ -2087,14 +2142,16 @@ export function apply(ctx: Context): void {
           scenarioIds?: unknown
           datasetPath?: string
           dataset?: unknown
+          seedIds?: unknown
         }) => {
           const dataset = loadDatasetFromArgs(args)
+          const seedIds = validateRunSeedIds(args.seedIds)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const contracts = readToolContracts(versionDir)
           assertDatasetGranted(dataset, contracts)
           const ids = resolveBatchIds(args.scenarioIds, pkg)
-          const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids })
+          const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids, seedIds })
           assertBatchContract(out)
           // 出口遮蔽基准：包内全部场景红线（覆盖假场景 ID 回显撞红线形态）。
           return toolOut(enforceOutputPolicy(out, phrasesOfPkg(pkg)))
@@ -2161,7 +2218,8 @@ export function apply(ctx: Context): void {
       name: 'project_features',
       description:
         '按包 featureSources 把对象 attrs 投影进候选 features，并按 recipes 派生 since/count/ratio 特征'
-        + '（数据准备，不打分；典型链路 expand_entity → project_features → run_scenario）。'
+        + '（数据准备，不打分；ad-hoc 探索用此链路——正式开展场景请用 run_scenario(seedIds) 单次调用，'
+        + '由场景 prep 声明驱动）。'
         + '投影不覆盖已存在特征（overwrite=true 才覆盖）；派生配方以计算值写入（配方即显式意图）。'
         + 'since 的 now 缺省取当前时刻，显式传 now 可保证回放逐字节一致。'
         + '投影后 COND_FEATURE_UNDECLARED 与排除特征缺口自然收敛。',

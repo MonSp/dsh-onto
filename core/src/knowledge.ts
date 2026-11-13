@@ -891,7 +891,7 @@ const UPDATABLE: Record<string, string[]> = {
   ScoreRule: ['name', 'description', 'weight', 'expression', 'threshold', 'evidenceTemplate', 'featureSources'],
   ExclusionRule: ['name', 'action', 'factor', 'condition', 'featureSources'],
   SkillTemplate: ['name', 'weights', 'steps', 'outputTemplate'],
-  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'outputContract', 'reviewGate', 'auditChecks'],
+  ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'prep', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
   ApiSource: ['name', 'sourceType', 'endpoint'],
 }

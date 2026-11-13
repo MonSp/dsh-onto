@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import { collectStrings, runAudit } from './audit.js'
 import { readManifest } from './derive.js'
+import { deriveFeatures, projectFeatures } from './features.js'
 import { verifyDerived } from './loadgate.js'
 import {
   applyExclusions,
@@ -25,12 +26,14 @@ import {
   scoreCandidates,
 } from './rules.js'
 import { loadPackage } from './store.js'
+import { expandEntity, MAX_EXPAND_HOPS } from './subgraph.js'
 import type {
   CandidateResult,
   O3ScenarioCard,
   OntologyPackage,
   RuntimeBehaviorInstance,
   RuntimeDataset,
+  ScenarioPrepSummary,
   ScenarioRunResult,
 } from './types.js'
 
@@ -41,6 +44,14 @@ export class ScenarioRunError extends Error {
     this.name = 'ScenarioRunError'
     this.code = code
   }
+}
+
+/** runScenario 第 4 参：seedIds 圈定 + 可注入 now（兼容旧 now 函数直传）。 */
+export interface ScenarioRunOptions {
+  /** 种子实体 ID（≤32）；场景未声明 prep.expand 时传入 → INVALID_ARGS。 */
+  seedIds?: string[]
+  /** 可测注入位（与 ruleHitLog 同源）；缺省 = new Date()。 */
+  now?: () => Date
 }
 
 /**
@@ -75,14 +86,22 @@ export function ruleEngineConfigOf(pkg: OntologyPackage, scenario?: O3ScenarioCa
 
 /**
  * 执行一个场景。`versionDir` 是包版本目录。
- * 流程：门禁 → 建图 → 行为 → 排除 → 打分 → 叙述 → 审计 → 人工复核字段。
+ * 流程：门禁 → 建图 → [prep: expand→project→derive] → 行为 → 排除 → 打分 → 叙述 → 审计 → 人审。
+ *
+ * 第 4 参兼容两种形态：`ScenarioRunOptions` 或旧签名的 `now` 函数。
+ * 无 prep / 未传 seedIds → 与现状逐字节一致（回归断言）。
  */
 export function runScenario(
   versionDir: string,
   scenarioId: string,
   dataset: RuntimeDataset,
-  now: () => Date = () => new Date(),
+  optsOrNow?: ScenarioRunOptions | (() => Date),
 ): ScenarioRunResult {
+  const opts: ScenarioRunOptions =
+    typeof optsOrNow === 'function' ? { now: optsOrNow } : (optsOrNow ?? {})
+  const now = opts.now ?? (() => new Date())
+  const seedIds = opts.seedIds
+
   /* 0. 运行时加载门禁（§8.1） */
   const gate = verifyDerived(versionDir)
   if (!gate.ok) {
@@ -99,28 +118,106 @@ export function runScenario(
     throw new ScenarioRunError('SCENARIO_NOT_FOUND', `场景不存在: ${scenarioId}`)
   }
 
+  /* 入参面（S2.1 语义矩阵）：seedIds 无处落地 → 拒；全部缺失种子 → 受控失败 */
+  if (seedIds !== undefined) {
+    if (!Array.isArray(seedIds) || seedIds.length === 0 || seedIds.length > 32) {
+      throw new ScenarioRunError('INVALID_ARGS', 'seedIds 须为非空数组且 ≤32')
+    }
+    if (seedIds.some((s) => typeof s !== 'string' || s === '')) {
+      throw new ScenarioRunError('INVALID_ARGS', 'seedIds 须为非空字符串条目')
+    }
+    if (!scenario.prep?.expand) {
+      throw new ScenarioRunError('INVALID_ARGS', `场景 ${scenarioId} 未声明 prep.expand，无法应用 seedIds`)
+    }
+  }
+
   const startedAt = now().toISOString()
   const runId = `run-${randomUUID().slice(0, 8)}`
   const config = ruleEngineConfigOf(pkg, scenario)
 
-  /* pipeline 状态 */
+  /* ── prep（S2.3）：DATA_INGEST 后固定顺序 expand → project → derive ── */
+  let effective: RuntimeDataset = dataset
+  let prepSummary: ScenarioPrepSummary | undefined
+  let prepApplied = false
+  const applyPrep = (): void => {
+    if (prepApplied) return
+    prepApplied = true
+    const prep = scenario.prep
+    const wantExpand = seedIds !== undefined && prep?.expand !== undefined
+    const wantFeatures = prep?.features === true
+    if (!wantExpand && !wantFeatures) return
+
+    let next = effective
+    const summary: ScenarioPrepSummary = {}
+
+    if (wantExpand && seedIds !== undefined && prep?.expand) {
+      const expandOpts = {
+        ...(prep.expand.hops !== undefined ? { hops: prep.expand.hops } : {}),
+        ...(prep.expand.direction !== undefined ? { direction: prep.expand.direction } : {}),
+        ...(prep.expand.relationTypes !== undefined ? { relationTypes: prep.expand.relationTypes } : {}),
+      }
+      const expanded = expandEntity(next, seedIds, expandOpts)
+      if (expanded.seedIds.length === 0) {
+        throw new ScenarioRunError('INVALID_ARGS', '全部种子缺失，无法扩图')
+      }
+      next = expanded.dataset
+      summary.expanded = {
+        seeds: expanded.seedIds,
+        hops: Math.min(
+          Math.max(0, Math.floor(prep.expand.hops ?? 1)),
+          MAX_EXPAND_HOPS,
+        ),
+        objects: expanded.stats.objects,
+        truncated: expanded.truncated,
+      }
+    }
+
+    if (wantFeatures) {
+      const proj = projectFeatures(pkg, next, next.candidates)
+      let candidates = proj.candidates
+      summary.projectedWrites = proj.projected.reduce((n, p) => n + p.keys.length, 0)
+      const recipes = pkg.featureRecipes
+      if (recipes !== undefined && recipes.length > 0) {
+        // A-10：包级配方禁 now；执行层用与 ruleHitLog 同源的 now 注入（回放确定性）。
+        const nowIso = now().toISOString()
+        const ready = recipes.map((r) =>
+          r.kind === 'since' && (r.now === undefined || r.now === null)
+            ? { ...r, now: nowIso }
+            : r,
+        )
+        const der = deriveFeatures(candidates, next, ready)
+        candidates = der.candidates
+        summary.derived = der.derived
+      }
+      next = { ...next, candidates }
+    }
+
+    effective = next
+    prepSummary = summary
+  }
+
+  /* pipeline 状态（使用 effective 数据集） */
   let ingestProblems: string[] = []
   const behaviorInstances: RuntimeBehaviorInstance[] = []
   let excluded: RuleEvalResult['excluded'] = []
   const exclusionFeatureGaps: RuleEvalResult['exclusionFeatureGaps'] = []
   let scored: RuleEvalResult | null = null
-  let survivors = dataset.candidates.map((c) => ({ ...c, weightFactor: 1 }))
+  let survivors = effective.candidates.map((c) => ({ ...c, weightFactor: 1 }))
   let scoringDone = false
 
   /* ── 最小步派发（§9.1 编排载体 = 场景解释器，不另起重型工作流引擎） ── */
   for (const step of scenario.pipeline) {
     switch (step.stepType) {
       case 'DATA_INGEST': {
-        ingestProblems = ingestDataset(pkg, dataset)
+        ingestProblems = ingestDataset(pkg, effective)
+        // S2.3：准备固定在 DATA_INGEST 完成后执行（非 pipeline 新槽位）。
+        applyPrep()
+        // prep 可能改写候选集合 → 重建排除段初始 survivors
+        survivors = effective.candidates.map((c) => ({ ...c, weightFactor: 1 }))
         break
       }
       case 'BEHAVIOR_CALL': {
-        behaviorInstances.push(...materializeBehaviors(pkg, dataset, scenario))
+        behaviorInstances.push(...materializeBehaviors(pkg, effective, scenario))
         break
       }
       case 'RULE_EVALUATE': {
@@ -128,7 +225,7 @@ export function runScenario(
           // 排除段
           const excludedOut: RuleEvalResult['excluded'] = []
           const gaps: RuleEvalResult['exclusionFeatureGaps'] = []
-          survivors = applyExclusions(config.exclusion, dataset.candidates, excludedOut, gaps)
+          survivors = applyExclusions(config.exclusion, effective.candidates, excludedOut, gaps)
           excluded = excludedOut
           exclusionFeatureGaps.push(...gaps)
         } else {
@@ -161,6 +258,10 @@ export function runScenario(
     }
   }
 
+  // pipeline 无 DATA_INGEST 时 prep 仍须在打分前生效（有 prep 声明的场景都应有 ingest；
+  // 防御：装配前若未应用则补一次）。
+  applyPrep()
+
   if (!scoringDone || scored === null) {
     throw new ScenarioRunError(
       'PIPELINE_INCOMPLETE',
@@ -175,8 +276,8 @@ export function runScenario(
   const skills = pkg.skillTemplates.filter((s) => skillRefs.includes(s.id))
 
   const candidates: CandidateResult[] = scored.candidates.map((c) => {
-    const candInput = dataset.candidates.find((x) => x.candidateId === c.candidateId)
-    const obj = dataset.objects.find((o) => o.id === c.objectRef)
+    const candInput = effective.candidates.find((x) => x.candidateId === c.candidateId)
+    const obj = effective.objects.find((o) => o.id === c.objectRef)
     const objectAttrs: Record<string, unknown> = obj?.attrs ?? {}
     const narrative = buildNarrative(
       skills,
@@ -241,6 +342,16 @@ export function runScenario(
     },
     ruleHitLog: scored.ruleHitLog,
     audit: { checks: [], forbiddenPhraseHits: [], passed: true },
+    ...(prepSummary !== undefined ? { prep: prepSummary } : {}),
+  }
+  if (prepSummary !== undefined) {
+    // 非枚举：不进 JSON/模型面/RunRecord.result，仅 buildRunRecord 读 effective 双 digest。
+    Object.defineProperty(result, 'effectiveDataset', {
+      value: effective,
+      enumerable: false,
+      writable: false,
+      configurable: true,
+    })
   }
 
   const mustIncludeSatisfied = checkMustInclude(scenario, result)
@@ -252,7 +363,7 @@ export function runScenario(
   const audit = runAudit({
     pkg,
     scenario,
-    dataset,
+    dataset: effective,
     behaviorInstances,
     ruleHitLog: result.ruleHitLog,
     outputStrings,

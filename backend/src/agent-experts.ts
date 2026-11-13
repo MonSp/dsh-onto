@@ -504,11 +504,13 @@ export function registerExpertTools(
           const phrases = collectPhrases(result, scenario.outputContract.forbiddenPhrases)
           rememberPhrases(result.runId, phrases)
           // T5 缺陷修复：专家通道同样落 RunRecord（export_audit/annotate/compare 的留痕前提）。
+          const effective = result.effectiveDataset ?? dataset
           saveRunRecord(
             ws.root,
             buildRunRecord({
               package: { name: pkg.meta.name, version: pkg.meta.version },
-              dataset,
+              dataset: effective,
+              inputDataset: dataset,
               result,
               redlines: phrases,
             }),

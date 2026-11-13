@@ -193,6 +193,11 @@ const pkg = {
       outputTemplate: '{binNo} 综合风险分 {riskScore} · 等级 {riskLevel}',
     },
   ],
+  // 包级特征配方（scenario-prep S2.2 / PR#18 P6）：prep.features=true 时由执行层注入 now 后派生
+  featureRecipes: [
+    { name: 'overdueHours', kind: 'since', attr: 'lastEmptiedAt' },
+    { name: 'hazardMixCount', kind: 'count', source: 'behaviors', filter: { type: 'BHV-WST-MIX' } },
+  ],
   scenarios: [
     {
       id: 'SCN-WST-FILL-TRIAGE',
@@ -207,6 +212,11 @@ const pkg = {
       ],
       outputs: {
         fields: ['candidateId', 'binNo', 'riskScore', 'riskLevel', 'hitRuleIds', 'evidenceChains', 'pendingChecks'],
+      },
+      // 场景内含数据准备（S2.1）：种子由 run_scenario.seedIds 传入
+      prep: {
+        expand: { hops: 1 },
+        features: true,
       },
       pipeline: [
         { stepId: 's1', stepType: 'DATA_INGEST' },
@@ -259,7 +269,7 @@ if (issueHuman) {
 }
 console.log('DIR', dir)
 
-// 模拟运行数据（features 须含 zone——排除条件只读 features，PR#17 P0-3 契约）
+// 模拟运行数据：纯结构适配面（features 留空，投影/派生交给 prep.features 执行层）
 const runData = {
   objects: [
     { id: 'BIN-01', type: 'OBJ-WST-BIN', attrs: { binNo: 'B01', zone: 'canteen', wasteType: 'kitchen', fillLevel: 0.92, lastEmptiedAt: '2026-11-11T02:00:00Z' } },
@@ -272,32 +282,14 @@ const runData = {
   ],
   behaviors: [
     { id: 'B1', type: 'BHV-WST-DUMP', anchorRef: 'BIN-01', objectRef: 'BIN-01', occurredAt: '2026-11-12T08:00:00Z' },
+    { id: 'B-MIX-3-1', type: 'BHV-WST-MIX', anchorRef: 'BIN-03', objectRef: 'BIN-03', occurredAt: '2026-11-12T11:20:00Z' },
+    { id: 'B-MIX-3-2', type: 'BHV-WST-MIX', anchorRef: 'BIN-03', objectRef: 'BIN-03', occurredAt: '2026-11-12T13:05:00Z' },
   ],
   candidates: [
-    {
-      candidateId: 'CAND-BIN-01',
-      objectRef: 'BIN-01',
-      features: { fillLevel: 0.92, zone: 'canteen', overdueHours: 30, hazardMixCount: 0 },
-      tags: [],
-    },
-    {
-      candidateId: 'CAND-BIN-02',
-      objectRef: 'BIN-02',
-      features: { fillLevel: 0.35, zone: 'dorm', overdueHours: 2, hazardMixCount: 0 },
-      tags: [],
-    },
-    {
-      candidateId: 'CAND-BIN-03',
-      objectRef: 'BIN-03',
-      features: { fillLevel: 0.8, zone: 'lab', overdueHours: 6, hazardMixCount: 2 },
-      tags: [],
-    },
-    {
-      candidateId: 'CAND-BIN-04',
-      objectRef: 'BIN-02',
-      features: { fillLevel: 0.5, zone: 'dorm', overdueHours: 1, hazardMixCount: 0 },
-      tags: ['cleared-whitelist'],
-    },
+    { candidateId: 'CAND-BIN-01', objectRef: 'BIN-01', features: {}, tags: [] },
+    { candidateId: 'CAND-BIN-02', objectRef: 'BIN-02', features: {}, tags: [] },
+    { candidateId: 'CAND-BIN-03', objectRef: 'BIN-03', features: {}, tags: [] },
+    { candidateId: 'CAND-BIN-04', objectRef: 'BIN-02', features: {}, tags: ['cleared-whitelist'] },
   ],
 }
 const out = join(root, 'campus-waste-run.json')

@@ -216,6 +216,18 @@ export function readPackageMeta(versionDir: string): PackageMeta {
   }
 }
 
+/**
+ * 回写 package.yaml：meta 平铺 + 保留已有顶层键（featureRecipes 等）。
+ * transition/fork 只改状态位时不得丢掉 scenario-prep 包级字段。
+ */
+function writePackageYaml(versionDir: string, meta: PackageMeta, extra?: Record<string, unknown>): void {
+  const existing = readYamlFile<Record<string, unknown>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
+  const doc: Record<string, unknown> = { ...existing, ...meta }
+  if (extra) Object.assign(doc, extra)
+  // meta 已知键之外：featureRecipes 由 extra 或 existing 保留
+  writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.meta), doc)
+}
+
 /** ISSUED 包只读守卫：任何源写入前调用。包尚不存在时视为可写（新建路径）。 */
 export function assertWritable(versionDir: string): void {
   if (!existsSync(join(versionDir, SOURCE_FILE_LAYOUT.meta))) return
@@ -280,10 +292,32 @@ function normalizeScenario(raw: Record<string, unknown>): OntologyPackage['scena
     ...(Array.isArray(raw['behaviorRefs']) ? { behaviorRefs: raw['behaviorRefs'] as string[] } : {}),
     ...(Array.isArray(raw['exclusionRefs']) ? { exclusionRefs: raw['exclusionRefs'] as string[] } : {}),
     ...(Array.isArray(raw['scoreRefs']) ? { scoreRefs: raw['scoreRefs'] as string[] } : {}),
+    // scenario-prep S2.1：prep 可选；对象形态才落键（错型留给 validate）
+    ...(isPlainObject(raw['prep']) ? { prep: normalizePrep(raw['prep'] as Record<string, unknown>) } : {}),
     outputContract,
     reviewGate,
     auditChecks: (raw['auditChecks'] as string[]) ?? [],
   }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** prep 键归一：只透传已知子键形态；枚举/范围非法值留给 validate 报 PREP_INVALID。 */
+function normalizePrep(raw: Record<string, unknown>): NonNullable<OntologyPackage['scenarios'][number]['prep']> {
+  const out: NonNullable<OntologyPackage['scenarios'][number]['prep']> = {}
+  if (isPlainObject(raw['expand'])) {
+    const e = raw['expand'] as Record<string, unknown>
+    const expand: NonNullable<NonNullable<OntologyPackage['scenarios'][number]['prep']>['expand']> = {}
+    if (typeof e['hops'] === 'number') expand.hops = e['hops']
+    // direction 原样透传（string 才收），坏值由 validate 拦
+    if (typeof e['direction'] === 'string') expand.direction = e['direction'] as 'out' | 'in' | 'both'
+    if (Array.isArray(e['relationTypes'])) expand.relationTypes = e['relationTypes'] as string[]
+    out.expand = expand
+  }
+  if (typeof raw['features'] === 'boolean') out.features = raw['features']
+  return out
 }
 
 /** 场景卡落盘形态（规范 §6.3：output_contract / review_gate 用 snake_case）。 */
@@ -299,6 +333,7 @@ function scenarioToYaml(s: OntologyPackage['scenarios'][number]): Record<string,
     ...(s.behaviorRefs ? { behaviorRefs: s.behaviorRefs } : {}),
     ...(s.exclusionRefs ? { exclusionRefs: s.exclusionRefs } : {}),
     ...(s.scoreRefs ? { scoreRefs: s.scoreRefs } : {}),
+    ...(s.prep ? { prep: s.prep } : {}),
     output_contract: s.outputContract,
     review_gate: s.reviewGate,
     auditChecks: s.auditChecks,
@@ -349,6 +384,11 @@ export function loadPackage(versionDir: string): OntologyPackage {
     .maps ?? []
   const apiSources = readYamlFile<ApiSourcesDoc>(join(versionDir, SOURCE_FILE_LAYOUT.apiSources), {})
     .sources ?? []
+  // package.yaml 顶层 featureRecipes（scenario-prep S2.2）；错型/缺 now 由 validate 拦。
+  const metaDoc = readYamlFile<Record<string, unknown>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
+  const featureRecipes = Array.isArray(metaDoc['featureRecipes'])
+    ? (metaDoc['featureRecipes'] as OntologyPackage['featureRecipes'])
+    : undefined
 
   return {
     meta,
@@ -362,13 +402,21 @@ export function loadPackage(versionDir: string): OntologyPackage {
     scenarios,
     fieldMaps,
     apiSources,
+    ...(featureRecipes !== undefined && featureRecipes.length > 0 ? { featureRecipes } : {}),
   }
 }
 
 /** 将内存模型写回包版本目录（全量覆写源文件；ISSUED 拒绝）。 */
 export function savePackage(versionDir: string, pkg: OntologyPackage): void {
   assertWritable(versionDir)
-  writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.meta), pkg.meta)
+  // package.yaml = meta 平铺 + 可选 featureRecipes（同文件自动进派生 sourceDigest）。
+  const metaDoc: Record<string, unknown> = { ...pkg.meta }
+  if (pkg.featureRecipes !== undefined && pkg.featureRecipes.length > 0) {
+    metaDoc['featureRecipes'] = pkg.featureRecipes
+  } else {
+    delete metaDoc['featureRecipes']
+  }
+  writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.meta), metaDoc)
   writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.objectTypes), {
     kind: 'O1ObjectTypes',
     objects: pkg.objects,
@@ -538,10 +586,11 @@ export class PackageWorkspace {
     }
     copyDir(src, dst)
     // 新版本：状态 DRAFT、版本号更新；issueRecord 保留历史沿革。
+    // 保留 package.yaml 顶层 featureRecipes（scenario-prep S2.2）。
     const meta = readPackageMeta(dst)
     meta.version = toVersion
     meta.status = 'DRAFT'
-    writeYamlFile(join(dst, SOURCE_FILE_LAYOUT.meta), meta)
+    writePackageYaml(dst, meta)
     return dst
   }
 
@@ -586,7 +635,8 @@ export class PackageWorkspace {
         note,
       })
     }
-    writeYamlFile(join(dir, SOURCE_FILE_LAYOUT.meta), meta)
+    // 保留 package.yaml 顶层 featureRecipes 等非 meta 键
+    writePackageYaml(dir, meta)
   }
 
   /** 导出为单文件 JSON 归档（全部源文件 + 元数据）。 */

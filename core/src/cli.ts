@@ -300,7 +300,8 @@ function cmdRun(args: Args): void {
         root,
         buildRunRecord({
           package: { name: meta.name, version: meta.version },
-          dataset,
+          dataset: result.effectiveDataset ?? dataset,
+          inputDataset: dataset,
           result,
           redlines,
         }),

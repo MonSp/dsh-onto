@@ -189,6 +189,63 @@ export function validatePackage(
       }
     }
   }
+
+  /* ── error: 包级 featureRecipes（scenario-prep S2.2） ──────────────────── */
+  if (pkg.featureRecipes !== undefined) {
+    if (!Array.isArray(pkg.featureRecipes)) {
+      err('FEATURE_RECIPE_INVALID', 'package.yaml', 'featureRecipes 须为数组')
+    } else {
+      // 宽松闭合：since.attr 须存在于任一声明了 featureSources 的规则目标对象上。
+      const fsTargetObjs = new Set<string>()
+      for (const r of [...pkg.scoreRules, ...pkg.exclusionRules]) {
+        for (const target of Object.values(r.featureSources ?? {})) {
+          if (typeof target === 'string' && target.startsWith('OBJ-')) fsTargetObjs.add(target)
+        }
+      }
+      const objAttrNames = new Map<string, Set<string>>()
+      for (const o of pkg.objects) {
+        objAttrNames.set(o.id, new Set(o.attributes.map((a) => a.name)))
+      }
+      for (const [i, recipe] of pkg.featureRecipes.entries()) {
+        const where = `featureRecipes[${i}]`
+        if (typeof recipe?.name !== 'string' || recipe.name === '') {
+          err('FEATURE_RECIPE_INVALID', where, 'name 须为非空字符串')
+          continue
+        }
+        if (recipe.now !== undefined && recipe.now !== null) {
+          err('FEATURE_RECIPE_INVALID', where, `${recipe.name}: 包级配方禁写 now（运行时由执行层注入，写死破坏回放确定性）`)
+        }
+        const kind = recipe.kind
+        if (kind !== 'since' && kind !== 'count' && kind !== 'ratio') {
+          err('FEATURE_RECIPE_INVALID', where, `${recipe.name}: kind 须为 since | count | ratio`)
+          continue
+        }
+        if (kind === 'since') {
+          if (typeof recipe.attr !== 'string' || recipe.attr === '') {
+            err('FEATURE_RECIPE_INVALID', where, `${recipe.name}: since 须有 attr`)
+          } else if (fsTargetObjs.size > 0) {
+            const onAny = [...fsTargetObjs].some((oid) => objAttrNames.get(oid)?.has(recipe.attr as string))
+            if (!onAny) {
+              err(
+                'FEATURE_RECIPE_INVALID',
+                where,
+                `${recipe.name}: attr ${recipe.attr} 不存在于任一 featureSources 目标对象（宽松闭合失败）`,
+              )
+            }
+          }
+        } else if (kind === 'count') {
+          if (recipe.source !== 'behaviors' && recipe.source !== 'relations') {
+            err('FEATURE_RECIPE_INVALID', where, `${recipe.name}: count 须有 source ∈ behaviors | relations`)
+          }
+        } else {
+          if (typeof recipe.num !== 'string' || recipe.num === '' || typeof recipe.den !== 'string' || recipe.den === '') {
+            err('FEATURE_RECIPE_INVALID', where, `${recipe.name}: ratio 须有 num 与 den`)
+          }
+          // num/den 未出现在 featureSources 也允许（中间派生键，如 half = n/n）
+        }
+      }
+    }
+  }
   // P0-1 方案A：排除/打分条件只读候选 features 与 tags（不读对象 attrs）。
   // 条件里的特征名须在 featureSources 声明（接入层投影契约的静态面）；
   // 打分表达式 featureSources 整体缺省时视为未启用图谱挂接、不强制（兼容 AML 等旧包）。
@@ -232,6 +289,32 @@ export function validatePackage(
     for (const ruleId of sc.scoreRefs ?? []) {
       if (!pkg.scoreRules.some((r) => r.id === ruleId)) {
         err('REF_UNCLOSED', `SCN ${sc.id}`, `scoreRefs 引用未闭合: ${ruleId}`)
+      }
+    }
+    // scenario-prep S2.1：prep 结构白名单（hops 0..3、direction、features 布尔）
+    if (sc.prep !== undefined) {
+      const prep = sc.prep
+      if (prep.expand !== undefined) {
+        const e = prep.expand
+        if (e.hops !== undefined) {
+          if (typeof e.hops !== 'number' || !Number.isInteger(e.hops) || e.hops < 0 || e.hops > 3) {
+            err('PREP_INVALID', `SCN ${sc.id}`, 'prep.expand.hops 须为 0..3 的整数')
+          }
+        }
+        if (e.direction !== undefined && e.direction !== 'out' && e.direction !== 'in' && e.direction !== 'both') {
+          err('PREP_INVALID', `SCN ${sc.id}`, 'prep.expand.direction 须为 out | in | both')
+        }
+        if (e.relationTypes !== undefined) {
+          if (!Array.isArray(e.relationTypes) || e.relationTypes.some((t) => typeof t !== 'string' || t === '')) {
+            err('PREP_INVALID', `SCN ${sc.id}`, 'prep.expand.relationTypes 须为非空字符串数组')
+          }
+        }
+      }
+      if (prep.features !== undefined && typeof prep.features !== 'boolean') {
+        err('PREP_INVALID', `SCN ${sc.id}`, 'prep.features 须为布尔')
+      }
+      if (prep.expand === undefined && prep.features === undefined) {
+        err('PREP_INVALID', `SCN ${sc.id}`, 'prep 至少须声明 expand 或 features 之一')
       }
     }
     // D14：圈定打分后 riskScore 上限 = 圈内权重和（不二次归一，见 P3 拍板）——

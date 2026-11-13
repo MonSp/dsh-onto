@@ -1,30 +1,23 @@
 /**
- * P0-3/P0-4 接入适配示例：物业 API 快照 → RuntimeDataset（薄壳；算法单源 core）
+ * 接入适配示例：物业 API 快照 → RuntimeDataset（纯结构适配薄壳）
  *
  * 用法：
  *   node scripts/adapt-campus-waste-api.mjs \
  *     examples/campus-waste-api-snapshot.json \
  *     [out-run.json] [--workspace <dir>]
  *
- * 职责（subgraph-expansion S4.3②）：
+ * 职责（scenario-prep S2.6）：
  * 1. 快照结构适配：实体/关系/行为（dumps → BHV-WST-DUMP；mixEvents → BHV-WST-MIX）
  *    + 同 objectRef 同快照去重：候选保留**首条**（主候选），后到的同桶条目丢弃
- * 2. 特征投影/派生全部走 core，不再自研：
- *    - projectFeatures：按 campus-waste 包 featureSources 把对象 attrs 投影进 features
- *    - deriveFeatures：overdueHours ← since(lastEmptiedAt, now=snapshotAt)；
- *      hazardMixCount ← count(behaviors, type=BHV-WST-MIX)
- * 3. 输出标准 RuntimeDataset JSON，可直接 CLI run / run_scenario
+ * 2. **不再做**特征投影/派生——场景 prep.features=true 时由 run_scenario 执行层
+ *    按包 featureRecipes + featureSources 完成（投影/派生完全交给执行层）
+ * 3. 输出标准 RuntimeDataset JSON（features 留空），可直接 CLI run / run_scenario(seedIds?)
  *
- * --workspace / DSH_ONTO_WORKSPACE：campus-waste 包工作区（featureSources 来源），必填。
+ * --workspace / DSH_ONTO_WORKSPACE：campus-waste 包工作区（校验包存在），必填。
  */
-import { readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import {
-  PackageWorkspace,
-  loadPackage,
-  projectFeatures,
-  deriveFeatures,
-} from '../core/dist/index.js'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { resolve, join } from 'node:path'
+import { PackageWorkspace } from '../core/dist/index.js'
 
 const argv = process.argv.slice(2)
 function flagValue(flag) {
@@ -51,12 +44,15 @@ if (!inPath) {
   process.exit(2)
 }
 
-// featureSources 来源：campus-waste 包（投影契约的唯一事实源）
+// 包存在性校验（prep 契约的事实源在包里，不在适配脚本）
 const ws = new PackageWorkspace(wsRoot)
-const pkg = loadPackage(ws.versionDir('campus-waste', '1.0.0'))
+const versionDir = ws.versionDir('campus-waste', '1.0.0')
+if (!existsSync(join(versionDir, 'package.yaml'))) {
+  console.error(`campus-waste@1.0.0 not found under ${wsRoot}`)
+  process.exit(2)
+}
 
 const raw = JSON.parse(readFileSync(resolve(inPath), 'utf8'))
-const snapshotAt = new Date(raw.snapshotAt ?? Date.now())
 
 /** 对象实体：同 binId 后写覆盖前写（实体快照语义 = 最新状态） */
 const binsById = new Map()
@@ -122,29 +118,21 @@ for (const c of raw.candidates ?? []) {
 const candidates = [...candByBin.values()].map((c) => ({
   candidateId: c.candidateId,
   objectRef: c.binId,
+  // 纯结构适配：features 留空，投影/派生由场景 prep.features 执行层完成
   features: {},
   tags: Array.isArray(c.tags) ? c.tags : [],
 }))
 
-const dataset = { objects, relations, behaviors, candidates }
-
-// 投影：按包 featureSources（fillLevel/zone/overdueHours/hazardMixCount → OBJ-WST-BIN）
-const proj = projectFeatures(pkg, dataset, dataset.candidates)
-// 派生：now 取快照时刻（同一 snapshot 两次运行逐字节一致）
-const recipes = [
-  { name: 'overdueHours', kind: 'since', attr: 'lastEmptiedAt', now: snapshotAt.toISOString() },
-  { name: 'hazardMixCount', kind: 'count', source: 'behaviors', filter: { type: 'BHV-WST-MIX' } },
-]
-const der = deriveFeatures(proj.candidates, dataset, recipes)
-
 const outDataset = {
-  ...dataset,
-  candidates: der.candidates,
+  objects,
+  relations,
+  behaviors,
+  candidates,
   meta: {
     source: 'adapt-campus-waste-api',
     snapshotAt: raw.snapshotAt,
-    projected: [...new Set([...proj.projected.flatMap((p) => p.keys), ...der.derived])],
     deduped: (raw.candidates ?? []).length - candidates.length,
+    note: 'features 留空——prep.features=true 时由 run_scenario 投影/派生',
   },
 }
 
@@ -158,7 +146,7 @@ console.log(
       objects: objects.length,
       candidates: candidates.length,
       deduped: outDataset.meta.deduped,
-      derived: der.derived,
+      features: 'deferred-to-prep',
     },
     null,
     2,
