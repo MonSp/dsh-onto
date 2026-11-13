@@ -47,6 +47,9 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'create_package',
   'save_skeleton',
   'write_quality_report',
+  // 子图扩展与特征投影（subgraph-expansion S3.2/S4.3；A-1 输入 dataset 收权）
+  'expand_entity',
+  'project_features',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

@@ -23,6 +23,8 @@ import {
   buildRunRecord,
   buildTaskSignature,
   compareRunRecords,
+  deriveFeatures,
+  expandEntity,
   exportRunArchive,
   isInsideDir,
   isValidId,
@@ -33,6 +35,8 @@ import {
   loadPackage,
   loadRunRecord,
   loadRunRedlines,
+  MAX_EXPAND_HOPS,
+  projectFeatures,
   retrieveSimilar,
   reviewExperienceNote,
   runScenario,
@@ -42,8 +46,10 @@ import {
   writeQualityReport,
   type DraftCandidate,
   type DraftItem,
+  type ExpandResult,
   type ExperienceNote,
   type ExperienceOutcome,
+  type FeatureRecipe,
   type KnowledgeSourceRecord,
   type ModelGraph,
   type OntologyPackage,
@@ -688,6 +694,230 @@ export function runScenarioBatch(input: {
     }
   }
   return { results, humanReviewRequired: true }
+}
+
+/* ─────────── 子图扩展与特征投影（subgraph-expansion S3.2/S4.3） ─────────── */
+
+/** seedIds 数量上限（A-2，防邻域爆炸的入参面）。 */
+export const EXPAND_SEED_LIMIT = 32
+/** project_features recipes 数量上限（A-2 同族）。 */
+export const PROJECT_RECIPE_LIMIT = 32
+
+export interface ExpandEntityArgs {
+  name: string
+  version: string
+  datasetPath?: string
+  dataset?: unknown
+  seedIds?: unknown
+  hops?: unknown
+  relationTypes?: unknown
+  direction?: unknown
+}
+
+/**
+ * `expand_entity` 执行体（导出供 attack-surface 表直测 A-1/A-2）：
+ * 参数校验（A-2）→ 数据集双通道加载 → 收权（A-1）→ core BFS → 全种子缺失转 INVALID_ARGS。
+ * 扩图是数据准备不打分；输出子 dataset 为输入子集，不新增 grant 面。
+ */
+export function executeExpandEntity(
+  args: ExpandEntityArgs,
+  deps: { ws: PackageWorkspace },
+): ExpandResult {
+  if (typeof args.name !== 'string' || args.name === '' || typeof args.version !== 'string' || args.version === '') {
+    throw new AgentToolError('INVALID_ARGS', 'name/version 必须为非空字符串')
+  }
+  const seedIds = args.seedIds
+  if (!Array.isArray(seedIds) || seedIds.length === 0) {
+    throw new AgentToolError('INVALID_ARGS', 'seedIds 必须为非空数组')
+  }
+  if (seedIds.length > EXPAND_SEED_LIMIT) {
+    throw new AgentToolError('INVALID_ARGS', `seedIds 上限 ${EXPAND_SEED_LIMIT} 个（收到 ${seedIds.length}）`)
+  }
+  if (seedIds.some((s) => typeof s !== 'string' || s === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'seedIds 须为非空字符串条目')
+  }
+  let hops: number | undefined
+  if (args.hops !== undefined && args.hops !== null) {
+    if (typeof args.hops !== 'number' || !Number.isInteger(args.hops) || args.hops < 0 || args.hops > MAX_EXPAND_HOPS) {
+      throw new AgentToolError('INVALID_ARGS', `hops 须为 0..${MAX_EXPAND_HOPS} 的整数（硬上限防邻域爆炸）`)
+    }
+    hops = args.hops
+  }
+  let relationTypes: string[] | undefined
+  if (args.relationTypes !== undefined && args.relationTypes !== null) {
+    if (!Array.isArray(args.relationTypes) || args.relationTypes.some((t) => typeof t !== 'string' || t === '')) {
+      throw new AgentToolError('INVALID_ARGS', 'relationTypes 须为非空字符串数组')
+    }
+    relationTypes = args.relationTypes as string[]
+  }
+  let direction: 'out' | 'in' | 'both' | undefined
+  if (args.direction !== undefined && args.direction !== null) {
+    if (args.direction !== 'out' && args.direction !== 'in' && args.direction !== 'both') {
+      throw new AgentToolError('INVALID_ARGS', 'direction 须为 out | in | both')
+    }
+    direction = args.direction
+  }
+  const dataset = loadDatasetFromArgs(args)
+  const versionDir = deps.ws.versionDir(args.name, args.version)
+  const contracts = readToolContracts(versionDir)
+  assertDatasetGranted(dataset, contracts)
+  const result = expandEntity(dataset, seedIds as string[], { hops, relationTypes, direction })
+  if (result.stats.seeds === 0) {
+    throw new AgentToolError('INVALID_ARGS', `种子实体均不存在于 dataset: ${result.missingSeedIds.join(', ')}`)
+  }
+  return result
+}
+
+export interface ProjectFeaturesArgs {
+  name: string
+  version: string
+  datasetPath?: string
+  dataset?: unknown
+  recipes?: unknown
+  overwrite?: unknown
+}
+
+export interface ProjectFeaturesResult {
+  dataset: RuntimeDataset
+  projected: Array<{ candidateId: string; keys: string[] }>
+  derived: string[]
+  stats: { candidates: number; projectedWrites: number; derivedRecipes: number }
+}
+
+/** recipes 结构校验（A-4：配方是数据不是代码——kind/source 白名单，缺字段即拒）。 */
+function validateRecipes(raw: unknown): FeatureRecipe[] {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) {
+    throw new AgentToolError('INVALID_ARGS', 'recipes 须为数组')
+  }
+  if (raw.length > PROJECT_RECIPE_LIMIT) {
+    throw new AgentToolError('INVALID_ARGS', `recipes 上限 ${PROJECT_RECIPE_LIMIT} 条（收到 ${raw.length}）`)
+  }
+  return raw.map((r, i) => {
+    if (!isRecord(r) || typeof r['name'] !== 'string' || r['name'] === '') {
+      throw new AgentToolError('INVALID_ARGS', `recipes[${i}] 需要非空字符串 name`)
+    }
+    const kind = r['kind']
+    if (kind === 'since') {
+      if (typeof r['attr'] !== 'string' || r['attr'] === '') {
+        throw new AgentToolError('INVALID_ARGS', `recipes[${i}]（since）需要非空字符串 attr`)
+      }
+      if (r['now'] !== undefined && r['now'] !== null && typeof r['now'] !== 'string') {
+        throw new AgentToolError('INVALID_ARGS', `recipes[${i}]（since）now 须为 ISO 字符串`)
+      }
+      return r as unknown as FeatureRecipe
+    }
+    if (kind === 'count') {
+      if (r['source'] !== 'behaviors' && r['source'] !== 'relations') {
+        throw new AgentToolError('INVALID_ARGS', `recipes[${i}]（count）source 须为 behaviors | relations`)
+      }
+      return r as unknown as FeatureRecipe
+    }
+    if (kind === 'ratio') {
+      if (typeof r['num'] !== 'string' || typeof r['den'] !== 'string' || r['num'] === '' || r['den'] === '') {
+        throw new AgentToolError('INVALID_ARGS', `recipes[${i}]（ratio）需要字符串 num 与 den`)
+      }
+      if (r['minDen'] !== undefined && r['minDen'] !== null && typeof r['minDen'] !== 'number') {
+        throw new AgentToolError('INVALID_ARGS', `recipes[${i}]（ratio）minDen 须为数字`)
+      }
+      return r as unknown as FeatureRecipe
+    }
+    throw new AgentToolError('INVALID_ARGS', `recipes[${i}].kind 须为 since | count | ratio（收到 ${String(kind)}）`)
+  })
+}
+
+/**
+ * `project_features` 执行体（导出供 attack-surface 表直测 A-1/A-2/A-4）：
+ * 参数校验 → 加载（派生门禁）→ 收权（A-1）→ projectFeatures → deriveFeatures。
+ * since 配方缺 now 时在工具边界注入当前时刻（A-7 只约束 core 纯函数不得 new Date()）。
+ */
+export function executeProjectFeatures(
+  args: ProjectFeaturesArgs,
+  deps: { ws: PackageWorkspace },
+): ProjectFeaturesResult {
+  if (typeof args.name !== 'string' || args.name === '' || typeof args.version !== 'string' || args.version === '') {
+    throw new AgentToolError('INVALID_ARGS', 'name/version 必须为非空字符串')
+  }
+  if (args.overwrite !== undefined && args.overwrite !== null && typeof args.overwrite !== 'boolean') {
+    throw new AgentToolError('INVALID_ARGS', 'overwrite 须为布尔')
+  }
+  const recipes = validateRecipes(args.recipes)
+  const dataset = loadDatasetFromArgs(args)
+  const pkg = loadToolPackage(deps.ws, args.name, args.version)
+  const contracts = readToolContracts(deps.ws.versionDir(args.name, args.version))
+  assertDatasetGranted(dataset, contracts)
+  // 工具边界注入 now（工具面允许当前时刻；core 侧仍由配方携带，保持纯函数）。
+  const nowIso = new Date().toISOString()
+  const ready = recipes.map((r) =>
+    r.kind === 'since' && (r.now === undefined || r.now === null) ? { ...r, now: nowIso } : r,
+  )
+  const overwrite = args.overwrite === true
+  const proj = projectFeatures(pkg, dataset, dataset.candidates, { overwrite })
+  const der = deriveFeatures(proj.candidates, dataset, ready)
+  return {
+    dataset: { ...dataset, candidates: der.candidates },
+    projected: proj.projected,
+    derived: der.derived,
+    stats: {
+      candidates: der.candidates.length,
+      projectedWrites: proj.projected.reduce((n, p) => n + p.keys.length, 0),
+      derivedRecipes: der.derived.length,
+    },
+  }
+}
+
+/**
+ * `expand_entity` 渲染（A-5 摘要级）：统计行 + 种子/对象 ID 清单（截断 50）。
+ * 零 attrs 正文、零绝对路径；ID 面撞红线 fail-loud，跨段拼接经 retreatRenderText 整段兜底。
+ */
+export function renderExpandText(v: ExpandResult, phrases: readonly string[] = []): string {
+  const list = phrases.filter((p) => p !== '')
+  const idFace = (key: string, s: string): string => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines: string[] = []
+  lines.push(
+    `子图扩展 种子=${v.stats.seeds}（缺失 ${v.missingSeedIds.length}）`
+      + ` 对象=${v.stats.objects} 关系=${v.stats.relations} 候选=${v.stats.candidates}`
+      + ` truncated=${v.truncated}`,
+  )
+  if (v.seedIds.length > 0) {
+    lines.push(`种子: ${v.seedIds.map((s) => idFace('id', s)).join(', ')}`)
+  }
+  if (v.missingSeedIds.length > 0) {
+    lines.push(`缺失种子: ${v.missingSeedIds.map((s) => idFace('missing', s)).join(', ')}`)
+  }
+  const ids = v.dataset.objects.map((o) => idFace('id', o.id))
+  const shown = ids.slice(0, 50)
+  lines.push(`对象: ${shown.join(', ')}${ids.length > 50 ? ` …（共 ${ids.length} 个）` : ''}`)
+  lines.push('扩图是数据准备，不打分；打分用 run_scenario')
+  return retreatRenderText(lines.join('\n'), list)
+}
+
+/**
+ * `project_features` 渲染（A-5 摘要级）：计数 + 投影键并集 + 派生配方名。
+ * 零 attrs 值正文；自由段（键名/配方名）片段重遮 + 拼接后整段兜底。
+ */
+export function renderProjectText(
+  v: { projected: Array<{ candidateId: string; keys: string[] }>; derived: string[]; stats: { candidates: number; projectedWrites: number; derivedRecipes: number } },
+  phrases: readonly string[] = [],
+): string {
+  const list = phrases.filter((p) => p !== '')
+  const face = (s: string): string => (list.some((p) => s.includes(p)) ? '【禁语已脱敏】' : s)
+  const keyUnion = [...new Set(v.projected.flatMap((p) => p.keys))]
+  const gapCount = v.projected.filter((p) => p.keys.length === 0).length
+  const lines: string[] = []
+  lines.push(
+    `特征投影/派生 候选=${v.stats.candidates} 投影写入=${v.stats.projectedWrites}`
+      + ` 派生配方=${v.stats.derivedRecipes} 投影缺口候选=${gapCount}`,
+  )
+  lines.push(`投影键: ${keyUnion.map(face).join(', ') || '—'}`)
+  lines.push(`派生: ${v.derived.map(face).join(', ') || '—'}`)
+  lines.push('特征就绪后用 run_scenario 打分')
+  return retreatRenderText(lines.join('\n'), list)
 }
 
 /** 场景清单渲染（render 与测试共用）。 */
@@ -1868,6 +2098,106 @@ export function apply(ctx: Context): void {
           assertBatchContract(out)
           // 出口遮蔽基准：包内全部场景红线（覆盖假场景 ID 回显撞红线形态）。
           return toolOut(enforceOutputPolicy(out, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'expand_entity',
+      description:
+        '沿实例图关系从种子实体 BFS 扩出邻域子 dataset（数据准备，不打分；打分用 run_scenario）。'
+        + 'hops 默认 1、硬上限 3；direction 默认 both（out|in|both 可收敛单向）；relationTypes 可只沿指定类型行走。'
+        + '种子须存在于 dataset（非空 ≤32）；truncated=true 表示触及跳数上限仍有外沿。'
+        + '回执为邻域摘要（统计 + 种子/对象 ID 清单，不含 attrs 明细与边/候选清单）：'
+        + '子 dataset = 按对象清单过滤你的输入 dataset（对象命中、边两端命中、候选/行为引用命中即保留）后交 run_scenario。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（收权清单按包核对）' },
+        version: { type: 'string', required: true, description: '版本号' },
+        seedIds: {
+          type: 'array',
+          required: true,
+          description: '种子实体 ID 列表（非空、≤32，元素须存在于 dataset.objects）',
+        },
+        hops: { type: 'number', description: '最大跳数 0..3（默认 1；超界 INVALID_ARGS）' },
+        relationTypes: { type: 'array', description: '只沿这些关系类型扩展；缺省 = 数据集内全部类型' },
+        direction: { type: 'string', description: '扩展方向 out | in | both（默认 both）' },
+        datasetPath: {
+          type: 'string',
+          description: 'RuntimeDataset JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内，围栏防穿越）',
+        },
+        dataset: { type: 'json', description: '内联 RuntimeDataset（与 datasetPath 二选一）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            dataset: { type: 'json', required: true },
+            seedIds: { type: 'array', required: true },
+            missingSeedIds: { type: 'array', required: true },
+            truncated: { type: 'boolean', required: true },
+            stats: { type: 'json', required: true },
+          },
+        },
+        render: (args, value) => textBlock(renderExpandText(value as unknown as ExpandResult, redlines(args))),
+      },
+      execute: toolExecute(
+        (args: ExpandEntityArgs) => {
+          const result = executeExpandEntity(args, { ws })
+          return toolOut(enforceOutputPolicy(result, redlines(args)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'project_features',
+      description:
+        '按包 featureSources 把对象 attrs 投影进候选 features，并按 recipes 派生 since/count/ratio 特征'
+        + '（数据准备，不打分；典型链路 expand_entity → project_features → run_scenario）。'
+        + '投影不覆盖已存在特征（overwrite=true 才覆盖）；派生配方以计算值写入（配方即显式意图）。'
+        + 'since 的 now 缺省取当前时刻，显式传 now 可保证回放逐字节一致。'
+        + '投影后 COND_FEATURE_UNDECLARED 与排除特征缺口自然收敛。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（featureSources 来源 + 收权清单）' },
+        version: { type: 'string', required: true, description: '版本号' },
+        recipes: {
+          type: 'array',
+          description:
+            '派生配方列表（≤32）：{name, kind: since|count|ratio, …}；since 带 attr+now，'
+            + 'count 带 source: behaviors|relations 与可选 filter，ratio 带 num/den/minDen。缺省不派生',
+        },
+        overwrite: { type: 'boolean', description: '投影是否覆盖已存在特征（默认 false：显式特征优先）' },
+        datasetPath: {
+          type: 'string',
+          description: 'RuntimeDataset JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内）',
+        },
+        dataset: { type: 'json', description: '内联 RuntimeDataset（与 datasetPath 二选一）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            dataset: { type: 'json', required: true },
+            projected: { type: 'array', required: true },
+            derived: { type: 'array', required: true },
+            stats: { type: 'json', required: true },
+          },
+        },
+        render: (args, value) => textBlock(renderProjectText(value as unknown as ProjectFeaturesResult, redlines(args))),
+      },
+      execute: toolExecute(
+        (args: ProjectFeaturesArgs) => {
+          const result = executeProjectFeatures(args, { ws })
+          return toolOut(enforceOutputPolicy(result, redlines(args)))
         },
         [],
         (args) => redlines(args),

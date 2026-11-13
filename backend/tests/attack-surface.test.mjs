@@ -31,12 +31,17 @@ import {
   assertDatasetGranted,
   grantGuardDecision,
   readToolContracts,
+  ONTOOL_NAMES,
 } from '../dist/agent-grants.js'
 import {
+  executeExpandEntity,
+  executeProjectFeatures,
   exportSummaryOf,
   loadDatasetFromArgs,
   loadToolPackage,
   redlinesForRuns,
+  renderExpandText,
+  renderProjectText,
   runScenarioBatch,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
@@ -46,9 +51,12 @@ import {
   PackageWorkspace,
   buildRunRecord,
   compareRunRecords,
+  deriveFeatures,
   derivePackage,
+  expandEntity,
   loadPackage,
   loadRunRecord,
+  projectFeatures,
   runScenario,
   saveRunRecord,
   writeSourceFile,
@@ -929,4 +937,175 @@ test('I1 compare/export 错误面：runId 撞红线且记录不存在 → 工作
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+/* ── subgraph-expansion 攻击面表（S5 A-1…A-7 全表重放） ────────────────── */
+
+test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef → OBJECT_NOT_GRANTED）', () => {
+  const ws = new PackageWorkspace(REPO)
+  const ungranted = {
+    objects: [{ id: 'g1', type: 'OBJ-NOPE', attrs: {} }],
+    relations: [],
+    candidates: [{ candidateId: 'c1', objectRef: 'g1', features: {}, tags: [] }],
+  }
+  expectCode(
+    () => executeExpandEntity({ name: 'aml-analysis', version: '1.0.0', seedIds: ['g1'], dataset: ungranted }, { ws }),
+    'OBJECT_NOT_GRANTED',
+  )
+  expectCode(
+    () => executeProjectFeatures({ name: 'aml-analysis', version: '1.0.0', dataset: ungranted, recipes: [] }, { ws }),
+    'OBJECT_NOT_GRANTED',
+  )
+  // 收权通过的 happy path + A-3：输出子 dataset 恒无悬空边
+  const granted = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  const ok = executeExpandEntity(
+    { name: 'aml-analysis', version: '1.0.0', seedIds: ['ACCT-001'], dataset: granted },
+    { ws },
+  )
+  const ids = new Set(ok.dataset.objects.map((o) => o.id))
+  assert.ok(ids.has('ACCT-001'))
+  for (const rel of ok.dataset.relations) {
+    assert.ok(ids.has(rel.from) && ids.has(rel.to), `悬空边: ${rel.id}`)
+  }
+  // I5/A-1：新工具必须登记 ONTOOL_NAMES（否则 guard 静默跳过）
+  assert.ok(ONTOOL_NAMES.has('expand_entity'), 'expand_entity 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('project_features'), 'project_features 须入 ONTOOL_NAMES')
+})
+
+test('A-2 参数校验：hops 超界、seedIds 空/超限/错型、坏 direction、recipes 超限 → INVALID_ARGS', () => {
+  const ws = new PackageWorkspace(REPO)
+  const ds = { objects: [], relations: [], candidates: [] }
+  const base = { name: 'aml-analysis', version: '1.0.0', dataset: ds }
+  for (const hops of [4, -1, 1.5, Number.NaN]) {
+    expectCode(() => executeExpandEntity({ ...base, seedIds: ['x'], hops }, { ws }), 'INVALID_ARGS')
+  }
+  expectCode(() => executeExpandEntity({ ...base, seedIds: [] }, { ws }), 'INVALID_ARGS')
+  expectCode(() => executeExpandEntity({ ...base, seedIds: Array(33).fill('x') }, { ws }), 'INVALID_ARGS')
+  expectCode(() => executeExpandEntity({ ...base, seedIds: [42] }, { ws }), 'INVALID_ARGS')
+  expectCode(() => executeExpandEntity({ ...base, seedIds: ['x'], direction: 'sideways' }, { ws }), 'INVALID_ARGS')
+  expectCode(
+    () => executeExpandEntity({ ...base, seedIds: ['x'], relationTypes: [1] }, { ws }),
+    'INVALID_ARGS',
+  )
+  // 全部种子不存在 → 空邻域不静默通过，工具面转 INVALID_ARGS
+  expectCode(() => executeExpandEntity({ ...base, seedIds: ['NOPE-1', 'NOPE-2'] }, { ws }), 'INVALID_ARGS')
+  // recipes 同族上限（A-2 参数校验面）
+  expectCode(
+    () => executeProjectFeatures({ ...base, recipes: Array(33).fill({ name: 'n', kind: 'count', source: 'behaviors' }) }, { ws }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => executeProjectFeatures({ ...base, recipes: [{ name: 'n', kind: 'count', source: 'filesystem' }] }, { ws }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => executeProjectFeatures({ ...base, recipes: [{ name: '', kind: 'since', attr: 't', now: 't' }] }, { ws }),
+    'INVALID_ARGS',
+  )
+})
+
+test('A-4 recipes 是数据不是代码：kind/source 白名单外一律拒绝（不执行表达式）', () => {
+  const ws = new PackageWorkspace(REPO)
+  const ds = { objects: [], relations: [], candidates: [] }
+  const base = { name: 'aml-analysis', version: '1.0.0', dataset: ds }
+  for (const kind of ['eval', 'function', 'expr', 'code']) {
+    expectCode(
+      () => executeProjectFeatures({ ...base, recipes: [{ name: 'x', kind }] }, { ws }),
+      'INVALID_ARGS',
+    )
+  }
+  // since 缺 attr / ratio 缺 num·den 同样受控拒绝（结构校验，不猜语义）
+  expectCode(
+    () => executeProjectFeatures({ ...base, recipes: [{ name: 'x', kind: 'since', now: 't' }] }, { ws }),
+    'INVALID_ARGS',
+  )
+  expectCode(
+    () => executeProjectFeatures({ ...base, recipes: [{ name: 'x', kind: 'ratio', num: 'a' }] }, { ws }),
+    'INVALID_ARGS',
+  )
+})
+
+test('A-5 expand render 摘要级：零 attrs 正文、零绝对路径；ID 撞红线 fail-loud；跨 ID 拼接整段兜底', () => {
+  const ws = new PackageWorkspace(REPO)
+  const dataset = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  const result = executeExpandEntity(
+    { name: 'aml-analysis', version: '1.0.0', seedIds: ['ACCT-001'], dataset },
+    { ws },
+  )
+  const text = renderExpandText(result, [])
+  assert.ok(!text.includes('acctNo'), 'attrs 字段名不得进 render')
+  assert.ok(!text.includes('6222001'), 'attrs 值不得进 render')
+  assert.ok(!text.includes('D:\\') && !text.includes('D:/'), 'render 不回显绝对路径')
+  assert.ok(text.includes('ACCT-001'), '对象 ID 清单在场')
+  assert.ok(text.includes('truncated='), 'truncated 上墙（超限不静默）')
+  // ID 面撞红线 → fail-loud（错误不回显短语）
+  const ph = '认定洗钱'
+  const poisoned = {
+    ...result,
+    dataset: {
+      ...result.dataset,
+      objects: [{ id: `OBJ-${ph}`, type: 'OBJ-AML-ACCOUNT', attrs: {} }, ...result.dataset.objects],
+    },
+  }
+  expectCode(() => renderExpandText(poisoned, [ph]), 'INVALID_TOOL_OUTPUT')
+  // 跨 ID 拼接重组（短语横跨两个对象 ID 与分隔符）→ 拼接后整段退避为标记
+  const span = '认定, 洗钱'
+  const spanned = {
+    ...result,
+    dataset: {
+      ...result.dataset,
+      objects: [{ id: 'a认定', type: 'OBJ-AML-ACCOUNT', attrs: {} }, { id: '洗钱b', type: 'OBJ-AML-ACCOUNT', attrs: {} }],
+    },
+  }
+  const spanText = renderExpandText(spanned, [span])
+  assert.ok(!spanText.includes(span), `跨段拼接不得泄漏: ${spanText}`)
+  assert.match(spanText, /^【.+】$/)
+  // project render 同为摘要级（计数/键名，无 attrs 值）
+  const pj = executeProjectFeatures(
+    { name: 'aml-analysis', version: '1.0.0', dataset, recipes: [{ name: 'n', kind: 'count', source: 'behaviors' }] },
+    { ws },
+  )
+  const pt = renderProjectText(pj, [])
+  assert.ok(!pt.includes('acctNo') && !pt.includes('6222001'), 'project render 零 attrs 正文')
+  assert.ok(pt.includes('n'), '派生配方名在场')
+})
+
+test('A-3/A-6/A-7 core 面重放：诱导子图 / 默认不覆盖 / now 注入确定性', () => {
+  // A-3：各跳数扩展结果恒无悬空边
+  const ds = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  for (const hops of [0, 1, 2, 3]) {
+    const r = expandEntity(ds, ['ACCT-001', 'CUST-001'], { hops })
+    const ids = new Set(r.dataset.objects.map((o) => o.id))
+    for (const rel of r.dataset.relations) {
+      assert.ok(ids.has(rel.from) && ids.has(rel.to), `hops=${hops} 悬空边 ${rel.id}`)
+    }
+  }
+  // A-6：projectFeatures 默认不覆盖显式 features
+  const proj = projectFeatures(
+    { scoreRules: [{ id: 'r', name: 'r', weight: 1, expression: '1', featureSources: { f1: 'OBJ-TST-A' } }], exclusionRules: [] },
+    { objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { f1: 1 } }], relations: [], candidates: [] },
+    [{ candidateId: 'c', objectRef: 'i1', features: { f1: 9 }, tags: [] }],
+  )
+  assert.equal(proj.candidates[0].features.f1, 9, 'A-6 默认不覆盖')
+  const projOver = projectFeatures(
+    { scoreRules: [{ id: 'r', name: 'r', weight: 1, expression: '1', featureSources: { f1: 'OBJ-TST-A' } }], exclusionRules: [] },
+    { objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { f1: 1 } }], relations: [], candidates: [] },
+    [{ candidateId: 'c', objectRef: 'i1', features: { f1: 9 }, tags: [] }],
+    { overwrite: true },
+  )
+  assert.equal(projOver.candidates[0].features.f1, 1, '显式 overwrite 才覆盖')
+  // A-7：now 注入 → 两次逐字节一致；缺 now → 确定性跳过（不 new Date()）
+  const cand = [{ candidateId: 'c', objectRef: 'i1', features: {}, tags: [] }]
+  const dsm = {
+    objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { t: '2026-01-01T00:00:00Z' } }],
+    relations: [],
+    candidates: cand,
+  }
+  const recipe = [{ name: 'h', kind: 'since', attr: 't', now: '2026-01-01T01:00:00Z' }]
+  const a = deriveFeatures(cand, dsm, recipe)
+  const b = deriveFeatures(cand, dsm, recipe)
+  assert.equal(JSON.stringify(a), JSON.stringify(b), '同输入两次派生逐字节一致')
+  assert.equal(a.candidates[0].features.h, 1)
+  const noNow = deriveFeatures(cand, dsm, [{ name: 'h', kind: 'since', attr: 't' }])
+  assert.ok(!('h' in noNow.candidates[0].features), '缺 now 不得回退 new Date()')
 })
