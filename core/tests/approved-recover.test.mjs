@@ -56,6 +56,19 @@ test('reject：approved（已批未物化）可驳回——中断残留恢复路
   }
 })
 
+test('approvalDigest（T2.1）：批准凭证摘要随 review 留痕、驳回后仍在（审计链不断）', () => {
+  const { root, store } = mkStore()
+  try {
+    const c = addDict(store, 'pkg-g', 'dict-g-a', '字典甲')
+    const done = store.reviewCandidate(c.id, 'approve', { reviewedBy: 'host-gate', approvalDigest: 'abc123' })
+    assert.equal(done.approvalDigest, 'abc123')
+    const rejected = store.reviewCandidate(c.id, 'reject', { reviewedBy: 'workbench' })
+    assert.equal(rejected.approvalDigest, 'abc123', '驳回不抹掉批准凭证摘要')
+  } finally {
+    rm(root)
+  }
+})
+
 test('approve：已 approved 再 approve → CANDIDATE_FINALIZED（工具层负责跳过）', () => {
   const { root, store } = mkStore()
   try {

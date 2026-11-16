@@ -1,4 +1,4 @@
-/** 特征投影与派生验收（subgraph-expansion S4.1/S4.2 / S5 A-6、A-7）：类型匹配、不覆盖、now 注入、三类配方。 */
+/** 特征投影与派生验收（subgraph-expansion S4.1/S4.2 / S5 A-7 + 可信取数 T1.1）：类型匹配、事实优先覆盖、now 注入、三类配方。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { projectFeatures, deriveFeatures, runScenario } from '../dist/index.js'
@@ -27,32 +27,28 @@ const dataset = () => ({
   ],
 })
 
-test('projectFeatures：featureSources 类型匹配才投影；已有键默认不覆盖（A-6）', () => {
+test('projectFeatures：featureSources 类型匹配才投影；事实优先覆盖预置值并留痕（T1.1）', () => {
   const pkg = pkgWithSources({ f1: 'OBJ-TST-A', b1: 'OBJ-TST-B' })
   const ds = dataset()
-  const { candidates, projected } = projectFeatures(pkg, ds, ds.candidates)
+  const { candidates, projected, overrides } = projectFeatures(pkg, ds, ds.candidates)
   const c1 = candidates.find((c) => c.candidateId === 'c1')
   const c2 = candidates.find((c) => c.candidateId === 'c2')
   // c1：i1 是 OBJ-TST-A → f1=0.7 投影；b1 声明给 OBJ-TST-B，类型不匹配不投
   assert.equal(c1.features.f1, 0.7)
   assert.ok(!('b1' in c1.features))
-  // c2：b1 已有显式值 9 → 默认不覆盖
-  assert.equal(c2.features.b1, 9)
+  // c2：b1 预置值 9 与对象事实 1.5 冲突 → 事实优先覆盖（调用方不得经预置特征改写判断）
+  assert.equal(c2.features.b1, 1.5, '对象事实覆盖调用方预置值')
+  assert.deepEqual(overrides, [{ candidateId: 'c2', key: 'b1', caller: 9, fact: 1.5 }])
   const p1 = projected.find((p) => p.candidateId === 'c1')
   assert.deepEqual(p1.keys, ['f1'])
   const p2 = projected.find((p) => p.candidateId === 'c2')
-  assert.deepEqual(p2.keys, [], '类型匹配但键已存在（不覆盖）→ keys 空即缺口记录')
+  assert.deepEqual(p2.keys, ['b1'], '事实覆盖也计入投影写入')
   // 入参不改写
   assert.deepEqual(ds.candidates[0].features, {})
+  assert.equal(ds.candidates[1].features.b1, 9)
 })
 
-test('projectFeatures：overwrite=true 才覆盖；score+exclusion featureSources 并集', () => {
-  const pkg = pkgWithSources({ b1: 'OBJ-TST-B' })
-  const ds = dataset()
-  const { candidates } = projectFeatures(pkg, ds, ds.candidates, { overwrite: true })
-  const c2 = candidates.find((c) => c.candidateId === 'c2')
-  assert.equal(c2.features.b1, 1.5, 'overwrite=true 用对象 attrs 覆盖显式值')
-  // 并集：score 声明 f1、exclusion 声明 b1 → 两者都投
+test('projectFeatures：score+exclusion featureSources 并集；无事实依据的预置值保留但留缺口', () => {
   const pkg2 = minimalPkg({
     scoreRules: [{ ...minimalPkg().scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
     exclusionRules: [{ ...minimalPkg().exclusionRules[0], featureSources: { b1: 'OBJ-TST-B' } }],
@@ -60,7 +56,14 @@ test('projectFeatures：overwrite=true 才覆盖；score+exclusion featureSource
   const ds2 = dataset()
   const r2 = projectFeatures(pkg2, ds2, ds2.candidates)
   assert.equal(r2.candidates.find((c) => c.candidateId === 'c1').features.f1, 0.7)
-  assert.equal(r2.candidates.find((c) => c.candidateId === 'c2').features.b1, 9, '默认仍不覆盖')
+  assert.equal(r2.candidates.find((c) => c.candidateId === 'c2').features.b1, 1.5, '并集下同样事实优先')
+  // 属性缺失 → 预置值保留、不写入 keys（缺口面），不产生 override（无事实可覆盖）
+  const ds3 = dataset()
+  ds3.objects[1].attrs = {}
+  const r3 = projectFeatures(pkg2, ds3, ds3.candidates)
+  assert.equal(r3.candidates.find((c) => c.candidateId === 'c2').features.b1, 9)
+  assert.deepEqual(r3.projected.find((p) => p.candidateId === 'c2').keys, [])
+  assert.deepEqual(r3.overrides, [])
 })
 
 test('projectFeatures：属性缺失/非 number|string 值不投影；无 featureSources 零改动', () => {
@@ -108,6 +111,22 @@ test('deriveFeatures since：now 注入两次逐字节一致；缺 now/负值/�
   bad.objects[0].attrs.lastEmptiedAt = 'not-a-date'
   const badR = deriveFeatures(bad.candidates, bad, recipes)
   assert.ok(!('overdueHours' in badR.candidates[0].features))
+})
+
+test('deriveFeatures：配方值覆盖同名预置特征同样留痕（T1.1 事实优先）', () => {
+  const ds = dataset()
+  ds.candidates[0].features = { overdueHours: 999 }
+  const r = deriveFeatures(ds.candidates, ds, [
+    { name: 'overdueHours', kind: 'since', attr: 'lastEmptiedAt', now: '2026-11-01T12:00:00Z' },
+  ])
+  assert.equal(r.candidates[0].features.overdueHours, 12, '配方计算值覆盖预置值')
+  assert.deepEqual(r.overrides, [{ candidateId: 'c1', key: 'overdueHours', caller: 999, fact: 12 }])
+  // 预置值与配方一致 → 不算冲突
+  ds.candidates[0].features = { overdueHours: 12 }
+  const same = deriveFeatures(ds.candidates, ds, [
+    { name: 'overdueHours', kind: 'since', attr: 'lastEmptiedAt', now: '2026-11-01T12:00:00Z' },
+  ])
+  assert.deepEqual(same.overrides, [])
 })
 
 test('deriveFeatures count：按 candidate objectRef 关联实例 + type 过滤', () => {

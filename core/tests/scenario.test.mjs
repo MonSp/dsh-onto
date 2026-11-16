@@ -406,3 +406,187 @@ test('P-1 includeExcluded 持久化：create 携带、update 可开、坏类型�
     rmWorkspace(root)
   }
 })
+
+/* ── 可信取数（T1.1/T1.2/T1.3）：事实优先覆盖 / 数据信任面 / 审计补强 ── */
+
+test('T1.1 prep.featureOverrides：预置特征被对象事实覆盖 → 留痕 + 候选降级，分数按事实算', () => {
+  const base = minimalPkg()
+  const pkg2 = minimalPkg({
+    scoreRules: [{ ...base.scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+  })
+  pkg2.scenarios[0].prep = { features: true }
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x', f1: 1 } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: [] }],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.deepEqual(
+      result.prep?.featureOverrides,
+      [{ candidateId: 'C1', key: 'f1', caller: 0.9, fact: 1 }],
+      '调用方预置 0.9 与对象事实 1 冲突 → 事实覆盖留痕',
+    )
+    const c1 = result.candidates.find((c) => c.candidateId === 'C1')
+    assert.equal(c1.pendingVerification, true)
+    assert.ok(c1.pendingChecks.some((p) => /事实覆盖/.test(p.note)), JSON.stringify(c1.pendingChecks))
+    // 分数按事实 f1=1 算（预置 0.9 不参与）
+    assert.equal(c1.riskScore, 1)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T1.2 数据信任面：provenance=inline → dataTrust + DATA_TRUST 提示项 + 候选降级，不否闭合', () => {
+  const { dir, root } = copyExamplePackage('aml')
+  try {
+    const ds = { ...exampleData('aml-run.json'), provenance: 'inline' }
+    const result = runScenario(dir, 'SCN-AML-FIND-CLUES', ds)
+    assert.deepEqual(result.dataTrust, {
+      provenance: 'inline',
+      verified: false,
+      note: '内联数据未经可信取数核验——结论仅在该数据集内自洽',
+    })
+    const trust = result.audit.checks.find((c) => c.check === 'DATA_TRUST')
+    assert.ok(trust, 'DATA_TRUST 检查项应在场')
+    assert.equal(trust.closed, false)
+    assert.equal(trust.blocking, false, '信任面是提示项，不否掉本数据集内三层闭合')
+    assert.equal(result.audit.passed, true)
+    for (const c of result.candidates) {
+      assert.equal(c.pendingVerification, true, `${c.candidateId} 内联数据应降级待核实`)
+      assert.ok(c.pendingChecks.some((p) => /未经可信取数核验/.test(p.note)))
+    }
+    // provenance 缺省 = 来源未声明：无 DATA_TRUST、无降级（零回归）
+    const plain = runScenario(dir, 'SCN-AML-FIND-CLUES', exampleData('aml-run.json'))
+    assert.equal(plain.dataTrust, undefined)
+    assert.ok(!plain.audit.checks.some((c) => c.check === 'DATA_TRUST'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T1.3 INSTANCE_SCHEMA：枚举值越出字典 / 关系端点类型不匹配 → 审计不闭合并降级', () => {
+  const { dir, root } = copyExamplePackage('aml')
+  try {
+    const ds = exampleData('aml-run.json')
+    ds.objects[0].attrs.acctType = 'no-such-type' // enum 不在 dict-acct-type
+    ds.relations[0] = { ...ds.relations[0], from: 'TXN-001' } // REL-AML-HOLDS 期望 from=OBJ-AML-CUSTOMER
+    const result = runScenario(dir, 'SCN-AML-FIND-CLUES', ds)
+    assert.equal(result.audit.passed, false)
+    const schema = result.audit.checks.find((c) => c.check === 'INSTANCE_SCHEMA')
+    assert.equal(schema.closed, false)
+    assert.match(schema.detail, /acctType/)
+    assert.match(schema.detail, /from 端类型/)
+    assert.ok(
+      result.candidates.some((c) => c.pendingChecks.some((p) => /INSTANCE_SCHEMA/.test(p.note))),
+      '不闭合须降级为待核实点',
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T1.3 FEATURE_RECOMPUTED：声明特征与对象事实不符 → 审计不闭合（无 prep 也可抓篡改）', () => {
+  const base = minimalPkg()
+  const pkg2 = minimalPkg({
+    scoreRules: [{ ...base.scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x', f1: 1 } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: [] }],
+    }
+    // 场景无 prep.features：投影不跑，审计仍须抓「特征 ≠ 事实」
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.equal(result.audit.passed, false)
+    const feat = result.audit.checks.find((c) => c.check === 'FEATURE_RECOMPUTED')
+    assert.equal(feat.closed, false)
+    assert.match(feat.detail, /C1 特征 f1 与对象事实不符/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+/* ── T2.2 人审屏障：HUMAN_REVIEW 是硬停点，自动执行不过人审点 ── */
+
+test('T2.2-1 人审屏障拦住打分段 → HUMAN_REVIEW_PENDING（停点待放行，不是缺步）', () => {
+  const base = minimalPkg()
+  const sc = base.scenarios[0]
+  // 打分段挪到 HUMAN_REVIEW 之后——自动执行不得越过人审点
+  const pkg2 = minimalPkg({
+    scenarios: [{
+      ...sc,
+      pipeline: [
+        { stepId: 's1', stepType: 'DATA_INGEST' },
+        { stepId: 's7', stepType: 'HUMAN_REVIEW' },
+        { stepId: 's3', stepType: 'RULE_EVALUATE', order: 'before-scoring' },
+        { stepId: 's4', stepType: 'RULE_EVALUATE' },
+      ],
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.5 }, tags: [] }],
+    }
+    assert.throws(
+      () => runScenario(dir, 'SCN-TST-1', dataset),
+      (e) => e instanceof ScenarioRunError && e.code === 'HUMAN_REVIEW_PENDING' && /人审屏障/.test(e.message),
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T2.2-2 人审屏障：其后步骤不自动执行，reviewBarrier 留痕（末步 HUMAN_REVIEW 零回归）', () => {
+  const base = minimalPkg()
+  const sc = base.scenarios[0]
+  const pkg2 = minimalPkg({
+    scenarios: [{
+      ...sc,
+      // HUMAN_REVIEW 后挂 BEHAVIOR_CALL / SKILL_RUN——都不得自动执行
+      pipeline: [
+        { stepId: 's1', stepType: 'DATA_INGEST' },
+        { stepId: 's3', stepType: 'RULE_EVALUATE', order: 'before-scoring' },
+        { stepId: 's4', stepType: 'RULE_EVALUATE' },
+        { stepId: 's5', stepType: 'SKILL_RUN', skillRefs: ['SKL-TST-N'] },
+        { stepId: 's7', stepType: 'HUMAN_REVIEW' },
+        { stepId: 's8', stepType: 'BEHAVIOR_CALL' },
+        { stepId: 's9', stepType: 'SKILL_RUN', skillRefs: ['SKL-TST-N'] },
+      ],
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [{ id: 'BV1', type: 'BHV-TST-X', anchorRef: 'A1', objectRef: 'A1', occurredAt: '2026-01-01T00:00:00Z' }],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.5 }, tags: [] }],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset)
+    assert.deepEqual(result.reviewBarrier, { stepId: 's7', skipped: ['s8', 's9'] })
+    // 屏障后 BEHAVIOR_CALL 未跑：行为实例不进审计口径（O2 明细 0 条）
+    const o2 = result.audit.checks.find((c) => c.check === 'O2_CLOSED')
+    assert.match(o2.detail, /行为实例 0 条/)
+    // 叙述仍来自屏障前的 s5（装配过滤 skipped SKILL_RUN——s9 同技能不重复计入）
+    assert.ok(result.candidates[0].narrative.length > 0)
+  } finally {
+    rmWorkspace(root)
+  }
+})

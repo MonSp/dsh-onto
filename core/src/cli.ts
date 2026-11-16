@@ -393,7 +393,8 @@ function loadDatasetFile(path: string): RuntimeDataset {
   const file = resolve(path)
   if (!existsSync(file)) fail(`dataset file not found: ${path}`)
   try {
-    return JSON.parse(readFileSync(file, 'utf8')) as RuntimeDataset
+    // 信任面（可信取数 T1.2）：CLI 载入即标记文件来源。
+    return { ...(JSON.parse(readFileSync(file, 'utf8')) as RuntimeDataset), provenance: 'file' }
   } catch {
     fail(`dataset file is not valid JSON: ${path}`)
   }

@@ -222,6 +222,49 @@ export interface ScenarioPrepSummary {
    * 双 digest 只能发现数据变化，此字段还原「按哪个时刻算 since」的计算条件。
    */
   sinceBasis?: string
+  /**
+   * 事实覆盖留痕（可信取数 T1.1）：调用方预置特征被对象事实/配方派生值覆盖的冲突对。
+   * 仅人审面对账；模型面经 pendingChecks 另行降级提示。
+   */
+  featureOverrides?: FeatureOverride[]
+}
+
+/**
+ * 事实覆盖记录（可信取数 T1.1）：调用方预置特征与对象事实/配方派生值冲突时，
+ * 事实值写入 features，冲突对留痕供人审对账与审计溯源。
+ */
+export interface FeatureOverride {
+  candidateId: string
+  key: string
+  caller: number | string
+  fact: number | string
+}
+
+/**
+ * 特征来源状态（R5 无事实特征显式降级）：参与评分/排除的特征逐条记录来源，
+ * 声明来源缺失的预置值不得伪装为可复算事实。
+ */
+export type FeatureSourceKind =
+  /** 对象投影（featureSources → 对象 attrs，本轮可复算）。 */
+  | 'object-fact'
+  /** 合法配方派生（since/count/ratio，记录实际输入与计算条件）。 */
+  | 'derived'
+  /** 可信连接器供数（provenance=connector 的对象投影/派生）。 */
+  | 'connector'
+  /** 未核实调用方值（声明源缺失 / 配方缺输入 / 来源未声明——不可复算）。 */
+  | 'unverified-caller'
+
+export interface FeatureSourceRecord {
+  candidateId: string
+  key: string
+  source: FeatureSourceKind
+  /**
+   * 有声明契约（featureSources 或 featureRecipes）——契约在而事实缺 = 伪装面，
+   * 须逐候选降级；来源未声明（旧输入面）只留痕。
+   */
+  declared: boolean
+  /** 详情：投影目标 / 配方与实际输入 / 缺失原因（审计与人审对账用）。 */
+  detail: string
 }
 
 /** 确定性特征配方（PR#18 features.ts；scenario-prep S2.2 包级复用同一类型）。 */
@@ -402,6 +445,11 @@ export interface RuntimeDataset {
   relations: RuntimeRelationInstance[]
   behaviors?: RuntimeBehaviorInstance[]
   candidates: RuntimeCandidate[]
+  /**
+   * 数据来源信任面（可信取数 T1.2）：inline=Agent 内联提交（未核验）；
+   * file=工作区数据文件；connector=可信取数接口。缺省 = 来源未声明（不触发信任检查）。
+   */
+  provenance?: 'inline' | 'file' | 'connector'
 }
 
 export interface EvidenceChainEntry {
@@ -441,6 +489,8 @@ export interface AuditCheckEntry {
   closed: boolean
   detail: string
   ts: string
+  /** 默认 true（参与 passed 与待核实降级）；false=提示项（如 DATA_TRUST），只留痕不阻断。 */
+  blocking?: boolean
 }
 
 export interface ForbiddenPhraseHit {
@@ -470,6 +520,16 @@ export interface ScenarioRunResult {
   }
   /** 执行层 prep 摘要（scenario-prep S2.4；人审对账，无准备时缺省）。 */
   prep?: ScenarioPrepSummary
+  /**
+   * 人审屏障（T2.2）：pipeline 里 HUMAN_REVIEW 之后的步骤未自动执行（待人工放行恢复）。
+   * 现有包 HUMAN_REVIEW 均为末步 → 缺省无此字段（零回归）。
+   */
+  reviewBarrier?: { stepId: string; skipped: string[] }
+  /**
+   * 数据信任提示（可信取数 T1.2）：数据集声明 provenance 时回填。
+   * verified 仅当 provenance='connector'；inline 数据经审计 DATA_TRUST 不闭合降级。
+   */
+  dataTrust?: { provenance: string; verified: boolean; note: string }
   /**
    * 有 prep 时回填的 effective 数据集（buildRunRecord 双 digest 用）。
    * enumerable:false——不进 JSON.stringify / 模型面 / RunRecord.result。
@@ -541,12 +601,14 @@ export interface DraftCandidate extends DraftItem {
   provenance?: DraftProvenance
   /** 物化后写入的元素 ID（canvas 由元素回查 provenance）；属性类为 'OBJ.attr' 属性引用形态。 */
   appliedAs?: string
-  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'agent-tool' 会话代执行）与时间。 */
+  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'host-gate' 系统批准卡 / 'agent-tool' 会话代执行）与时间。 */
   reviewedBy?: string
   reviewedAt?: string
   /** approved→rejected 时保留原批准人/时间（单字段 reviewedBy 会被驳回覆盖，审计链不断）。 */
   approvedBy?: string
   approvedAt?: string
+  /** 批准凭证摘要（可信人审 T2.1）：批准时的动作载荷指纹，绑定「批的就是这份内容」。 */
+  approvalDigest?: string
   createdAt: string
 }
 
