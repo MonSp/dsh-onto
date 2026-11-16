@@ -4,7 +4,7 @@
  * 派生门禁、skills 去重确定性。末节按 tool-face-policy 不变量（I1–I5）穷举
  * 路径/禁语同族等价类——发现一类问题即整族补测，不再逐旁路点名。
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,6 +47,7 @@ import {
   validateRunSeedIds,
 } from '../dist/agent-tools.js'
 import { dedupeSkillNames, isCurrentWinner, pickSkillSources, renderModelingGuideBody } from '../dist/agent-skills.js'
+import { actionDigest, digestDraftBatch, requestHostApproval } from '../dist/agent-approval.js'
 import {
   PackageStoreError,
   PackageWorkspace,
@@ -1073,7 +1074,7 @@ test('A-5 expand render 摘要级：零 attrs 正文、零绝对路径；ID 撞�
   assert.ok(pt.includes('n'), '派生配方名在场')
 })
 
-test('A-3/A-6/A-7 core 面重放：诱导子图 / 默认不覆盖 / now 注入确定性', () => {
+test('A-3/A-6/A-7 core 面重放：诱导子图 / 事实优先覆盖 / now 注入确定性', () => {
   // A-3：各跳数扩展结果恒无悬空边
   const ds = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
   for (const hops of [0, 1, 2, 3]) {
@@ -1083,20 +1084,14 @@ test('A-3/A-6/A-7 core 面重放：诱导子图 / 默认不覆盖 / now 注入�
       assert.ok(ids.has(rel.from) && ids.has(rel.to), `hops=${hops} 悬空边 ${rel.id}`)
     }
   }
-  // A-6：projectFeatures 默认不覆盖显式 features
+  // A-6（可信取数 T1.1 改口径）：对象事实覆盖调用方预置特征，冲突留痕——调用方不得经预置值改写打分
   const proj = projectFeatures(
     { scoreRules: [{ id: 'r', name: 'r', weight: 1, expression: '1', featureSources: { f1: 'OBJ-TST-A' } }], exclusionRules: [] },
     { objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { f1: 1 } }], relations: [], candidates: [] },
     [{ candidateId: 'c', objectRef: 'i1', features: { f1: 9 }, tags: [] }],
   )
-  assert.equal(proj.candidates[0].features.f1, 9, 'A-6 默认不覆盖')
-  const projOver = projectFeatures(
-    { scoreRules: [{ id: 'r', name: 'r', weight: 1, expression: '1', featureSources: { f1: 'OBJ-TST-A' } }], exclusionRules: [] },
-    { objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { f1: 1 } }], relations: [], candidates: [] },
-    [{ candidateId: 'c', objectRef: 'i1', features: { f1: 9 }, tags: [] }],
-    { overwrite: true },
-  )
-  assert.equal(projOver.candidates[0].features.f1, 1, '显式 overwrite 才覆盖')
+  assert.equal(proj.candidates[0].features.f1, 1, 'A-6 事实优先：attrs 覆盖预置特征')
+  assert.deepEqual(proj.overrides, [{ candidateId: 'c', key: 'f1', caller: 9, fact: 1 }])
   // A-7：now 注入 → 两次逐字节一致；缺 now → 确定性跳过（不 new Date()）
   const cand = [{ candidateId: 'c', objectRef: 'i1', features: {}, tags: [] }]
   const dsm = {
@@ -1192,4 +1187,120 @@ test('skill 指引：开展场景 = 单次 run_scenario(seedIds)，旧两连调�
   assert.ok(body.includes('单次 `run_scenario(seedIds?)`'), '须引导单次 run_scenario')
   assert.ok(body.includes('两连调'), '须显式提及两连调已降级')
   assert.ok(body.includes('探索性扩图'), '旧链路保留探索性定位')
+})
+
+/* ── 可信人审攻击面表（T2.1 系统批准卡 / 摘要绑定 / fail-closed 全表） ── */
+
+const approveStub = (outcome = 'allowed-once', capture = []) => ({
+  approval: {
+    async request(req) {
+      capture.push(req)
+      return outcome
+    },
+  },
+})
+
+const ASK = { toolName: 'apply_draft', action: '批准物化 2 条草案', digest: 'd'.repeat(64), summary: '包 x@1.0.0，草案 dc-a, dc-b' }
+
+test('T2.1-1 批准卡：allowed-once 放行并回传摘要；拒单/取消/无应答一律 APPROVAL_DENIED', async () => {
+  const cap = []
+  const grant = await requestHostApproval(approveStub('allowed-once', cap), { agent: { session: {} }, callId: 'c1' }, ASK)
+  assert.equal(grant.approvalDigest, ASK.digest, '回执绑定批次摘要')
+  assert.ok(grant.approvedAt, '回执带批准时刻')
+  assert.equal(cap.length, 1, '恰好一次审批请求')
+  assert.equal(cap[0].toolName, 'apply_draft')
+  assert.equal(cap[0].callId, 'c1', 'callId 回指具体工具调用')
+  assert.ok(cap[0].reason.includes(ASK.digest.slice(0, 12)), '批准卡 reason 须带批次摘要前缀')
+  assert.ok(cap[0].reason.includes('dc-a') && cap[0].reason.includes('dc-b'), '批准卡 reason 须带草案清单')
+  for (const outcome of ['rejected', 'cancelled', 'unavailable']) {
+    await assert.rejects(
+      () => requestHostApproval(approveStub(outcome), { agent: {} }, ASK),
+      (e) => e instanceof AgentToolError && e.code === 'APPROVAL_DENIED',
+      `outcome=${outcome} 须 APPROVAL_DENIED`,
+    )
+  }
+})
+
+test('T2.1-2 fail-closed：无审批面 / 无会话 agent / 服务抛错 → APPROVAL_UNAVAILABLE，绝不放行', async () => {
+  await assert.rejects(() => requestHostApproval({}, { agent: {} }, ASK), (e) => e.code === 'APPROVAL_UNAVAILABLE')
+  await assert.rejects(() => requestHostApproval({ approval: null }, { agent: {} }, ASK), (e) => e.code === 'APPROVAL_UNAVAILABLE')
+  await assert.rejects(() => requestHostApproval(approveStub(), undefined, ASK), (e) => e.code === 'APPROVAL_UNAVAILABLE')
+  await assert.rejects(() => requestHostApproval(approveStub(), { agent: null }, ASK), (e) => e.code === 'APPROVAL_UNAVAILABLE')
+  await assert.rejects(
+    () => requestHostApproval({ approval: { async request() { throw new Error('boom') } } }, { agent: {} }, ASK),
+    (e) => e.code === 'APPROVAL_UNAVAILABLE',
+  )
+})
+
+test('T2.1-3 摘要绑定：指纹键序/ID 序无关；载荷/版本一变指纹即变（旧凭证跨内容作废）', () => {
+  const rows = (payload) => [
+    { id: 'dc-b', layer: 'O2', targetKind: 'ScoreRule', name: 'r', payload },
+    { id: 'dc-a', layer: 'O1', targetKind: 'ObjectType', targetId: 'OBJ-X', op: 'update', name: 'x', payload: {} },
+  ]
+  const d1 = digestDraftBatch('pkg', '1.0.0', rows({ w: 1 }))
+  const d2 = digestDraftBatch('pkg', '1.0.0', [...rows({ w: 1 })].reverse())
+  assert.equal(d1, d2, 'ID 顺序不影响指纹')
+  assert.notEqual(d1, digestDraftBatch('pkg', '1.0.0', rows({ w: 2 })), '载荷变化指纹必须变')
+  assert.notEqual(d1, digestDraftBatch('pkg', '1.0.1', rows({ w: 1 })), '目标版本变化指纹必须变')
+  assert.equal(actionDigest({ a: 1, b: 2 }), actionDigest({ b: 2, a: 1 }), '键序无关')
+  assert.notEqual(actionDigest({ a: 1 }), actionDigest({ a: 2 }))
+})
+
+test('T2.1-4 源断言：六个人审写工具闭包先过批准卡才落动作；批准后复核指纹 + 凭证留痕在场', () => {
+  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience']) {
+    const head = src.indexOf(`name: '${tool}'`)
+    assert.ok(head > 0, `${tool} 登记应在场`)
+    const next = src.indexOf("name: '", head + 10)
+    const slice = src.slice(head, next > 0 ? next : src.length)
+    assert.ok(slice.includes('await approve(exec'), `${tool} 闭包须过批准卡（T2.1）`)
+  }
+  assert.ok(src.includes('APPROVAL_STALE'), '批准后草案漂移须作废凭证（APPROVAL_STALE）')
+  assert.ok(src.includes("approvalDigest: digest"), 'review 留痕须绑批次摘要')
+  // humanApproved 布尔不再是凭证：凭证只认服务回执（批准闸代码不得读 humanApproved）
+  const apSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-approval.ts'), 'utf8')
+  const apCode = apSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(!/humanApproved/.test(apCode), '批准闸代码不得读 humanApproved 布尔')
+  assert.ok(apCode.includes("'allowed-once'"), '仅 allowed-once 放行')
+})
+test('T2.2-3 源断言：HUMAN_REVIEW 是硬停点——自动执行不过人审点（reviewBarrier + HUMAN_REVIEW_PENDING）', () => {
+  const src = readFileSync(join(REPO, 'core', 'src', 'scenario.ts'), 'utf8')
+  assert.ok(src.includes('reviewBarrier'), '人审屏障留痕字段应在场')
+  assert.ok(src.includes('HUMAN_REVIEW_PENDING'), '屏障拦打分段须显式报停点待放行')
+  const caseIdx = src.indexOf("case 'HUMAN_REVIEW'")
+  const caseSlice = src.slice(caseIdx, caseIdx + 400)
+  assert.ok(caseSlice.includes('reviewBarrier = {'), 'HUMAN_REVIEW 案例须立屏障')
+  // 屏障后的步骤不得进叙述装配（skipped SKILL_RUN 过滤）
+  assert.ok(src.includes('!skippedSteps.has(s.stepId)'), '叙述装配须过滤屏障后步骤')
+})
+test('T3-1 源断言：最终回答守卫挂上 llm/stream 出口——禁语/数字核正/无运行支撑降级在场', () => {
+  const toolsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(toolsSrc.includes("ctx.on('llm/stream'"), '回答守卫须挂在 llm/stream 瀑布')
+  assert.ok(toolsSrc.includes('createAnswerGuard'), '回答守卫注册在场')
+  const guardSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-answer-guard.ts'), 'utf8')
+  assert.ok(guardSrc.includes('UNGROUNDED_FOOTER'), '无运行支撑降级页脚在场')
+  assert.ok(guardSrc.includes('processAnswerText(source'), 'block-end 汇编文本须全量处理覆写（权威内容）')
+  assert.ok(guardSrc.includes('chunk.block.text'), '权威内容取汇编块文本')
+  assert.ok(guardSrc.includes("RUN_TOOL_NAMES.has(name)"), '运行证据只认 run_* / invoke_expert 工具结果')
+  assert.ok(!guardSrc.includes("case 'reasoning-delta'"), '思考块不过闸（无专门分支）')
+})
+test('T4-1/T4-2 源断言：动作执行器闭环 + 全工具沙箱收口在场', () => {
+  const grantsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  assert.ok(grantsSrc.includes("'execute_behavior_action'"), '动作工具须进 ONTOOL_NAMES（objectRef 过对象收权）')
+  const execSrc = readFileSync(join(REPO, 'backend', 'src', 'action-executor.ts'), 'utf8')
+  assert.ok(execSrc.includes('conn.compensate'), '失败补偿（saga 反向动作）在场')
+  assert.ok(execSrc.includes('ActionExecuteError'), '部分效应（带单号失败）触发补偿在场')
+  assert.ok(execSrc.includes('replayed: true'), '幂等重放在场')
+  assert.ok(execSrc.includes('actions'), '台账落 actions/ 目录')
+  // R1/R6：损坏 fail-closed / 原子占位互斥 / 批准上下文绑定 / 效应不明不写无效应失败
+  assert.ok(execSrc.includes('ACTION_LEDGER_CORRUPT'), '台账损坏 fail-closed 在场')
+  assert.ok(execSrc.includes("flag: 'wx'"), '原子占位（跨会话互斥）在场')
+  assert.ok(execSrc.includes('approvalContext'), '批准上下文绑定在场')
+  assert.ok(execSrc.includes('ACTION_UNKNOWN_EFFECT'), '效应不明走对账、不写无效应失败在场')
+  const sandboxSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-sandbox.ts'), 'utf8')
+  assert.ok(sandboxSrc.includes('TOOL_SANDBOX_DENIED'), '沙箱拒绝码在场')
+  assert.ok(sandboxSrc.includes("startsWith(ONTO_PRESET_PREFIX)"), '沙箱仅约束 onto 专家会话')
+  const toolsSrc2 = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  assert.ok(toolsSrc2.includes('toolSandboxDecision('), 'guard 须收口沙箱判定')
+  assert.ok(toolsSrc2.includes('await approve(exec'), '动作执行须过系统批准卡')
 })

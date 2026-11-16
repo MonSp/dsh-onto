@@ -50,6 +50,8 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   // 子图扩展与特征投影（subgraph-expansion S3.2/S4.3；A-1 输入 dataset 收权）
   'expand_entity',
   'project_features',
+  // 业务动作执行器（可信执行 T4.1）：objectRef 过对象收权（deny-by-default）
+  'execute_behavior_action',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

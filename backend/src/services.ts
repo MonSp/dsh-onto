@@ -632,7 +632,9 @@ export class OntoRuntime extends TypertRemoteService {
   }): Promise<{ result: ScenarioRunResult }> {
     return guard(() => {
       const dir = this.ws.versionDir(request.name, request.version)
-      const result = runScenario(dir, request.scenarioId, request.dataset)
+      // 数据入口固定来源身份（R5）：wire 入参是外部请求，不得自称 connector 获得可信状态。
+      const dataset: RuntimeDataset = { ...request.dataset, provenance: 'inline' }
+      const result = runScenario(dir, request.scenarioId, dataset)
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
       const scenario = loadPackage(dir).scenarios.find((s) => s.id === request.scenarioId)
@@ -648,8 +650,8 @@ export class OntoRuntime extends TypertRemoteService {
         this.ws.root,
         buildRunRecord({
           package: { name: meta.name, version: meta.version },
-          dataset: result.effectiveDataset ?? request.dataset,
-          inputDataset: request.dataset,
+          dataset: result.effectiveDataset ?? dataset,
+          inputDataset: dataset,
           result,
           redlines,
         }),

@@ -17,6 +17,7 @@ import {
   type ScenarioRunResult,
   type TaskSignature,
 } from '@dsh-onto/core'
+import type { ToolExecCtx } from './agent-approval.js'
 
 /* ───────────────────────── 错误面（P2.4） ───────────────────────── */
 
@@ -103,13 +104,13 @@ export function asToolError(
  * 入参回显（objectRef/candidateId…）含红线短语时错误面整段退避（I1）。
  */
 export function toolExecute<A, R>(
-  fn: (args: A) => R | Promise<R>,
+  fn: (args: A, exec?: ToolExecCtx) => R | Promise<R>,
   extraRedact: readonly string[] = [],
   phrases: readonly string[] | ((args: A) => readonly string[]) = [],
-): (args: A) => Promise<R> {
-  return async (args: A): Promise<R> => {
+): (args: A, exec?: ToolExecCtx) => Promise<R> {
+  return async (args: A, exec?: ToolExecCtx): Promise<R> => {
     try {
-      return await fn(args)
+      return await fn(args, exec)
     } catch (e) {
       const list = typeof phrases === 'function' ? phrases(args) : phrases
       throw asToolError(e, extraRedact, list)
@@ -144,6 +145,7 @@ let phraseRecall: PhraseRecall | null = null
 export function configurePhraseStore(recall: PhraseRecall | null): void {
   phraseRecall = recall
   phraseRegistry.clear()
+  answerPhraseUnion.clear()
 }
 
 export function rememberPhrases(runId: string, phrases: readonly string[]): void {
@@ -153,6 +155,16 @@ export function rememberPhrases(runId: string, phrases: readonly string[]): void
     if (oldest !== undefined) phraseRegistry.delete(oldest)
   }
   phraseRegistry.set(runId, [...phrases])
+  for (const p of phrases) {
+    if (typeof p === 'string' && p !== '') answerPhraseUnion.add(p)
+  }
+}
+
+/** 回答面红线并集（可信回答 T3）：rememberPhrases 累积，供 llm/stream 回答守卫扫描。 */
+const answerPhraseUnion = new Set<string>()
+
+export function recalledAnswerPhrases(): string[] {
+  return [...answerPhraseUnion]
 }
 
 export function recallPhrases(runId: string): string[] | undefined {
@@ -384,6 +396,17 @@ export function renderRunText(result: ScenarioRunResult, phrases?: readonly stri
   }
   lines.push('—— 合规 ——')
   lines.push('humanReviewRequired=true（认定出口只在人工复核）')
+  if (result.reviewBarrier !== undefined) {
+    lines.push(
+      `人审屏障: ${result.reviewBarrier.stepId} 之后 ${result.reviewBarrier.skipped.length} 步未自动执行（待人工放行恢复）`,
+    )
+  }
+  if (result.dataTrust !== undefined) {
+    lines.push(
+      `数据来源: ${result.dataTrust.provenance}（${result.dataTrust.verified ? '已核验' : '未核验'}）`
+        + (result.dataTrust.verified ? '' : '——结论仅在传入数据集内自洽'),
+    )
+  }
   const hits = result.audit.forbiddenPhraseHits
   lines.push(`禁语扫描: ${hits.length === 0 ? '0 命中（通过）' : `${hits.length} 命中`}`)
   for (const h of hits) {
