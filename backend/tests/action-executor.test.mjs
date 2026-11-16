@@ -69,7 +69,8 @@ test('R6-1 同环境、同业务操作、同上下文：正常重放回读，无
     assert.equal(first.record.status, 'succeeded')
     assert.ok(first.record.externalRef?.startsWith('ext-'))
     assert.equal(first.record.approvalDigest, 'ap-digest', '台账留批准凭证摘要')
-    assert.ok(existsSync(join(root, 'actions', `${first.record.businessKey}.json`)), '台账落盘 actions/')
+    assert.ok(existsSync(join(root, 'actions', 'ledger.db')), '台账落盘 actions/（SQLite 事务台账）')
+    assert.equal(loadActionRecord(root, first.record.businessKey)?.actionId, first.record.actionId, '台账可回读')
     const again = await executeBehaviorAction(input(root, {
       requestGrant: async () => {
         grants++

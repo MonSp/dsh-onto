@@ -108,9 +108,11 @@ import { registerSkillInvalidator } from './agent-hooks.js'
 import { createPresetResolver, toolSandboxDecision } from './agent-sandbox.js'
 import {
   connectorNature,
+  currentConnectorIdentity,
   executeBehaviorAction,
   validateActionIntent,
 } from './action-executor.js'
+import { actionStoreFor } from './action-store.js'
 import { resolveDataDir } from './services.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills.js'
@@ -3222,6 +3224,12 @@ export function apply(ctx: Context): void {
           type: 'string',
           description: '业务操作标识（R6）：缺省=同载荷即同操作（重放回读）；重复同载荷业务动作时传新的标识',
         },
+        proposalId: {
+          type: 'string',
+          description:
+            '动作提案 ID（PROP-…，D 包治理链）：传入时执行器重新加载验证提案（复核决定/候选/载荷指纹）并'
+            + '消费提案（单次）；仅提供 runId 不足以证明动作获准。受治理流程（正式/模拟连接器）应经提案执行',
+        },
         humanApproved: {
           type: 'boolean',
           required: true,
@@ -3278,6 +3286,7 @@ export function apply(ctx: Context): void {
             objectRef: string
             payload: unknown
             operationId?: string
+            proposalId?: string
             humanApproved: boolean
           },
           exec,
@@ -3315,6 +3324,7 @@ export function apply(ctx: Context): void {
               states: behavior.states,
             },
             ...(args.operationId !== undefined ? { operationId: args.operationId } : {}),
+            ...(args.proposalId !== undefined ? { proposalId: args.proposalId } : {}),
             requestGrant: async (contextDigest) =>
               await approve(exec, {
                 toolName: 'execute_behavior_action',
@@ -3343,6 +3353,241 @@ export function apply(ctx: Context): void {
               phrasesOfPkg(pkg),
             ),
           )
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：业务复核决定（两次人工事件之一）——人对分析与证据作出业务决定
+  ctx.tools.register(
+    defineTool({
+      name: 'record_review_decision',
+      description:
+        '业务复核决定（D 包）：人对该次分析与证据作出业务决定，生成 ReviewDecision——绑定 runId、'
+        + '获准候选集合、数据快照摘要、本体/规则指纹与决定理由。approved 的决定才允许对集合内候选创建'
+        + '动作提案（create_action_proposal）；执行批准（execute_behavior_action 的系统批准卡）是另一次'
+        + '人工事件，两者不可互相替代，humanReviewRequired 恒真也不替代任何一次。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确给出该复核决定时传 true；实际放行以系统批准卡为准。',
+      parameters: {
+        runId: { type: 'string', required: true, description: '被复核的运行 ID（run-…）' },
+        candidateIds: {
+          type: 'json',
+          required: true,
+          description: '本次决定覆盖的候选集合（JSON 字符串数组，如 ["CAND-001"]；approved 时即获准提案集合）',
+        },
+        snapshotDigest: { type: 'string', required: true, description: '数据快照摘要（绑定数据面）' },
+        ruleFingerprint: { type: 'string', required: true, description: '本体/规则指纹（绑定规则面）' },
+        decision: {
+          type: 'string',
+          required: true,
+          description: '业务决定：approved（允许对集合内候选提案动作）/ rejected',
+        },
+        reason: { type: 'string', description: '复核理由（可选，进留痕）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确给出该复核决定时传 true；澄清/推进类台词不构成复核决定',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            decisionId: { type: 'string', required: true },
+            runId: { type: 'string', required: true },
+            decision: { type: 'string', required: true },
+            candidateIds: { type: 'json', required: true },
+            reviewer: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            decisionId: string
+            runId: string
+            decision: string
+            candidateIds: string[]
+            reviewer: string
+          }
+          return textBlock(
+            `业务复核决定 ${v.decisionId} · ${v.decision} · 运行 ${v.runId}\n`
+              + `覆盖候选: ${v.candidateIds.join('、')}\n`
+              + `复核人绑定: ${v.reviewer}（经系统批准卡，不收模型自称）\n`
+              + 'humanReviewRequired=true（复核决定 ≠ 执行批准；动作执行仍须单独过系统批准卡）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            runId: string
+            candidateIds: unknown
+            snapshotDigest: string
+            ruleFingerprint: string
+            decision: string
+            reason?: string
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '记录业务复核决定')
+          if (
+            !Array.isArray(args.candidateIds)
+            || args.candidateIds.length === 0
+            || !args.candidateIds.every((c) => typeof c === 'string')
+          ) {
+            throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空字符串数组')
+          }
+          if (args.decision !== 'approved' && args.decision !== 'rejected') {
+            throw new AgentToolError('INVALID_ARGS', 'decision 必须是 approved / rejected')
+          }
+          const content = actionDigest({
+            action: 'record_review_decision',
+            runId: args.runId,
+            candidateIds: args.candidateIds,
+            snapshotDigest: args.snapshotDigest,
+            ruleFingerprint: args.ruleFingerprint,
+            decision: args.decision,
+            reason: args.reason ?? '',
+          })
+          const grant = await approve(exec, {
+            toolName: 'record_review_decision',
+            action: `业务复核决定 ${args.decision}（运行 ${args.runId}）`,
+            digest: content,
+            summary: `候选 ${args.candidateIds.join('、')}——决定 ${args.decision}`,
+          })
+          const dec = actionStoreFor(ws.root).createDecision({
+            runId: args.runId,
+            candidateIds: args.candidateIds as string[],
+            snapshotDigest: args.snapshotDigest,
+            ruleFingerprint: args.ruleFingerprint,
+            // 复核人身份绑定宿主批准回执（可信面），不收模型自称
+            reviewer: `host:${grant.approvalDigest.slice(0, 12)}`,
+            decision: args.decision as 'approved' | 'rejected',
+            ...(args.reason !== undefined ? { reason: args.reason } : {}),
+          })
+          return toolOut({
+            decisionId: dec.decisionId,
+            runId: dec.runId,
+            decision: dec.decision,
+            candidateIds: dec.candidateIds,
+            reviewer: dec.reviewer,
+            humanReviewRequired: true,
+          })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：动作提案——绑定复核决定的受治理动作（服务端 operationId，单次消费）
+  ctx.tools.register(
+    defineTool({
+      name: 'create_action_proposal',
+      description:
+        '动作提案（D 包）：对已获准复核决定内的候选提出受治理动作提案——绑定 decisionId/runId/候选/行为/对象/'
+        + '规范化载荷/连接器目标，服务端分配 operationId（提案单次消费；重复业务动作须显式新提案并重新批准）。'
+        + '提案不是执行批准：执行仍过系统批准卡（execute_behavior_action 提 proposalId）。'
+        + '复核决定缺失/未获准/候选越界一律拒绝——Agent 只能对允许的候选提出动作。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求对该候选提出动作时传 true。',
+      parameters: {
+        decisionId: { type: 'string', required: true, description: '复核决定 ID（DEC-…，须 approved）' },
+        runId: { type: 'string', required: true, description: '运行 ID（须与复核决定绑定的运行一致）' },
+        candidateId: { type: 'string', required: true, description: '候选 ID（须在决定获准集合内）' },
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        behaviorId: { type: 'string', required: true, description: 'O2 行为 ID（BHV-…，包内声明）' },
+        objectRef: { type: 'string', required: true, description: '动作锚点对象实例（TYPE:instance，过收权清单）' },
+        payload: { type: 'json', required: true, description: '动作载荷（进意图指纹；执行时须与提案一致）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确要求对该候选提出动作时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            proposalId: { type: 'string', required: true },
+            decisionId: { type: 'string', required: true },
+            operationId: { type: 'string', required: true },
+            runId: { type: 'string', required: true },
+            candidateId: { type: 'string', required: true },
+            behaviorId: { type: 'string', required: true },
+            objectRef: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            proposalId: string
+            decisionId: string
+            operationId: string
+            runId: string
+            candidateId: string
+            behaviorId: string
+            objectRef: string
+          }
+          return textBlock(
+            `动作提案 ${v.proposalId} · 操作 ${v.operationId}（服务端分配，单次消费）\n`
+              + `复核决定 ${v.decisionId} · 运行 ${v.runId} · 候选 ${v.candidateId}\n`
+              + `行为 ${v.behaviorId} · 对象 ${v.objectRef}\n`
+              + 'humanReviewRequired=true（提案 ≠ 执行批准：执行请提 proposalId 并过系统批准卡）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            decisionId: string
+            runId: string
+            candidateId: string
+            name: string
+            version: string
+            behaviorId: string
+            objectRef: string
+            payload: unknown
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '提出动作提案')
+          if (!isRecord(args.payload)) {
+            throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
+          }
+          const intent = { behaviorId: args.behaviorId, objectRef: args.objectRef, payload: args.payload }
+          const pkg = loadToolPackage(ws, args.name, args.version)
+          validateActionIntent(pkg.behaviors, intent, {
+            isGranted: (ref) =>
+              checkGrant(readToolContracts(ws.versionDir(args.name, args.version)), ref) === undefined,
+          })
+          const proposal = actionStoreFor(ws.root).createProposal({
+            decisionId: args.decisionId,
+            runId: args.runId,
+            candidateId: args.candidateId,
+            behaviorId: args.behaviorId,
+            objectRef: args.objectRef,
+            payload: args.payload,
+            intentDigest: actionDigest({ action: 'execute_behavior_action', behaviorId: args.behaviorId, objectRef: args.objectRef, payload: args.payload }),
+            connectorId: currentConnectorIdentity().id,
+            connectorEnv: currentConnectorIdentity().env,
+          })
+          return toolOut({
+            proposalId: proposal.proposalId,
+            decisionId: proposal.decisionId,
+            operationId: proposal.operationId,
+            runId: proposal.runId,
+            candidateId: proposal.candidateId,
+            behaviorId: proposal.behaviorId,
+            objectRef: proposal.objectRef,
+            humanReviewRequired: true,
+          })
         },
         [],
         (args) => redlines(args),

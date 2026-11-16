@@ -1294,7 +1294,12 @@ test('T4-1/T4-2 源断言：动作执行器闭环 + 全工具沙箱收口在场'
   assert.ok(execSrc.includes('actions'), '台账落 actions/ 目录')
   // R1/R6：损坏 fail-closed / 原子占位互斥 / 批准上下文绑定 / 效应不明不写无效应失败
   assert.ok(execSrc.includes('ACTION_LEDGER_CORRUPT'), '台账损坏 fail-closed 在场')
-  assert.ok(execSrc.includes("flag: 'wx'"), '原子占位（跨会话互斥）在场')
+  // M2/D：占位互斥由 SQLite 唯一约束 + 短事务承载（原 JSON wx 原子创建）
+  assert.ok(execSrc.includes('ACTION_EXISTS'), '原子占位（跨会话互斥）在场——占位冲突显式码')
+  const storeSrc = readFileSync(join(REPO, 'backend', 'src', 'action-store.ts'), 'utf8')
+  assert.ok(storeSrc.includes('primary key'), '业务键唯一约束在场（单派发者）')
+  assert.ok(storeSrc.includes('begin immediate'), '占位短事务在场（批准/网络等待不持事务）')
+  assert.ok(storeSrc.includes('ACTION_CONFLICT'), '同键不同载荷显式冲突在场')
   assert.ok(execSrc.includes('approvalContext'), '批准上下文绑定在场')
   assert.ok(execSrc.includes('ACTION_UNKNOWN_EFFECT'), '效应不明走对账、不写无效应失败在场')
   const sandboxSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-sandbox.ts'), 'utf8')

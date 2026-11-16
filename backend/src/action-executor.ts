@@ -31,11 +31,12 @@
  * 业务动作**不随分析自动触发**——分析可重放、动作有真实副作用，自动触发违反「认定在人工」。
  * @module @dsh-onto/backend/action-executor
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ActionContract } from '@dsh-onto/core'
 import { actionDigest, type ApprovalGrant } from './agent-approval.js'
 import { AgentToolError, isRecord } from './agent-policy.js'
+import { actionStoreFor, type ActionProposal, type ReviewDecision } from './action-store.js'
 
 /** 动作意图：行为 ID + 锚点对象 + 载荷（业务动作的最小受治理面）。 */
 export interface ActionIntent {
@@ -110,6 +111,15 @@ export interface ActionRecord {
   approvedAt: string
   executedAt: string
   compensatedAt?: string
+  /** D 包链条：业务复核决定 / 动作提案（decision → proposal → approval → externalRef 可串联）。 */
+  decisionId?: string
+  proposalId?: string
+  /** 业务租户（业务键组成；缺省空串=单租户试点）。 */
+  tenant?: string
+  /** 载荷指纹（显式 operationId 下同键不同载荷 → ACTION_CONFLICT 的判据）。 */
+  intentDigest?: string
+  /** CAS 版本号（SQLite 台账；JSON 回退记录无版本）。 */
+  version?: number
 }
 
 /**
@@ -212,10 +222,12 @@ export function legacyRecordPath(root: string, intent: ActionIntent): string {
 }
 
 /**
- * 读台账（R1 fail-closed）：无记录 → null；损坏/非法 JSON/摘要不符 → ACTION_LEDGER_CORRUPT，
- * **不得**当作「未执行」自动重跑。
+ * 读台账（R1 fail-closed）：SQLite 事务台账优先（M2/D）；未迁移的 JSON 记录只读回退。
+ * 无记录 → null；损坏/非法 JSON/摘要不符 → ACTION_LEDGER_CORRUPT，**不得**当作「未执行」自动重跑。
  */
 export function loadActionRecord(root: string, businessKey: string): ActionRecord | null {
+  const stored = actionStoreFor(root).load(businessKey)
+  if (stored !== null) return stored
   const file = recordPath(root, businessKey)
   if (!existsSync(file)) return null
   let parsed: unknown
@@ -246,27 +258,41 @@ export function loadLegacyActionRecord(root: string, intent: ActionIntent): Reco
   }
 }
 
-/** 原子落盘（R1）：临时文件 + rename 替换；占位创建用 wx（唯一键事务）。 */
-function saveActionRecord(root: string, record: ActionRecord, opts?: { createNew: boolean }): void {
+/**
+ * 台账落盘（M2/D）：主路径 SQLite claim/settle（唯一约束 + CAS 版本号）；
+ * 未迁移的 JSON 记录仍按原文件原子更新（只读保留口径内的延续写，迁移后只留核对）。
+ */
+function saveActionRecord(root: string, record: ActionRecord, opts?: { createNew: boolean }): ActionRecord {
+  const store = actionStoreFor(root)
+  const intentDigest = record.intentDigest ?? digestAction({
+    behaviorId: record.behaviorId,
+    objectRef: record.objectRef,
+    payload: record.payload,
+  })
+  if (opts?.createNew === true) {
+    const res = store.claim({ ...record, intentDigest })
+    if (!res.created) {
+      throw new AgentToolError('ACTION_EXISTS', `业务操作 ${record.businessKey.slice(0, 12)} 占位已存在（并发方抢先）`)
+    }
+    return res.record
+  }
+  const existing = store.load(record.businessKey)
+  if (existing !== null) {
+    return store.settle(record.businessKey, record.version ?? existing.version, { ...record, intentDigest })
+  }
+  // JSON 回退：未迁移旧记录仍写原文件（临时文件 + rename 原子替换）
   mkdirSync(actionsDir(root), { recursive: true })
   const file = recordPath(root, record.businessKey)
   const text = `${JSON.stringify(record, null, 2)}\n`
-  if (opts?.createNew === true) {
-    writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' })
-    return
-  }
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, text, 'utf8')
   renameSync(tmp, file)
+  return record
 }
 
-/** 释放占位（批准被拒时回收；无外部效应，不构成动作历史）。 */
+/** 释放占位（批准被拒时回收；仅 claimed 相位，无外部效应，不构成动作历史）。 */
 function releaseClaim(root: string, businessKey: string): void {
-  try {
-    unlinkSync(recordPath(root, businessKey))
-  } catch {
-    /* 已被并发方接管/清理：忽略 */
-  }
+  actionStoreFor(root).releaseClaim(businessKey)
 }
 
 /** 旧口径动作摘要（R6 旧台账探测沿用；新业务幂等键见 businessKeyOf）。 */
@@ -280,17 +306,30 @@ export function digestAction(intent: ActionIntent): string {
 }
 
 /**
- * 业务幂等键（R6）：业务操作标识（显式 operationId；缺省 = 同载荷即同操作）
- * + 行为/对象/载荷 + 连接器身份与环境——演练与真实环境隔离，不同租户/环境不串台。
+ * 业务幂等键（R6 + M2/D）：
+ * - 显式 operationId：键 = 租户 + 连接器/环境 + operationId（方案 §7 口径），载荷指纹
+ *   （intentDigest）另存——同键不同载荷/批准上下文一律 ACTION_CONFLICT，不悄悄生成新业务操作；
+ * - 缺省（auto）= 同载荷即同操作：键含行为/对象/载荷，重放回读。
+ * 演练与真实环境天然隔离；不同租户不串台。
  */
 export function businessKeyOf(
   intent: ActionIntent,
   identity: ConnectorIdentity,
   operationId?: string,
+  tenant?: string,
 ): string {
+  if (operationId !== undefined) {
+    return actionDigest({
+      action: 'business-op-v2',
+      tenant: tenant ?? '',
+      operationId,
+      connectorId: identity.id,
+      env: identity.env,
+    })
+  }
   return actionDigest({
     action: 'business-op',
-    operationId: operationId ?? 'auto',
+    operationId: 'auto',
     behaviorId: intent.behaviorId,
     objectRef: intent.objectRef,
     payload: intent.payload,
@@ -524,6 +563,10 @@ export interface ExecuteActionInput {
   behavior: { id: string; anchor?: string; name?: string; relations?: string[]; states?: string[] }
   /** 显式业务操作标识（R6）：重复同载荷业务动作 = 新 operationId（新批准、新台账）。 */
   operationId?: string
+  /** D 包：动作提案（服务端保存；执行器重新加载验证 + 单次消费）。 */
+  proposalId?: string
+  /** 业务租户（业务键组成；缺省空串=单租户试点）。 */
+  tenant?: string
   /**
    * 批准回调（占位成功后调用——同键并发第二路不重复弹卡）。
    * 入参是批准上下文摘要（绑定包/契约/对象/载荷/连接器目标）。
@@ -608,33 +651,30 @@ async function recoverInFlight(root: string, record: ActionRecord, conn: ActionC
   }
   if (outcome !== undefined) {
     if (outcome.state === 'succeeded') {
-      const settled: ActionRecord = {
+      const settled = saveActionRecord(root, {
         ...record,
         status: 'succeeded',
         externalRef: outcome.externalRef,
         executedAt: record.executedAt || new Date().toISOString(),
-      }
-      saveActionRecord(root, settled)
+      })
       return { record: settled, replayed: true, note: `${replayNote(settled)}——崩溃恢复：按外部回执 ${outcome.externalRef} 恢复，不重跑` }
     }
     if (outcome?.state === 'not-executed') {
-      const settled: ActionRecord = {
+      const settled = saveActionRecord(root, {
         ...record,
         status: 'failed',
         error: '外部确认未执行（对账通过）：无业务效应',
         executedAt: record.executedAt || new Date().toISOString(),
-      }
-      saveActionRecord(root, settled)
+      })
       return { record: settled, replayed: true, note: `${replayNote(settled)}——外部确认无效应，按失败留痕（不自动重跑）` }
     }
   }
   // 无确定回执 → 效应待核实（对账）：禁止自动二次执行
-  const unknown: ActionRecord = {
+  const unknown = saveActionRecord(root, {
     ...record,
     status: 'unknown',
     error: record.error ?? '执行中断且无确定外部回执——效应待核实（人工对账后处置）',
-  }
-  saveActionRecord(root, unknown)
+  })
   return { record: unknown, replayed: true, note: `${replayNote(unknown)}——效应待核实，不自动重跑` }
 }
 
@@ -647,10 +687,50 @@ async function recoverInFlight(root: string, record: ActionRecord, conn: ActionC
 export async function executeBehaviorAction(
   input: ExecuteActionInput,
 ): Promise<ExecuteActionResult> {
-  const { root, intent, pkg, behavior, operationId, requestGrant } = input
+  const { root, intent, pkg, behavior, requestGrant } = input
   const conn = pinConnector() // 执行期间固定连接器实例（执行/补偿不换注册）
   const identity = currentConnectorIdentity()
-  const businessKey = businessKeyOf(intent, identity, operationId)
+
+  // D 包：提案重新加载验证（错 run/候选/载荷不可套用；服务端 operationId 固定）
+  let proposal: ActionProposal | null = null
+  let operationId = input.operationId
+  if (input.proposalId !== undefined) {
+    const store = actionStoreFor(root)
+    proposal = store.getProposal(input.proposalId)
+    if (proposal === null) {
+      throw new AgentToolError('PROPOSAL_NOT_FOUND', `动作提案 ${input.proposalId} 不存在——执行须引用服务端保存的提案`)
+    }
+    if (proposal.status === 'canceled') {
+      throw new AgentToolError('PROPOSAL_NOT_PENDING', `动作提案 ${proposal.proposalId} 已取消——不得执行`)
+    }
+    const intentDigest = digestAction({ behaviorId: intent.behaviorId, objectRef: intent.objectRef, payload: intent.payload })
+    if (
+      proposal.behaviorId !== intent.behaviorId
+      || proposal.objectRef !== intent.objectRef
+      || proposal.intentDigest !== intentDigest
+    ) {
+      throw new AgentToolError(
+        'PROPOSAL_INTENT_MISMATCH',
+        `执行意图与提案 ${proposal.proposalId} 不符（行为/对象/载荷指纹）——错提案不可套用，须新提案并重新批准`,
+      )
+    }
+    const dec: ReviewDecision | null = store.getDecision(proposal.decisionId)
+    if (dec === null || dec.decision !== 'approved' || !dec.candidateIds.includes(proposal.candidateId)) {
+      throw new AgentToolError(
+        'REVIEW_NOT_APPROVED',
+        `提案 ${proposal.proposalId} 的复核决定不可用（缺失/未获准/候选越界）——动作不得脱离获准复核`,
+      )
+    }
+    if (operationId !== undefined && operationId !== proposal.operationId) {
+      throw new AgentToolError(
+        'PROPOSAL_OPERATION_MISMATCH',
+        `入参 operationId 与提案 ${proposal.proposalId} 的服务端操作标识不符——操作标识以提案为准`,
+      )
+    }
+    operationId = proposal.operationId
+  }
+
+  const businessKey = businessKeyOf(intent, identity, operationId, input.tenant)
   const contextDigest = approvalContextDigest(intent, identity, pkg, behavior)
   const waitMs = input.inFlightWaitMs ?? 2000
 
@@ -688,8 +768,9 @@ export async function executeBehaviorAction(
     )
   }
 
-  // 原子占位（跨会话/跨进程互斥）：wx 创建 = 唯一键事务
+  // 原子占位（跨会话/跨进程互斥）：SQLite 唯一约束 = 单派发者
   const actionId = `act-${businessKey.slice(0, 12)}`
+  const intentDigest = digestAction({ behaviorId: intent.behaviorId, objectRef: intent.objectRef, payload: intent.payload })
   const base = {
     actionId,
     businessKey,
@@ -699,6 +780,9 @@ export async function executeBehaviorAction(
     behaviorId: intent.behaviorId,
     objectRef: intent.objectRef,
     payload: intent.payload,
+    intentDigest,
+    tenant: input.tenant ?? '',
+    ...(proposal !== null ? { decisionId: proposal.decisionId, proposalId: proposal.proposalId } : {}),
   }
   const claim: ActionRecord = {
     ...base,
@@ -708,11 +792,25 @@ export async function executeBehaviorAction(
     approvedAt: '',
     executedAt: '',
   }
+  let current: ActionRecord
   try {
-    saveActionRecord(root, claim, { createNew: true })
-  } catch {
-    // 占位失败 = 已有同键记录（并发方抢先）→ 等待回读，不重复批准/执行（M0-A：回读同样先校验上下文）
-    return handleInFlight(root, businessKey, conn, waitMs, contextDigest)
+    current = saveActionRecord(root, claim, { createNew: true })
+  } catch (e) {
+    // 仅「占位已被并发方抢到」进入在途回读；同键不同载荷（ACTION_CONFLICT）与台账损坏等一律显式抛出
+    if (e instanceof AgentToolError && e.code === 'ACTION_EXISTS') {
+      return handleInFlight(root, businessKey, conn, waitMs, contextDigest)
+    }
+    throw e
+  }
+
+  // D 包：提案单次消费（占位成功即业务操作已开工；批准被拒也须新提案重新批准）
+  if (proposal !== null) {
+    try {
+      actionStoreFor(root).consumeProposal(proposal.proposalId)
+    } catch (e) {
+      releaseClaim(root, businessKey)
+      throw e
+    }
   }
 
   // 批准卡（占位后）：同键并发第二路不会走到这里
@@ -723,27 +821,25 @@ export async function executeBehaviorAction(
     releaseClaim(root, businessKey) // 批准被拒：回收占位（无外部效应）
     throw e
   }
-  const approved: ActionRecord = {
-    ...claim,
+  current = saveActionRecord(root, {
+    ...current,
     approvalDigest: grant.approvalDigest,
     approvedAt: grant.approvedAt,
-  }
-  saveActionRecord(root, approved)
+  })
 
   // 派发（先持久 dispatched 相位，再调连接器——崩溃窗口可对账）
-  const dispatched: ActionRecord = { ...approved, phase: 'dispatched', executedAt: new Date().toISOString() }
-  saveActionRecord(root, dispatched)
+  current = saveActionRecord(root, { ...current, phase: 'dispatched', executedAt: new Date().toISOString() })
+  const dispatched = current
 
   let externalRef: string | undefined
   try {
     const out = await conn.execute(intent, actionId, businessKey)
     externalRef = out.externalRef
-    const record: ActionRecord = {
+    const record = saveActionRecord(root, {
       ...dispatched,
       status: 'succeeded',
       externalRef,
-    }
-    saveActionRecord(root, record)
+    })
     return { record, replayed: false }
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
@@ -759,35 +855,32 @@ export async function executeBehaviorAction(
         status = 'compensation-failed'
         compensationError = compErr instanceof Error ? compErr.message : String(compErr)
       }
-      const record: ActionRecord = {
+      saveActionRecord(root, {
         ...dispatched,
         status,
         externalRef: e.externalRef,
         error,
         ...(compensatedAt !== undefined ? { compensatedAt } : {}),
         ...(compensationError !== undefined ? { compensationError } : {}),
-      }
-      saveActionRecord(root, record)
+      })
       throw new AgentToolError(
         'ACTION_FAILED',
         `动作执行失败（${status}，台账 ${actionId}）：${error}`,
       )
     }
     if (e instanceof ActionNoEffectError) {
-      const record: ActionRecord = { ...dispatched, status: 'failed', error }
-      saveActionRecord(root, record)
+      saveActionRecord(root, { ...dispatched, status: 'failed', error })
       throw new AgentToolError(
         'ACTION_FAILED',
         `动作执行失败（failed，台账 ${actionId}）：${error}`,
       )
     }
     // 超时/中断等效应不明：不写「无效应失败」、不补偿（无回执）——对账待核实
-    const record: ActionRecord = {
+    saveActionRecord(root, {
       ...dispatched,
       status: 'unknown',
       error: `${error}（效应不明——待人工对账，不自动重试）`,
-    }
-    saveActionRecord(root, record)
+    })
     throw new AgentToolError(
       'ACTION_UNKNOWN_EFFECT',
       `动作执行中断（效应待核实，台账 ${actionId}）：${error}——超时/中断不等于无副作用，须外部对账后再处置`,

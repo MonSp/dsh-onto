@@ -52,6 +52,9 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'project_features',
   // 业务动作执行器（可信执行 T4.1）：objectRef 过对象收权（deny-by-default）
   'execute_behavior_action',
+  // D 包治理链：复核决定 → 动作提案（提案绑定 decisionId；执行仍过批准卡）
+  'record_review_decision',
+  'create_action_proposal',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */
