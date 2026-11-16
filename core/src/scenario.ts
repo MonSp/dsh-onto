@@ -30,6 +30,9 @@ import { loadPackage } from './store.js'
 import { expandEntity, MAX_EXPAND_HOPS } from './subgraph.js'
 import type {
   CandidateResult,
+  ContractStatus,
+  DataBasisInput,
+  DataStatus,
   FeatureSourceRecord,
   O3ScenarioCard,
   OntologyPackage,
@@ -61,6 +64,12 @@ export interface ScenarioRunOptions {
    * - `formal`（正式可信分析）：无依据特征不参与计算（跳过，由规则引擎按缺失特征待核实）。
    */
   analysisMode?: 'formal' | 'explore'
+  /**
+   * 取数上下文（M1-B）：服务端连接器取数时随数据集传入（含快照核验结论）；
+   * 缺省 = 来源未声明。调用方自称 provenance=connector 而无 basis → 不按可信来源算
+   * （伪造来源拒绝，不得 verified）。
+   */
+  dataBasis?: DataBasisInput
 }
 
 /**
@@ -516,6 +525,48 @@ export function runScenario(
     usedFeatures: [...usedFeatureKeys],
   })
   result.audit = { checks: audit.checks, forbiddenPhraseHits: audit.forbiddenPhraseHits, passed: audit.passed }
+
+  /* ── M1-B 三状态：contractStatus / dataStatus（不与 audit.passed 混用） ── */
+  const contractStatus: ContractStatus = audit.passed ? 'conformant' : 'non-conformant'
+  // 可信来源 = 服务端取数上下文（dataBasis 仅由服务端连接器产线构造）；
+  // inline/file 显式标签的通道不得被 basis 升级；自称 provenance=connector 无 basis → 不算可信（伪造来源拒绝）
+  const sourceVerified =
+    opts.dataBasis !== undefined && provenance !== 'inline' && provenance !== 'file'
+  const complete = opts.dataBasis?.complete !== false
+  const fresh = opts.dataBasis?.fresh !== false
+  // 必需特征依据全过：本轮实际参与评分/排除的特征均非 unverified-caller
+  const unverifiedUsed = featureSources.filter(
+    (rec) => rec.source === 'unverified-caller' && usedFeatureKeys.has(rec.key),
+  )
+  const featuresOk = unverifiedUsed.length === 0
+  const formal = opts.analysisMode === 'formal'
+  let dataStatus: DataStatus
+  if (formal) {
+    // 正式模式：缺源/超时效/取数不完整/必需特征缺依据 → 不可完成/待补数（不得按低风险处置）
+    dataStatus = sourceVerified && complete && fresh && featuresOk ? 'verified' : 'insufficient'
+  } else if (!sourceVerified) {
+    dataStatus = 'unverified'
+  } else if (complete && fresh && featuresOk) {
+    dataStatus = 'verified'
+  } else {
+    dataStatus = 'conditional'
+  }
+  result.contractStatus = contractStatus
+  result.dataStatus = dataStatus
+  // formal 依据不足：结果态为待补数——逐候选显式上墙，分数不得被解读为低风险结论
+  if (dataStatus === 'insufficient') {
+    const gaps: string[] = []
+    if (!sourceVerified) gaps.push('缺可信来源')
+    if (!complete) gaps.push('取数不完整')
+    if (!fresh) gaps.push('数据超时效')
+    if (!featuresOk) gaps.push(`必需特征缺依据（${unverifiedUsed.map((r) => r.key).join('、')}）`)
+    for (const c of result.candidates) {
+      c.pendingChecks.push({
+        note: `正式分析依据不足（${gaps.join('；')}）——结果不可处置，待补数后重跑`,
+      })
+      c.pendingVerification = true
+    }
+  }
 
   /* 不闭合 → 降级为「待核实点」（§9.3；非阻断提示项不降级） */
   if (!audit.passed) {

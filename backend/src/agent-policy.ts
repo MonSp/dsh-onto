@@ -361,8 +361,12 @@ export function retreatRenderText(text: string, phrases: readonly string[]): str
   return requireMaskToken(list)
 }
 
-/** 面向模型的合规渲染：候选摘要 + 强制合规页脚（render 闸，tool-face-policy P2.2）。 */
-export function renderRunText(result: ScenarioRunResult, phrases?: readonly string[]): string {
+/** 面向模型的合规渲染：候选摘要 + 强制合规页脚（render 闸，tool-face-policy P2.2 + M1-E 结构化报告）。 */
+export function renderRunText(
+  result: ScenarioRunResult,
+  phrases?: readonly string[],
+  meta?: { package?: { name: string; version: string }; analysisMode?: string },
+): string {
   const list = phrases !== undefined
     ? [...new Set(phrases.filter((p) => p !== ''))]
     : (recallPhrases(result.runId) ?? collectPhrases(result))
@@ -376,7 +380,14 @@ export function renderRunText(result: ScenarioRunResult, phrases?: readonly stri
     return s
   }
   const lines: string[] = []
+  // M1-E 结构化报告头（方案 §8 固定展示）：本体版本、runId、数据来源与时效、分析模式
+  if (meta?.package !== undefined) {
+    lines.push(`本体 ${idFace('package', `${meta.package.name}@${meta.package.version}`)}`)
+  }
   lines.push(`场景 ${idFace('scenarioId', result.scenarioId)} · 运行 ${idFace('runId', result.runId)}`)
+  if (meta?.analysisMode !== undefined) {
+    lines.push(`分析模式: ${meta.analysisMode === 'formal' ? 'formal（正式可信计算策略）' : 'explore（探索分析）'}`)
+  }
   for (const c of result.candidates) {
     lines.push(`- ${idFace('candidateId', c.candidateId)}（${idFace('objectRef', c.objectRef)}）riskScore=${c.riskScore} riskLevel=${c.riskLevel ?? '—'}`)
     lines.push(`  命中规则: ${c.hitRuleIds.map((id) => idFace('hitRuleIds', id)).join(', ') || '—'}`)
@@ -396,6 +407,21 @@ export function renderRunText(result: ScenarioRunResult, phrases?: readonly stri
   }
   lines.push('—— 合规 ——')
   lines.push('humanReviewRequired=true（认定出口只在人工复核）')
+  // M1-E 三状态（方案 §8 固定展示；不与 audit.passed 混用）
+  if (result.contractStatus !== undefined) {
+    lines.push(`契约状态: ${result.contractStatus}（contractStatus——规则与输出结构是否符合契约）`)
+  }
+  if (result.dataStatus !== undefined) {
+    const label =
+      result.dataStatus === 'verified' ? 'verified（来源/时效/完整性/特征依据全过）'
+        : result.dataStatus === 'conditional' ? 'conditional（条件性分数——部分依据缺失）'
+          : result.dataStatus === 'insufficient' ? 'insufficient（依据不足——不可处置，待补数）'
+            : 'unverified（来源未核实——结论仅在数据集内自洽）'
+    lines.push(`数据状态: ${label}`)
+  }
+  lines.push('复核状态: pending（reviewStatus——待人工复核；恒真声明不替代真实复核）')
+  // 四态分离（方案 §8）：低分、审计通过、人审通过、动作成功四者不混用
+  lines.push('四态分离: 低分≠低风险结论 · 审计通过≠可信数据 · 人审恒真≠复核通过 · 本报告不含动作执行结论')
   if (result.reviewBarrier !== undefined) {
     lines.push(
       `人审屏障: ${result.reviewBarrier.stepId} 之后 ${result.reviewBarrier.skipped.length} 步未自动执行（待人工放行恢复）`,

@@ -41,6 +41,8 @@ import type { GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/
 export const ANSWER_MASK_TOKEN = '【禁语已脱敏】'
 /** 无据数字记号。 */
 export const UNVERIFIED_NUMBER_TOKEN = '【未核验数字】'
+/** 无规则依据的命中引用记号（M1-E 规则绑定）。 */
+export const UNVERIFIED_RULE_TOKEN = '【未核验规则】'
 /** 无运行支撑页脚（T3.2 降级）。 */
 export const UNGROUNDED_FOOTER =
   '\n\n—— 回答核验 ——\n未经场景工具运行核验：分数/结论类数字已按输出策略降级；'
@@ -58,6 +60,8 @@ export interface RunFactEntry {
   thresholds: number[]
   /** 证据分（该轮全部 `(score=n)` / 证据分声明）。 */
   evidenceScores: number[]
+  /** 该轮命中规则 id 集合（M1-E：规则引用绑定——无规则依据的命中声明要标未核验）。 */
+  hitRuleIds: Set<string>
 }
 
 /** 权威事实：按 run / 场景 / candidateId / 字段建模（R2）。 */
@@ -96,11 +100,19 @@ function parseRunText(text: string): RunFactEntry {
     scores: new Map(),
     thresholds: [],
     evidenceScores: [],
+    hitRuleIds: new Set(),
   }
   const runM = /run-[A-Za-z0-9]{4,}/.exec(text)
   if (runM !== null) entry.runId = runM[0]
   const scnM = /SCN-[A-Za-z0-9][A-Za-z0-9-]*/.exec(text)
   if (scnM !== null) entry.scenarioId = scnM[0]
+  // 命中规则 id（M1-E 规则引用绑定）：只认「命中规则」行内的 id（排除/证据行不算命中）
+  for (const line of text.split('\n')) {
+    if (!/命中规则/.test(line)) continue
+    const ruleRe = /RULE-[A-Z0-9][A-Z0-9-]*/g
+    let ruleM: RegExpExecArray | null
+    while ((ruleM = ruleRe.exec(line)) !== null) entry.hitRuleIds.add(ruleM[0])
+  }
   const scoreRe = /(CAND-[\w.-]+)[\s\S]{0,40}?riskScore[=:：]([0-9.]+)/g
   let match: RegExpExecArray | null
   while ((match = scoreRe.exec(text)) !== null) {
@@ -213,14 +225,47 @@ const FIELD_LABEL: Record<OpenClaim['kind'], string> = {
   evidence: '证据分',
 }
 
+/**
+ * 规则引用绑定（M1-E）：正向命中声明（`命中 RULE-X` / `RULE-X 命中`）里的
+ * RULE-id 必须落在本轮 hitRuleIds（任一运行）内；无规则依据 → 标【未核验规则】并留说明。
+ * 负向陈述（未命中/排除/不涉及）不标——「RULE-X 未命中」是可为空的真负陈述。
+ */
+function markUnverifiedRuleRefs(out: { text: string; notes: string[] }, facts: AnswerFacts): void {
+  const known = new Set<string>()
+  for (const r of facts.runs) for (const id of r.hitRuleIds ?? []) known.add(id)
+  const idRe = /RULE-[A-Z0-9][A-Z0-9-]*/g
+  const spots: Array<{ at: number; len: number; id: string }> = []
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = idRe.exec(out.text)) !== null) {
+    const id = m[0]
+    if (known.has(id) || seen.has(id)) continue
+    // 窗口检测：动词（命中/触发）在 id 前后 16 字符内 = 正向命中声明
+    const winStart = Math.max(0, m.index - 16)
+    const winEnd = Math.min(out.text.length, m.index + m[0].length + 16)
+    const window = out.text.slice(winStart, winEnd)
+    if (!/命中|触发|hit/i.test(window)) continue // 非命中语境的 RULE 提及（说明/引用）不标
+    if (/未命中|未触发|没(有)?命中|排除|不涉及/.test(window)) continue // 负向陈述不标
+    seen.add(id)
+    spots.push({ at: m.index, len: m[0].length, id })
+  }
+  spots.sort((a, b) => b.at - a.at)
+  for (const s of spots) {
+    out.text = out.text.slice(0, s.at + s.len) + UNVERIFIED_RULE_TOKEN + out.text.slice(s.at + s.len)
+    out.notes.push(`规则引用 ${s.id} 不在运行命中规则内——已标记未核验规则`)
+  }
+}
+
 interface Claim {
   kind: OpenClaim['kind']
   candId: string | null
   /** 数字在文本中的起点。 */
   at: number
-  /** 数字词法单元长度。 */
+  /** 数字词法单元长度（百分比形含 % 后缀）。 */
   len: number
   value: number
+  /** 百分比形声明（显示/核正保持 % 形；value 已归一到分数域）。 */
+  percent?: boolean
 }
 
 /** 捕获组在 match 内的起止（/d 标志 indices）。 */
@@ -280,6 +325,24 @@ function collectClaims(text: string): Claim[] {
   // 候选风险分 / 裸分数声明（关键词后数字）
   const scoreClaim = /(riskScore|风险评分|风险得分|风险分|得分|score)[^\n0-9A-Za-z%]{0,8}([0-9]+(?:\.[0-9]+)?)(?!\s*%)/gid
   while ((m = scoreClaim.exec(text)) !== null) add(m, 'score', 2)
+
+  // 百分比形声明（M1-E）：`风险分 95%` / `score=82%` 等——% 后缀不得成为核验规避面，
+  // 归一（n/100）后按同一事实池核验；核正输出保持 % 形。
+  const percentScore = /(riskScore|风险评分|风险得分|风险分|得分|score)[^\n0-9A-Za-z%]{0,8}([0-9]+(?:\.[0-9]+)?)\s*%/gid
+  while ((m = percentScore.exec(text)) !== null) {
+    const span = groupSpan(m, 2)
+    const raw = Number(text.slice(span.at, span.at + span.len))
+    const pctEnd = text.indexOf('%', span.at + span.len)
+    if (!Number.isFinite(raw) || !isScoreLike(raw / 100) || pctEnd < 0 || pctEnd - (span.at + span.len) > 8) continue
+    claims.push({
+      kind: 'score',
+      candId: bindCandidate(text, m.index),
+      at: span.at,
+      len: pctEnd + 1 - span.at,
+      value: raw / 100,
+      percent: true,
+    })
+  }
 
   // Markdown 表格：表头语义列逐字段核验
   collectTableClaims(text, add)
@@ -460,7 +523,8 @@ export function processAnswerText(
       continue // 一致（含两位小数舍入）→ 逐字保留
     }
     if (res.kind === 'unique') {
-      const next = String(res.value)
+      // 百分比形核正保持 % 显示（value 为分数域真值）；其余按原数值形
+      const next = claim.percent === true ? `${round2(res.value * 100)}%` : String(res.value)
       out.text = out.text.slice(0, claim.at) + next + out.text.slice(claim.at + claim.len)
       out.correctedNumbers++
       out.notes.push(`${where} 声明 ${raw}→${next}${res.runId !== null ? `（${res.runId}）` : ''}——按运行事实核正`)
@@ -475,6 +539,10 @@ export function processAnswerText(
         : `${where} 声明无法绑定权威事实——已标记待核验`,
     )
   }
+
+  // M1-E 规则引用绑定：正向命中声明（命中/触发 + RULE-id）须落在该轮 hitRuleIds 内，
+  // 无规则依据的命中结论显式标【未核验规则】（未命中/排除类负向陈述不在此列）。
+  markUnverifiedRuleRefs(out, ctx.facts)
 
   // 无运行支撑（T3.2）：会话无场景运行证据时，分数/结论类引用驱动整体降级
   if (!ctx.facts.grounded) {
@@ -509,6 +577,11 @@ export function processAnswerText(
 export function createAnswerGuard(deps: {
   phrases: () => readonly string[]
   loadRunFacts?: (runId: string) => RunFactEntry | undefined
+  /**
+   * 核验说明持久化（M1-E）：finish 时把本轮全部核验说明交服务端落盘
+   * （不只保留在局部变量；遮蔽类不回显被遮蔽数值原文）。
+   */
+  persistNotes?: (notes: readonly string[]) => void
 }): (options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) => AsyncIterable<StreamChunk> {
   return (options, next): AsyncIterable<StreamChunk> => {
     // 会话最终回答才过闸：一次性/辅助调用（compaction、session-title、内部分析）跳过。
@@ -526,6 +599,7 @@ export function createAnswerGuard(deps: {
     return (async function* guarded() {
       // 整块缓冲：delta 累积不放行；block-end 全量处理后一次放出（跨词元模式增量切分必漏检）。
       const buffers = new Map<number, string>()
+      const allNotes: string[] = []
       let footerDue = false
       for await (const chunk of next()) {
         switch (chunk.type) {
@@ -541,6 +615,7 @@ export function createAnswerGuard(deps: {
               const source = chunk.block.text !== '' ? chunk.block.text : streamed
               const processed = processAnswerText(source, ctx)
               ctx.openClaim = processed.nextOpenClaim
+              allNotes.push(...processed.notes)
               if (processed.claimSeen) footerDue = footerDue || !facts.grounded
               if (processed.text !== '') {
                 yield { type: 'text-delta', index: chunk.index, text: processed.text }
@@ -559,6 +634,14 @@ export function createAnswerGuard(deps: {
               yield { type: 'block-start', index, blockType: 'text' }
               yield { type: 'text-delta', index, text: UNGROUNDED_FOOTER }
               yield { type: 'block-end', index, block: { type: 'text', text: UNGROUNDED_FOOTER } }
+            }
+            // M1-E：核验说明持久化（落盘失败不阻断回答——留痕尽力而为，核验已在文本生效）
+            if (allNotes.length > 0 && deps.persistNotes !== undefined) {
+              try {
+                deps.persistNotes(allNotes)
+              } catch {
+                /* 持久化失败不影响回答出口（核验说明已在 ProcessedAnswer 生效） */
+              }
             }
             yield chunk
             break

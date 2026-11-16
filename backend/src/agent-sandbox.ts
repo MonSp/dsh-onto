@@ -14,8 +14,11 @@
  *   一律拒绝；**未登记能力（动态工具 / MCP 工具 / 命名空间别名 / 编程执行入口）fail-closed**——
  *   没有可信元数据的入口不得默认放行（能力许可集口径，黑名单只是补充识别）。
  * - 拒绝语指明走本体工具/工作台人审面。
- * - **身份可靠性（R3）**：专家沙箱身份是运行属性——preset 解析成功即缓存；preset 服务异常
- *   不得把已知受控专家悄悄退化为标准会话（缓存命中照常拒绝）。
+ * - **身份可靠性（R3 + M0-A）**：专家沙箱身份是运行属性——preset 解析成功即缓存；
+ *   preset 服务异常/临时缺席不得把已知受控专家悄悄退化为标准会话（缓存命中照常拒绝）；
+ *   从未解析成功且服务不可用的会话身份**不可确认**（{@link UNRESOLVED_PRESET}）——
+ *   按 fail-closed 收口危险通用工具（未知身份不漏拦），不冒充标准会话放行；
+ *   身份只经宿主 preset 服务判定，不靠模型声明。
  * - 新增危险能力词须补进 DANGEROUS 表（attack-surface 源断言锁清单）。
  * @module @dsh-onto/backend/agent-sandbox
  */
@@ -112,11 +115,36 @@ export function classifyToolCapability(toolName: string): ToolCapability {
 }
 
 /**
- * 沙箱判定纯函数：专家会话 + 非本体工具 → 按能力许可集处置；
- * 只读/交互放行，写入/执行/定时拒绝，**未登记能力 fail-closed**；
- * 其余（非受控会话）一律 undefined。
+ * 身份不可确认哨兵（M0-A）：preset 服务缺席/异常且该会话从未解析成功——
+ * 不是「已确认的标准会话」，不得按无 preset 放行危险通用工具（未知身份不漏拦）。
  */
-export function toolSandboxDecision(toolName: string, presetId: string | null | undefined): string | undefined {
+export const UNRESOLVED_PRESET: unique symbol = Symbol('dsh-onto.unresolved-preset')
+
+/** preset 解析结果：preset ID / 已确认无 preset（null）/ 身份不可确认（哨兵）。 */
+export type PresetIdentity = string | null | typeof UNRESOLVED_PRESET
+
+/**
+ * 沙箱判定纯函数：
+ * - **onto-\* 受控专家**：危险通用工具拒，本体/只读/交互放行（对象收权另闸）；
+ * - **身份不可确认**（{@link UNRESOLVED_PRESET}）：只放行只读/交互——
+ *   拒绝开展受控业务（本体工具面）与危险通用能力（未知身份不漏拦；
+ *   标准会话边界不被偷偷扩大——未确认身份不冒充标准会话拿全量工具面）；
+ * - 其余（已确认的标准/无 preset 会话）一律 undefined（既有边界不变）。
+ */
+export function toolSandboxDecision(toolName: string, presetId: PresetIdentity | undefined): string | undefined {
+  if (presetId === UNRESOLVED_PRESET) {
+    const capability = classifyToolCapability(toolName)
+    if (capability === 'readonly' || capability === 'interactive') return undefined
+    const what = capability === 'onto'
+      ? `受控业务工具 ${toolName}`
+      : capability === 'write'
+        ? `通用写入/执行/定时类工具 ${toolName}`
+        : `未登记能力 ${toolName}（动态工具/MCP/命名空间别名/编程执行入口）`
+    return (
+      `TOOL_SANDBOX_DENIED: 会话身份暂不可确认（preset 服务缺席/异常且无缓存身份），${what} fail-closed 拒绝`
+      + '——身份只经宿主 preset 服务确认，不靠模型声明；服务恢复后按已确认身份重判'
+    )
+  }
   if (!isOntoPreset(presetId)) return undefined
   const capability = classifyToolCapability(toolName)
   if (capability === 'onto' || capability === 'readonly' || capability === 'interactive') return undefined
@@ -131,27 +159,35 @@ export function toolSandboxDecision(toolName: string, presetId: string | null | 
 }
 
 /**
- * 专家沙箱身份解析（R3 身份可靠性）：preset 解析成功即按会话缓存；
- * preset 服务异常时回退缓存——已知受控身份不丢失，不把受控专家退化为标准会话。
- * 服务缺席（可晚注册）与从未解析成功的会话保持「无 preset」口径（标准会话不误伤）。
+ * 专家沙箱身份解析（R3 身份可靠性 + M0-A）：
+ * - **receiver 保留**：宿主 presetForSession 是依赖 this 的原型方法——必须经服务对象调用
+ *   （裸取方法后调用丢 receiver → 抛错被吞 → 受控专家误判无 preset）；
+ * - 解析成功即按会话缓存；preset 服务异常**或临时缺席**时回退缓存——
+ *   已知受控身份不丢失，不把受控专家退化为标准会话；
+ * - 从未解析成功且服务不可用（缺席/异常）→ {@link UNRESOLVED_PRESET}（身份不可确认，
+ *   fail-closed 收口危险工具；不缓存哨兵，容许晚注册后正常解析）。
  */
 export function createPresetResolver(
-  getService: () => ((session: unknown) => string | null) | undefined,
-): (agent: unknown) => string | null {
+  getService: () => { presetForSession?: (session: unknown) => string | null } | undefined,
+): (agent: unknown) => PresetIdentity {
   const known = new WeakMap<object, string | null>()
-  return (agent: unknown): string | null => {
+  return (agent: unknown): PresetIdentity => {
     const session = (agent as { session?: unknown } | null | undefined)?.session
     const key = session !== null && typeof session === 'object' ? session : null
     if (session === undefined || session === null) return null
+    const cachedOrUnresolved = (): PresetIdentity =>
+      key !== null && known.has(key) ? (known.get(key) as string | null) : UNRESOLVED_PRESET
     try {
-      const presetForSession = getService()
-      if (presetForSession === undefined) return null // 服务缺席不缓存（容许晚注册）
-      const presetId = presetForSession(session)
+      const service = getService()
+      // 服务缺席（可晚注册）：已知身份不退化（缓存命中照常收口）；未确认身份不可冒充标准会话
+      if (service === undefined || service.presetForSession === undefined) return cachedOrUnresolved()
+      // 经服务对象调用保留 receiver（宿主原型方法依赖 this）
+      const presetId = service.presetForSession(session)
       if (key !== null) known.set(key, presetId)
       return presetId
     } catch {
-      // preset 服务异常：已知身份不丢失（缓存命中照常收口）；未知会话按无 preset 处理
-      return key !== null ? (known.get(key) ?? null) : null
+      // preset 服务异常：已知身份不丢失（缓存命中照常收口）；未确认身份 fail-closed
+      return cachedOrUnresolved()
     }
   }
 }

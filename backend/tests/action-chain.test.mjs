@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +20,7 @@ import {
   createPresetResolver,
   isDangerousGeneralTool,
   toolSandboxDecision,
+  UNRESOLVED_PRESET,
 } from '../dist/agent-sandbox.js'
 import {
   grantGuardDecision,
@@ -91,11 +92,12 @@ function chainGuard(chain, { name, args, session }) {
 const SESSION = { id: 's-chain' }
 
 test('R3-1 顶层 onto 专家：定时创建/更新/删除均拒；只读查询与本体工具正常', () => {
-  const chain = setupChain({
-    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
-  })
-  try {
-    for (const preset of ['onto-aml', 'onto-tax', 'onto-med']) {
+  // 每个顶层专家 preset 各自实测（M0-A4：onto-aml / onto-tax / onto-med 实际注册链）
+  for (const preset of ['onto-aml', 'onto-tax', 'onto-med']) {
+    const chain = setupChain({
+      presetForSession: (session) => (session === SESSION ? preset : null),
+    })
+    try {
       for (const name of ['schedule_create', 'schedule_update', 'schedule_delete']) {
         const denial = chainGuard(chain, { name, args: { name: 'x' }, session: SESSION })
         assert.ok(
@@ -103,12 +105,12 @@ test('R3-1 顶层 onto 专家：定时创建/更新/删除均拒；只读查询�
           `${preset} 会话 ${name} 应拒: ${String(denial)}`,
         )
       }
+      for (const name of ['read', 'glob', 'grep', 'ask_user_question', 'run_scenario', 'list_packages']) {
+        assert.equal(chainGuard(chain, { name, args: {}, session: SESSION }), undefined, `${preset} ${name} 应放行`)
+      }
+    } finally {
+      chain.dispose()
     }
-    for (const name of ['read', 'glob', 'grep', 'ask_user_question', 'run_scenario', 'list_packages']) {
-      assert.equal(chainGuard(chain, { name, args: {}, session: SESSION }), undefined, `${name} 应放行`)
-    }
-  } finally {
-    chain.dispose()
   }
 })
 
@@ -195,17 +197,77 @@ test('R3-5 preset 读取异常：已知受控身份不丢失（不退化为标�
   } finally {
     chain.dispose()
   }
-  // 纯函数面：服务异常回退缓存；未知会话保持无 preset（标准会话不误伤）
+  // 纯函数面：服务异常回退缓存；未确认身份 fail-closed（未知身份不漏拦，
+  // 不把「无 preset 标准会话」边界偷偷扩大给身份不可确认的会话）
   const session = { id: 's1' }
   let boom = false
   const resolve = createPresetResolver(() => {
     if (boom) throw new Error('boom')
-    return (s) => (s === session ? 'onto-aml' : null)
+    return { presetForSession: (s) => (s === session ? 'onto-aml' : null) }
   })
   assert.equal(resolve({ session }), 'onto-aml')
   boom = true
   assert.equal(resolve({ session }), 'onto-aml', '缓存命中照常收口')
-  assert.equal(resolve({ session: { id: 's2' } }), null, '未知会话不误伤')
+  assert.equal(resolve({ session: { id: 's2' } }), UNRESOLVED_PRESET, '身份不可确认 → fail-closed 哨兵（不误当标准会话）')
+  // 已确认标准/无 preset 会话照旧不受沙箱约束（标准会话边界不被偷偷扩大/误伤）
+  assert.equal(toolSandboxDecision('bash', null), undefined)
+  assert.equal(toolSandboxDecision('bash', 'standard'), undefined)
+  // 未知身份：受控业务/危险/未登记能力拒；只读/交互放行
+  assert.match(toolSandboxDecision('run_scenario', UNRESOLVED_PRESET) ?? '', /^TOOL_SANDBOX_DENIED/)
+  assert.match(toolSandboxDecision('bash', UNRESOLVED_PRESET) ?? '', /^TOOL_SANDBOX_DENIED/)
+  assert.match(toolSandboxDecision('frobnicate', UNRESOLVED_PRESET) ?? '', /^TOOL_SANDBOX_DENIED/)
+  assert.equal(toolSandboxDecision('read', UNRESOLVED_PRESET), undefined, '只读放行')
+  assert.equal(toolSandboxDecision('ask_user_question', UNRESOLVED_PRESET), undefined, '人审交互放行')
+})
+
+/* ── M0-A 反例1（专家身份 receiver 丢失）────────────────────────────────
+ * 宿主 AgentPresetRegistry.presetForSession 是依赖 this 的原型方法。
+ * 裸取方法后调用丢 receiver → 解析抛错被吞 → onto 专家误判「无 preset」→ pwsh 放行。
+ * 本反例用真实宿主方法形态（非箭头函数替身）经 apply()+guard 全链验证。
+ */
+test('反例1（M0-A）：真实宿主原型方法保留 receiver——onto 专家不得退化为无 preset', () => {
+  class FakePresetRegistry {
+    #map
+    constructor(map) {
+      this.#map = map
+    }
+
+    // 与 harness AgentPresetRegistry.presetForSession 同构：原型方法 + 依赖 this
+    presetForSession(session) {
+      return this.#map.get(session) ?? null
+    }
+  }
+  const registry = new FakePresetRegistry(new Map([[SESSION, 'onto-aml']]))
+  const chain = setupChain()
+  chain.services.set('agentPresets', registry) // Cordis 读取路径：ctx.root.get('agentPresets') 返回服务实例
+  try {
+    const denial = chainGuard(chain, { name: 'pwsh', args: {}, session: SESSION })
+    assert.ok(
+      typeof denial === 'string' && denial.startsWith('TOOL_SANDBOX_DENIED'),
+      `真实宿主方法解析出的 onto-aml 专家必须拒 pwsh（丢 receiver 会退化为无 preset）: ${String(denial)}`,
+    )
+    assert.equal(chainGuard(chain, { name: 'read', args: {}, session: SESSION }), undefined, '只读照常')
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('反例1b（M0-A）：服务临时缺席——已知受控身份不退化为标准会话', () => {
+  const chain = setupChain({
+    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
+  })
+  try {
+    const first = chainGuard(chain, { name: 'bash', args: {}, session: SESSION })
+    assert.ok(typeof first === 'string' && first.startsWith('TOOL_SANDBOX_DENIED'))
+    chain.services.delete('agentPresets') // 临时缺席（可晚注册）
+    const second = chainGuard(chain, { name: 'pwsh', args: {}, session: SESSION })
+    assert.ok(
+      typeof second === 'string' && second.startsWith('TOOL_SANDBOX_DENIED'),
+      `服务缺席不得把已知受控专家退化为标准会话: ${String(second)}`,
+    )
+  } finally {
+    chain.dispose()
+  }
 })
 
 test('R3-6 沙箱拒绝语引导受控替代路径（不静默、不说半截话）', () => {
@@ -315,7 +377,7 @@ test('R4-5 执行链：合法动作正常批准、执行、留痕；错误锚点
       return { externalRef: 'ext-chain-1' }
     },
     async compensate() {},
-  })
+  }, { id: 'chain-mock', env: 'test', kind: 'simulated' })
   try {
     const tool = chain.tools.get('execute_behavior_action')
     assert.ok(tool, 'execute_behavior_action 须经真实注册面在场')
@@ -352,6 +414,65 @@ test('R4-5 执行链：合法动作正常批准、执行、留痕；错误锚点
     assert.equal(connectorCalls, 1)
   } finally {
     registerActionConnector(null)
+    chain.dispose()
+  }
+})
+
+
+/* ── M1-B 正式取数通道 × run_scenario（同一入口策略，真实注册链） ────────── */
+
+test('B2-7 run_scenario sourceId 通道：服务端取数 + dataStatus；与 dataset 内联互斥', async () => {
+  const chain = setupChain()
+  const { registerDataSourceForTest, clearDataSourcesForTest } = await import('../dist/data-sources.js')
+  const example = JSON.parse(readFileSync(join(REPO, 'examples', 'aml-run.json'), 'utf8'))
+  let fetchCalls = 0
+  registerDataSourceForTest('SRC-AML-1', {
+    version: 'mock-1.0',
+    nature: 'simulated',
+    async fetch() {
+      fetchCalls++
+      return {
+        dataset: example,
+        complete: true,
+        businessWindow: { from: '2026-11-01T00:00:00Z', to: new Date(Date.now() - 3600_000).toISOString() },
+      }
+    },
+  })
+  try {
+    const tool = chain.tools.get('run_scenario')
+    assert.ok(tool, 'run_scenario 须经真实注册面在场')
+    const base = { name: 'aml-analysis', version: '1.0.0', scenarioId: 'SCN-AML-FIND-CLUES' }
+    // 正式通道：sourceId 取数 → 运行 → dataStatus 回填。
+    // aml 示例特征为调用方预置值（无事实依据）→ formal 严格口径 = insufficient（待补数，
+    // 「缺特征 0 分」不得当低风险处置——正是 M1-B 要的可信语义）
+    const out = await tool.execute(
+      { ...base, sourceId: 'SRC-AML-1', analysisMode: 'formal', query: { objectTypes: ['OBJ-AML-ACCOUNT'] } },
+      { agent: { session: SESSION }, callId: 'b2a' },
+    )
+    assert.equal(fetchCalls, 1, '经服务端连接器取数')
+    assert.equal(out.dataStatus, 'insufficient', 'formal + 特征缺依据 → insufficient: ' + out.dataStatus)
+    assert.ok(out.candidates.every((c) => c.pendingVerification === true), 'formal 缺依据逐候选待补数')
+    assert.equal(out.contractStatus, 'conformant')
+    assert.equal(out.dataTrust.provenance, 'connector')
+    // 探索通道同数据 → conditional（来源可信但特征缺依据 = 条件性分数）
+    const explored = await tool.execute(
+      { ...base, sourceId: 'SRC-AML-1' },
+      { agent: { session: SESSION }, callId: 'b2a2' },
+    )
+    assert.equal(explored.dataStatus, 'conditional', 'explore + 部分缺口 → conditional: ' + explored.dataStatus)
+    assert.equal(fetchCalls, 2)
+    // 三通道互斥：sourceId + dataset 同给拒绝
+    await assert.rejects(
+      () => tool.execute({ ...base, sourceId: 'SRC-AML-1', dataset: example }, { agent: { session: SESSION }, callId: 'b2b' }),
+      (e) => /互斥/.test(e.message),
+    )
+    // 未登记源拒绝
+    await assert.rejects(
+      () => tool.execute({ ...base, sourceId: 'SRC-NOPE' }, { agent: { session: SESSION }, callId: 'b2c' }),
+      (e) => /未登记/.test(e.message),
+    )
+  } finally {
+    clearDataSourcesForTest()
     chain.dispose()
   }
 })

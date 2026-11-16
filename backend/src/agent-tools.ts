@@ -8,7 +8,7 @@
  * - run_scenario 工具结果恒含 ruleId 回指、humanReviewRequired=true 与禁语扫描。
  * @module @dsh-onto/backend/agent-tools
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -46,6 +46,7 @@ import {
   writeQualityReport,
   type DraftCandidate,
   type DraftItem,
+  type DataBasisInput,
   type ExpandResult,
   type ExperienceNote,
   type ExperienceOutcome,
@@ -106,10 +107,12 @@ import { createAnswerGuard } from './agent-answer-guard.js'
 import { registerSkillInvalidator } from './agent-hooks.js'
 import { createPresetResolver, toolSandboxDecision } from './agent-sandbox.js'
 import {
+  connectorNature,
   executeBehaviorAction,
   validateActionIntent,
 } from './action-executor.js'
 import { resolveDataDir } from './services.js'
+import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills.js'
 import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
@@ -1698,12 +1701,28 @@ export function apply(ctx: Context): void {
         scores: new Map(rec.result.candidates.map((c) => [c.candidateId, c.riskScore])),
         thresholds: [rec.result.reviewGate.threshold],
         evidenceScores: rec.result.candidates.flatMap((c) => c.evidenceChains.map((e) => e.score)),
+        // M1-E 规则引用绑定：本轮真实命中规则（候选 hitRuleIds ∪ ruleHitLog）
+        hitRuleIds: new Set([
+          ...rec.result.candidates.flatMap((c) => c.hitRuleIds),
+          ...rec.result.ruleHitLog.map((l) => l.ruleId),
+        ]),
       }
     } catch {
       return undefined // 运行记录缺失/损坏 → 回退渲染文本正则（不放行无据声明的职责不变）
     }
   }
-  ctx.on('llm/stream', createAnswerGuard({ phrases: answerPhrases, loadRunFacts: answerRunFacts }))
+  // M1-E：核验说明持久化（workspace answer-verification/，不只留在流处理局部变量）
+  const persistAnswerNotes = (notes: readonly string[]): void => {
+    const dir = join(ws.root, 'answer-verification')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+    writeFileSync(file, `${JSON.stringify({ savedAt: new Date().toISOString(), notes: [...notes] }, null, 2)}\n`, 'utf8')
+  }
+  ctx.on('llm/stream', createAnswerGuard({
+    phrases: answerPhrases,
+    loadRunFacts: answerRunFacts,
+    persistNotes: persistAnswerNotes,
+  }))
 
   const load = (pkgName: string, version: string): OntologyPackage =>
     loadToolPackage(ws, pkgName, version)
@@ -1731,13 +1750,14 @@ export function apply(ctx: Context): void {
     const code = colon > 0 ? denial.slice(0, colon + 1) : ''
     return `${code} 错误消息含禁语，已整段脱敏`
   }
-  // 会话 preset 解析（T4.2 沙箱作用域 + R3 身份可靠性）：agentPresets 可选服务迟到读取；
-  // 解析成功即按会话缓存——preset 服务异常不得把已知受控专家退化为标准会话。
+  // 会话 preset 解析（T4.2 沙箱作用域 + R3 身份可靠性 + M0-A receiver）：agentPresets 可选服务迟到读取；
+  // 解析成功即按会话缓存——preset 服务异常/临时缺席不得把已知受控专家退化为标准会话。
+  // 服务对象整只交给解析器：宿主 presetForSession 是依赖 this 的原型方法，
+  // 裸取方法后调用丢 receiver 会把受控专家误判为无 preset（M0-A 反例1）。
   const presetIdOf = createPresetResolver(() => {
-    const presets = ctx.root.get('agentPresets') as
+    return ctx.root.get('agentPresets') as
       | { presetForSession?: (session: unknown) => string | null }
       | undefined
-    return presets?.presetForSession
   })
   ctx.tools.guard((execution) => {
     // T4.2 全工具沙箱：本体专家会话的通用写入/执行类工具一律拒绝（对象收权之前收口）
@@ -2061,6 +2081,22 @@ export function apply(ctx: Context): void {
           description: '可选种子实体 ID（非空 ≤32）：场景声明 prep.expand 时用于扩图圈定范围；'
             + '场景未声明 prep.expand 而传入 → INVALID_ARGS。开展场景时从会话提取种子后单次传入即可',
         },
+        sourceId: {
+          type: 'string',
+          description: '正式取数通道（M1-B）：服务端登记数据源 id——由服务端连接器取数并生成来源快照；'
+            + '与 dataset/datasetPath 互斥。未登记源拒绝（deny-by-default），不接受自称 provenance=connector',
+        },
+        query: {
+          type: 'json',
+          description: '正式取数查询条件（objectTypes/timeWindow/instanceIds）；sourceId 通道的查询面',
+        },
+        analysisMode: {
+          type: 'string',
+          enum: ['formal', 'explore'],
+          description: '计算策略（缺省 explore）：formal=正式可信分析（缺源/超时效/取数不完整/必需特征缺依据 → '
+            + 'dataStatus=insufficient 不可处置，待补数）；explore=探索分析（条件性分数，逐候选降级）。'
+            + 'formal 仅是计算策略——模拟来源即使通过也不能调用真实业务动作',
+        },
       },
       output: {
         schema: {
@@ -2078,18 +2114,69 @@ export function apply(ctx: Context): void {
             audit: { type: 'json', required: true },
           },
         },
-        render: (_args, value) => textBlock(renderRunText(value as unknown as ScenarioRunResult)),
+        render: (args, value) => {
+          const a = args as { name?: string; version?: string; analysisMode?: string }
+          return textBlock(
+            renderRunText(value as unknown as ScenarioRunResult, undefined, {
+              ...(typeof a.name === 'string' && typeof a.version === 'string'
+                ? { package: { name: a.name, version: a.version } }
+                : {}),
+              ...(typeof a.analysisMode === 'string' ? { analysisMode: a.analysisMode } : {}),
+            }),
+          )
+        },
       },
       execute: toolExecute(
-        (args: {
-          name: string
-          version: string
-          scenarioId: string
-          datasetPath?: string
-          dataset?: unknown
-          seedIds?: unknown
-        }) => {
-          const dataset = loadDatasetFromArgs(args)
+        async (
+          args: {
+            name: string
+            version: string
+            scenarioId: string
+            datasetPath?: string
+            dataset?: unknown
+            seedIds?: unknown
+            sourceId?: string
+            query?: unknown
+            analysisMode?: string
+          },
+        ) => {
+          // 入口策略（M1-B，Agent/wire/CLI 同一语义）：三通道互斥——
+          // sourceId=正式取数（服务端连接器 + 来源快照）；datasetPath/dataset=探索通道（标注未核实）。
+          const hasSource = typeof args.sourceId === 'string' && args.sourceId !== ''
+          const hasPath = typeof args.datasetPath === 'string' && args.datasetPath.length > 0
+          const hasInline = args.dataset !== undefined && args.dataset !== null
+          if (hasSource && (hasPath || hasInline)) {
+            throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset/datasetPath（探索通道）互斥，只能提供一个')
+          }
+          if (!hasSource && !hasPath && !hasInline) {
+            throw new AgentToolError('INVALID_ARGS', '数据输入三选一：sourceId（正式取数）/ datasetPath / dataset')
+          }
+          const analysisMode = args.analysisMode === 'formal' ? 'formal' : 'explore'
+          let dataset: RuntimeDataset
+          let dataBasis: DataBasisInput | undefined
+          if (hasSource) {
+            // 正式通道：provenance 与 dataBasis 只由服务端产出（伪造来源拒绝面在 core 判定）
+            const query = args.query === undefined || args.query === null ? {} : args.query
+            if (!isRecord(query)) {
+              throw new AgentToolError('INVALID_ARGS', 'query 必须是 JSON 对象（objectTypes/timeWindow/instanceIds）')
+            }
+            const fetched = await dataSources.fetch({
+              sourceId: args.sourceId as string,
+              query: {
+                ...(Array.isArray(query.objectTypes) ? { objectTypes: query.objectTypes as string[] } : {}),
+                ...(isRecord(query.timeWindow)
+                  ? { timeWindow: { from: String(query.timeWindow.from ?? ''), to: String(query.timeWindow.to ?? '') } }
+                  : {}),
+                ...(Array.isArray(query.instanceIds) ? { instanceIds: query.instanceIds as string[] } : {}),
+              },
+              tenant: 'default',
+              root: ws.root,
+            })
+            dataset = fetched.dataset
+            dataBasis = fetched.dataBasis
+          } else {
+            dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
+          }
           const seedIds = validateRunSeedIds(args.seedIds)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
@@ -2102,12 +2189,11 @@ export function apply(ctx: Context): void {
           }
           const contracts = readToolContracts(versionDir)
           assertDatasetGranted(dataset, contracts)
-          const result = runScenario(
-            versionDir,
-            args.scenarioId,
-            dataset,
-            seedIds !== undefined ? { seedIds } : undefined,
-          )
+          const result = runScenario(versionDir, args.scenarioId, dataset, {
+            ...(seedIds !== undefined ? { seedIds } : {}),
+            analysisMode,
+            ...(dataBasis !== undefined ? { dataBasis } : {}),
+          })
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
           const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
@@ -3154,6 +3240,8 @@ export function apply(ctx: Context): void {
             objectRef: { type: 'string', required: true },
             externalRef: { type: 'string' },
             replayNote: { type: 'string' },
+            connectorKind: { type: 'string', required: true },
+            simulated: { type: 'boolean', required: true },
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
@@ -3166,10 +3254,16 @@ export function apply(ctx: Context): void {
             objectRef: string
             externalRef?: string
             replayNote?: string
+            connectorKind: string
+            simulated: boolean
           }
+          const nature = v.simulated
+            ? `演练/模拟执行（${v.connectorKind}，非真实业务成功）`
+            : `正式业务动作（${v.connectorKind}，经批准卡放行）`
           return textBlock(
             `动作 ${v.actionId} · ${v.status}${v.replayed ? '（幂等重放）' : ''} · 行为 ${v.behaviorId} · 对象 ${v.objectRef}\n`
-              + `连接器回执: ${v.externalRef ?? '—'}\n`
+              + `执行性质: ${nature}\n`
+              + `连接器回执: ${v.externalRef ?? '—'}${v.simulated ? '（模拟单号，不得当作真实业务受理凭证）' : ''}\n`
               + (v.replayNote !== undefined ? `${v.replayNote}\n` : '')
               + 'humanReviewRequired=true（业务动作经系统批准卡放行；台账落 workspace actions/ 可回查）',
           )
@@ -3230,6 +3324,8 @@ export function apply(ctx: Context): void {
               }),
           })
           const record = res.record
+          // M0-A：演练/模拟性质显式上墙（不得显示成真实业务成功）
+          const nature = connectorNature(record.connector)
           return toolOut(
             enforceOutputPolicy(
               {
@@ -3240,6 +3336,8 @@ export function apply(ctx: Context): void {
                 objectRef: record.objectRef,
                 ...(record.externalRef !== undefined ? { externalRef: record.externalRef } : {}),
                 ...(res.note !== undefined ? { replayNote: res.note } : {}),
+                connectorKind: nature.kind,
+                simulated: nature.simulated,
                 humanReviewRequired: true,
               },
               phrasesOfPkg(pkg),

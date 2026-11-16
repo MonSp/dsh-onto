@@ -334,6 +334,7 @@ test('createAnswerGuard 结构化事实：loadRunFacts 供数时按运行记录�
       scores: new Map([['CAND-001', 0.897]]),
       thresholds: [0.75],
       evidenceScores: [0.5],
+      hitRuleIds: new Set(),
     }),
   })
   const chunks = [

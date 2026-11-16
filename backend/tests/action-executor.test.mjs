@@ -12,13 +12,16 @@ import {
   ActionNoEffectError,
   approvalContextDigest,
   businessKeyOf,
+  connectorNature,
   digestAction,
   dryRunConnector,
   executeBehaviorAction,
+  isFormalActionEnabled,
   loadActionRecord,
   legacyRecordPath,
   parseObjectRef,
   registerActionConnector,
+  setFormalActionEnabled,
   validateActionIntent,
 } from '../dist/action-executor.js'
 import { isDangerousGeneralTool, isOntoPreset, toolSandboxDecision } from '../dist/agent-sandbox.js'
@@ -54,7 +57,7 @@ test('R6-1 同环境、同业务操作、同上下文：正常重放回读，无
       return { externalRef: `ext-${key.slice(0, 6)}` }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     const first = await executeBehaviorAction(input(root, {
       requestGrant: async () => {
@@ -98,15 +101,16 @@ test('R6-2 演练到真实环境：不回读演练回执，真实动作仍须新
     const dry = await executeBehaviorAction(input(root))
     assert.equal(dry.record.status, 'succeeded')
     assert.ok(dry.record.externalRef.startsWith('dryrun:'))
-    assert.deepEqual(dry.record.connector, { id: 'dryrun', env: 'dryrun' })
-    // 真实连接器（prod 环境）：业务幂等键不同 → 不回读演练回执、新批准、真实执行
+    assert.deepEqual(dry.record.connector, { id: 'dryrun', env: 'dryrun', kind: 'dryrun' })
+    // 真实连接器（prod 环境，formal 性质——须显式开启正式动作总开关）：业务幂等键不同 → 不回读演练回执、新批准、真实执行
+    setFormalActionEnabled(true)
     registerActionConnector({
       async execute() {
         realCalls++
         return { externalRef: 'ext-real-1' }
       },
       async compensate() {},
-    }, { id: 'billing', env: 'prod' })
+    }, { id: 'billing', env: 'prod', kind: 'formal' })
     const real = await executeBehaviorAction(input(root, {
       requestGrant: async () => {
         grants++
@@ -118,6 +122,7 @@ test('R6-2 演练到真实环境：不回读演练回执，真实动作仍须新
     assert.equal(realCalls, 1)
     assert.equal(grants, 1, '真实动作仍须新批准')
   } finally {
+    setFormalActionEnabled(false)
     registerActionConnector(null)
     rmSync(root, { recursive: true, force: true })
   }
@@ -132,7 +137,7 @@ test('R6-3 包版本/行为契约改变：显式上下文冲突，不静默回�
       return { externalRef: 'ext-1' }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     await executeBehaviorAction(input(root))
     // 同业务键（同载荷同连接器），但包版本变化 → ACTION_CONTEXT_CHANGED
@@ -152,6 +157,100 @@ test('R6-3 包版本/行为契约改变：显式上下文冲突，不静默回�
   }
 })
 
+/* ── M0-A 反例2（在途/抢占回读缺批准上下文校验）────────────────────────────
+ * 同业务键（同载荷同连接器）但包版本不同：A 在途执行期间 B 等待回读，
+ * 不得把 A 的旧批准结果当 B 的回读成功（跨版本请求可能回读旧结果）。
+ */
+test('反例2（M0-A）：跨版本在途等待不得回读旧批准结果——ACTION_CONTEXT_CHANGED', async () => {
+  const root = mkRoot()
+  let calls = 0
+  let release = () => {}
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  registerActionConnector({
+    async execute() {
+      calls++
+      await gate
+      return { externalRef: 'ext-old-ctx' }
+    },
+    async compensate() {},
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
+  try {
+    // A（包 1.0.0）占位并派发（连接器挂起）
+    const pA = executeBehaviorAction(input(root, {
+      pkg: { name: 'test-pkg', version: '1.0.0' },
+      inFlightWaitMs: 1000,
+      requestGrant: async () => GRANT,
+    }))
+    await new Promise((r) => setTimeout(r, 20))
+    // B（包 2.0.0，同业务键）在途等待——A 随后完成，B 不得回读 A 的 succeeded
+    const pB = executeBehaviorAction(input(root, {
+      pkg: { name: 'test-pkg', version: '2.0.0' },
+      inFlightWaitMs: 800,
+      requestGrant: async () => GRANT,
+    }))
+    const guard = pB.catch((e) => e)
+    release()
+    const a = await pA
+    assert.equal(a.record.status, 'succeeded')
+    const b = await guard
+    assert.equal(b instanceof Error, true, '跨版本在途等待必须显式拒绝，不得回读旧批准结果')
+    assert.equal(b.code, 'ACTION_CONTEXT_CHANGED', `跨版本回读旧结果即为缺陷: ${String(b)}`)
+    assert.equal(calls, 1, '连接器只执行一次（A 的执行不因 B 重复）')
+  } finally {
+    registerActionConnector(null)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('反例2b（M0-A）：抢占失败回读路径同口径——跨上下文显式冲突、不触发对账', async () => {
+  const root = mkRoot()
+  let calls = 0
+  let queries = 0
+  let release = () => {}
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  registerActionConnector({
+    async execute() {
+      calls++
+      await gate
+      return { externalRef: 'ext-race' }
+    },
+    async compensate() {},
+    async queryResult() {
+      queries++
+      return { state: 'unknown' }
+    },
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
+  try {
+    const pA = executeBehaviorAction(input(root, {
+      pkg: { name: 'test-pkg', version: '1.0.0' },
+      inFlightWaitMs: 60,
+      requestGrant: async () => GRANT,
+    }))
+    await new Promise((r) => setTimeout(r, 15))
+    // B 同刻并发同键跨版本：占位失败/在途回读路径都要给 ACTION_CONTEXT_CHANGED
+    const pB = executeBehaviorAction(input(root, {
+      pkg: { name: 'test-pkg', version: '2.0.0' },
+      inFlightWaitMs: 60,
+      requestGrant: async () => GRANT,
+    }))
+    const guard = pB.catch((e) => e)
+    release()
+    await pA
+    const b = await guard
+    assert.equal(b instanceof Error, true)
+    assert.equal(b.code, 'ACTION_CONTEXT_CHANGED', `抢占/在途回读缺上下文校验即为缺陷: ${String(b)}`)
+    assert.equal(queries, 0, '上下文校验先于对账——跨上下文请求不触发 queryResult')
+    assert.equal(calls, 1)
+  } finally {
+    registerActionConnector(null)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('R6-4 不同业务操作但同载荷：独立批准后可分别执行', async () => {
   const root = mkRoot()
   let calls = 0
@@ -162,7 +261,7 @@ test('R6-4 不同业务操作但同载荷：独立批准后可分别执行', asy
       return { externalRef: `ext-${calls}` }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   const requestGrant = async () => {
     grants++
     return GRANT
@@ -191,7 +290,7 @@ test('R6-5 不同连接器目标/租户环境不串台', async () => {
         return { externalRef: `ext-${calls}` }
       },
       async compensate() {},
-    }, { id: 'billing', env: 'tenant-a' })
+    }, { id: 'billing', env: 'tenant-a', kind: 'simulated' })
     await executeBehaviorAction(input(root))
     registerActionConnector({
       async execute() {
@@ -199,7 +298,7 @@ test('R6-5 不同连接器目标/租户环境不串台', async () => {
         return { externalRef: `ext-${calls}` }
       },
       async compensate() {},
-    }, { id: 'billing', env: 'tenant-b' })
+    }, { id: 'billing', env: 'tenant-b', kind: 'simulated' })
     const other = await executeBehaviorAction(input(root))
     assert.equal(other.replayed, false, '不同租户/环境不得串台回读')
     assert.equal(calls, 2)
@@ -218,7 +317,7 @@ test('R6-6 旧格式台账保留且 fail-closed，不被删除或当作「未执
       return { externalRef: 'ext-1' }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     // 注入旧格式记录（旧摘要命名、无上下文字段）
     mkdirSync(join(root, 'actions'), { recursive: true })
@@ -266,7 +365,7 @@ test('R1-1/R1-2 并发同键：连接器只执行一次，另一路等待或回�
       return { externalRef: 'ext-1' }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     // A 先占位并派发（连接器挂起）
     const pA = executeBehaviorAction(input(root, {
@@ -312,7 +411,7 @@ test('R1-3 注入「外部成功、写终态前中断」：重启后查询并恢
       queries++
       return { state: 'succeeded', externalRef: 'ext-recovered' }
     },
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     // 注入崩溃现场：executing + dispatched 相位（外部已成功、终态未落盘）
     mkdirSync(join(root, 'actions'), { recursive: true })
@@ -320,8 +419,8 @@ test('R1-3 注入「外部成功、写终态前中断」：重启后查询并恢
     writeFileSync(join(root, 'actions', `${key}.json`), JSON.stringify({
       actionId: `act-${key.slice(0, 12)}`,
       businessKey: key,
-      approvalContext: approvalContextDigest(INTENT, { id: 'billing', env: 'test' }, PKG, BEHAVIOR),
-      connector: { id: 'billing', env: 'test' },
+      approvalContext: approvalContextDigest(INTENT, { id: 'billing', env: 'test', kind: 'simulated' }, PKG, BEHAVIOR),
+      connector: { id: 'billing', env: 'test', kind: 'simulated' },
       behaviorId: INTENT.behaviorId,
       objectRef: INTENT.objectRef,
       payload: INTENT.payload,
@@ -352,7 +451,7 @@ test('R1-4 台账截断/非法 JSON/摘要不符：明确拒绝，连接器调�
       return { externalRef: 'x' }
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     mkdirSync(join(root, 'actions'), { recursive: true })
     const key = businessKeyOf(INTENT, { id: 'billing', env: 'test' })
@@ -384,7 +483,7 @@ test('R1-5 连接器超时但已受理：效应待核实态，不自动重试', 
       throw new Error('ETIMEDOUT: request timed out after acceptance')
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     await assert.rejects(
       () => executeBehaviorAction(input(root)),
@@ -412,7 +511,7 @@ test('R1-6 执行/补偿/补偿失败及补偿错误详情均可回查', async (
       throw new ActionExecuteError('外部系统拒绝（已出单号）', 'ext-9')
     },
     async compensate() {},
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     await assert.rejects(
       () => executeBehaviorAction(input(root)),
@@ -438,7 +537,7 @@ test('R1-6 执行/补偿/补偿失败及补偿错误详情均可回查', async (
     async compensate() {
       throw new Error('补偿也失败：外部拒绝回滚')
     },
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     await assert.rejects(
       () => executeBehaviorAction(input(root2)),
@@ -461,7 +560,7 @@ test('R1-6 执行/补偿/补偿失败及补偿错误详情均可回查', async (
     async compensate() {
       compensated++
     },
-  }, { id: 'billing', env: 'test' })
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
   try {
     await assert.rejects(
       () => executeBehaviorAction(input(root3)),
@@ -473,6 +572,80 @@ test('R1-6 执行/补偿/补偿失败及补偿错误详情均可回查', async (
     registerActionConnector(null)
     rmSync(root3, { recursive: true, force: true })
   }
+})
+
+test('M0-A5 正式动作总开关缺省关闭：formal 连接器零派发；演练/模拟不受限但显式标注非真实成功', async () => {
+  const root = mkRoot()
+  let calls = 0
+  assert.equal(isFormalActionEnabled(), false, '总开关缺省关闭')
+  try {
+    // 演练连接器不受总开关限制，且显式标 simulated（非真实业务成功）
+    const dry = await executeBehaviorAction(input(root))
+    assert.equal(dry.record.status, 'succeeded')
+    assert.equal(dry.record.externalRef.startsWith('dryrun:'), true)
+    assert.equal(connectorNature(dry.record.connector).simulated, true, '演练执行须标 simulated（非真实业务成功）')
+    // 模拟（本地测试闭环）连接器同口径
+    registerActionConnector({
+      async execute() {
+        calls++
+        return { externalRef: 'ext-sim-1' }
+      },
+      async compensate() {},
+    }, { id: 'mock-svc', env: 'test', kind: 'simulated' })
+    const sim = await executeBehaviorAction(input(root, { operationId: 'op-m0a5-sim' }))
+    assert.equal(sim.record.externalRef, 'ext-sim-1')
+    assert.equal(connectorNature(sim.record.connector).simulated, true, '模拟执行同样标 simulated')
+    // formal：总开关关闭 → 零派发
+    registerActionConnector({
+      async execute() {
+        calls++
+        return { externalRef: 'ext-prod-1' }
+      },
+      async compensate() {},
+    }, { id: 'billing', env: 'prod', kind: 'formal' })
+    await assert.rejects(
+      () => executeBehaviorAction(input(root)),
+      (e) => e.code === 'FORMAL_ACTION_DISABLED' && /总开关/.test(e.message),
+    )
+    assert.equal(calls, 1, 'formal 被拒时模拟连接器调用数不增')
+    // 开关开启后 formal 才可派发（仍经批准卡）
+    setFormalActionEnabled(true)
+    try {
+      const real = await executeBehaviorAction(input(root, { operationId: 'op-m0a5' }))
+      assert.equal(real.record.externalRef, 'ext-prod-1')
+      assert.equal(calls, 2)
+      assert.equal(connectorNature(real.record.connector).simulated, false, 'formal 不标 simulated')
+    } finally {
+      setFormalActionEnabled(false)
+    }
+    assert.equal(isFormalActionEnabled(), false, '用后复位')
+  } finally {
+    setFormalActionEnabled(false)
+    registerActionConnector(null)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('M0-A6 连接器注册 fail-closed：kind 未声明/伪称 dryrun 一律拒绝', () => {
+  const conn = {
+    async execute() {
+      return { externalRef: 'x' }
+    },
+    async compensate() {},
+  }
+  assert.throws(
+    () => registerActionConnector(conn, { id: 'billing', env: 'prod' }),
+    (e) => e.code === 'INVALID_ARGS' && /kind/.test(e.message),
+  )
+  assert.throws(
+    () => registerActionConnector(conn),
+    (e) => e.code === 'INVALID_ARGS',
+  )
+  assert.throws(
+    () => registerActionConnector(conn, { id: 'billing', env: 'prod', kind: 'dryrun' }),
+    (e) => e.code === 'INVALID_ARGS',
+    '真实连接器不得自称 dryrun',
+  )
 })
 
 test('T4.1-3 行为闭合：未声明行为拒绝；演练连接器默认不触达外部', async () => {
@@ -525,4 +698,57 @@ test('R4 补充：parseObjectRef 完整实例引用语法', () => {
   assert.equal(parseObjectRef('OBJ-AML-ACCOUNT'), null)
   assert.equal(parseObjectRef('OBJ-AML-ACCOUNT:'), null)
   assert.equal(parseObjectRef('OBJ-AML-ACCOUNT:a:b'), null)
+})
+
+
+/* ── M1-C 动作契约消费（validateActionIntent 过 ActionContract） ───────── */
+
+const CONTRACT = {
+  fields: [
+    { name: 'amount', type: 'float', required: true, range: { min: 0, max: 1000000 } },
+    { name: 'note', type: 'string', required: false },
+    { name: 'related', type: 'ref', required: false, refTypes: ['OBJ-TST-B'] },
+  ],
+  requiredRoles: ['analyst'],
+  connector: { capability: 'create-review-ticket', contractVersion: '1' },
+  scenarioBinding: { scenarioId: 'SCN-TST-1', decisionKind: 'both' },
+}
+
+test('C3-1 载荷契约：白名单外字段拒绝；必填缺失拒绝', () => {
+  const behaviors = [{ id: 'BHV-TST-X', anchor: 'OBJ-TST-A', actionContract: CONTRACT }]
+  // 白名单外字段
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { amount: 1, evil: 'x' } }),
+    (e) => e.code === 'INVALID_ARGS' && /不在动作契约字段白名单/.test(e.message),
+  )
+  // 必填缺失
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { note: 'hi' } }),
+    (e) => e.code === 'INVALID_ARGS' && /必填/.test(e.message),
+  )
+})
+
+test('C3-2 载荷契约：类型/范围/refTypes 校验', () => {
+  const behaviors = [{ id: 'BHV-TST-X', anchor: 'OBJ-TST-A', actionContract: CONTRACT }]
+  // 类型错
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { amount: 'lots' } }),
+    (e) => /须为有限数值/.test(e.message),
+  )
+  // 数值超范围（金额越界拒绝）
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { amount: 2000000 } }),
+    (e) => /超出契约范围/.test(e.message),
+  )
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { amount: -1 } }),
+    (e) => /超出契约范围/.test(e.message),
+  )
+  // ref 类型不在允许列表
+  assert.throws(
+    () => validateActionIntent(behaviors, { ...INTENT, payload: { amount: 1, related: 'OBJ-NOPE:x' } }),
+    (e) => /不在契约允许类型/.test(e.message),
+  )
+  // 合法载荷过
+  validateActionIntent(behaviors, { ...INTENT, payload: { amount: 5, note: 'ok', related: 'OBJ-TST-B:b1' } })
 })

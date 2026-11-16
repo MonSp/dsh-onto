@@ -33,6 +33,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { ActionContract } from '@dsh-onto/core'
 import { actionDigest, type ApprovalGrant } from './agent-approval.js'
 import { AgentToolError, isRecord } from './agent-policy.js'
 
@@ -56,6 +57,31 @@ export type ActionStatus =
 export interface ConnectorIdentity {
   id: string
   env: string
+  /**
+   * 连接器性质（M0-A）：`dryrun` 演练 / `simulated` 模拟（F1 本地闭环，须显式标注 simulated）/
+   * `formal` 正式业务。注册时必须显式声明，不默认放行正式动作。
+   */
+  kind?: ConnectorKind
+}
+
+/** 连接器性质（M0-A）：演练/模拟不产生真实业务效应；正式动作受服务端总开关约束。 */
+export type ConnectorKind = 'dryrun' | 'simulated' | 'formal'
+
+/**
+ * 正式动作总开关（M0-A，服务端）：缺省**关闭**——`formal` 连接器动作在开启前一律拒绝
+ * （FORMAL_ACTION_DISABLED，零外部效应）；演练/模拟连接器不受限但结果明确标注非真实业务成功。
+ * M3 验收通过且用户明确启用前保持关闭。
+ */
+let formalActionEnabled = false
+
+/** 开关状态（只读查询；翻转走 {@link setFormalActionEnabled}——须服务端/用户明确决定）。 */
+export function isFormalActionEnabled(): boolean {
+  return formalActionEnabled
+}
+
+/** 翻转正式动作总开关（服务端管理面；AI/工具面不得代用户开启）。 */
+export function setFormalActionEnabled(enabled: boolean): void {
+  formalActionEnabled = enabled
 }
 
 /** 台账记录：业务幂等键 + 批准上下文 + 执行/补偿终态（全程可回查）。 */
@@ -138,7 +164,7 @@ export const dryRunConnector: ActionConnector = {
 }
 
 let connector: ActionConnector = dryRunConnector
-let connectorIdentity: ConnectorIdentity = { id: 'dryrun', env: 'dryrun' }
+let connectorIdentity: ConnectorIdentity = { id: 'dryrun', env: 'dryrun', kind: 'dryrun' }
 
 /** 当前连接器身份（入台账、进业务幂等键；不依赖隐含上下文）。 */
 export function currentConnectorIdentity(): ConnectorIdentity {
@@ -147,11 +173,28 @@ export function currentConnectorIdentity(): ConnectorIdentity {
 
 /**
  * 注册真实连接器（apiSources 接入点）；传 null 复位为演练连接器。
- * `identity` 须为稳定的连接器身份与环境（业务幂等键据此隔离演练/真实、租户/环境）。
+ * `identity` 须为稳定的连接器身份与环境（业务幂等键据此隔离演练/真实、租户/环境），
+ * 且必须显式声明 `kind`（M0-A）：`simulated`（本地/测试闭环，不产生真实业务效应）或
+ * `formal`（正式业务，受服务端总开关约束，缺省关闭）。
+ * `dryrun` 仅授予内置演练连接器（传 null 复位）——真实连接器不得自称 dryrun 绕过总开关；
+ * 性质未声明一律拒绝注册（fail-closed）。
  */
 export function registerActionConnector(next: ActionConnector | null, identity?: ConnectorIdentity): void {
-  connector = next ?? dryRunConnector
-  connectorIdentity = next === null ? { id: 'dryrun', env: 'dryrun' } : (identity ?? { id: 'adhoc', env: 'adhoc' })
+  if (next === null) {
+    connector = dryRunConnector
+    connectorIdentity = { id: 'dryrun', env: 'dryrun', kind: 'dryrun' }
+    return
+  }
+  const kind = identity?.kind
+  if (identity === undefined || (kind !== 'simulated' && kind !== 'formal')) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      'registerActionConnector 必须携带 identity 并显式声明 kind（simulated 本地测试闭环 / formal 正式业务）——'
+        + '性质未声明不放行（fail-closed）；dryrun 仅属内置演练连接器，真实连接器不得自称 dryrun 绕过正式动作总开关',
+    )
+  }
+  connector = next
+  connectorIdentity = { id: identity.id, env: identity.env, kind }
 }
 
 /** actions/ 目录（workspace 根之下，同 runs/ 惯例）。 */
@@ -257,8 +300,9 @@ export function businessKeyOf(
 }
 
 /**
- * 批准上下文摘要（R6）：包名/版本 + 行为契约指纹 + 对象 + 载荷 + 连接器目标——
- * 上下文变化（新版本/行为契约改变）→ ACTION_CONTEXT_CHANGED，不静默沿用旧批准。
+ * 批准上下文摘要（R6 + M0-A）：包名/版本 + 行为契约指纹 + 对象 + 载荷 + 连接器目标（含性质）——
+ * 上下文变化（新版本/行为契约改变/演练升正式）→ ACTION_CONTEXT_CHANGED，不静默沿用旧批准、
+ * 不把演练回执当真实业务成功（性质进上下文后跨性质回读一律显式冲突）。
  */
 export function approvalContextDigest(
   intent: ActionIntent,
@@ -278,7 +322,7 @@ export function approvalContextDigest(
     },
     objectRef: intent.objectRef,
     payload: intent.payload,
-    connectorTarget: { id: identity.id, env: identity.env },
+    connectorTarget: { id: identity.id, env: identity.env, kind: identity.kind ?? 'unspecified' },
   })
 }
 
@@ -365,7 +409,7 @@ function validatePayloadEnvelope(payload: Record<string, unknown>, isGranted?: (
  * 行为 ID、锚点类型及对象授权全部通过后才轮到批准卡（调用方顺序保证）。
  */
 export function validateActionIntent(
-  behaviors: ReadonlyArray<{ id: string; anchor?: string }>,
+  behaviors: ReadonlyArray<{ id: string; anchor?: string; actionContract?: ActionContract }>,
   intent: ActionIntent,
   opts?: { isGranted?: (objectRef: string) => boolean },
 ): void {
@@ -390,6 +434,86 @@ export function validateActionIntent(
     throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
   }
   validatePayloadEnvelope(intent.payload, opts?.isGranted)
+  // M1-C：动作契约消费（载荷字段白名单/必填/类型/范围/refTypes）——不在表内字段一律拒绝
+  const ac = decl.actionContract
+  if (ac !== undefined) validatePayloadContract(ac, intent.payload)
+}
+
+/**
+ * 载荷契约校验（M1-C，方案 §6）：字段白名单、必填、类型、数值范围、ref 字段允许类型。
+ * 不在白名单的字段一律拒绝（不透传任意键）；范围外数值拒绝。
+ */
+export function validatePayloadContract(contract: ActionContract, payload: Record<string, unknown>): void {
+  const byName = new Map(contract.fields.map((f) => [f.name, f]))
+  for (const key of Object.keys(payload)) {
+    const spec = byName.get(key)
+    if (spec === undefined) {
+      throw new AgentToolError('INVALID_ARGS', `payload.${key} 不在动作契约字段白名单（${contract.fields.map((f) => f.name).join('、')}）`)
+    }
+    const v = payload[key]
+    if (v === null || v === undefined) {
+      if (spec.required) {
+        throw new AgentToolError('INVALID_ARGS', `payload.${key} 必填（动作契约）`)
+      }
+      continue
+    }
+    switch (spec.type) {
+      case 'string':
+      case 'date':
+        if (typeof v !== 'string') {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 须为字符串（契约类型 ${spec.type}）`)
+        }
+        break
+      case 'bool':
+        if (typeof v !== 'boolean') {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 须为布尔（契约类型 bool）`)
+        }
+        break
+      case 'int':
+      case 'float': {
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 须为有限数值（契约类型 ${spec.type}）`)
+        }
+        if (spec.type === 'int' && !Number.isInteger(v)) {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 须为整数（契约类型 int）`)
+        }
+        const r = spec.range
+        if (r !== undefined) {
+          if (r.min !== undefined && v < r.min) {
+            throw new AgentToolError('INVALID_ARGS', `payload.${key} 超出契约范围（< ${r.min}）`)
+          }
+          if (r.max !== undefined && v > r.max) {
+            throw new AgentToolError('INVALID_ARGS', `payload.${key} 超出契约范围（> ${r.max}）`)
+          }
+        }
+        break
+      }
+      case 'ref': {
+        if (typeof v !== 'string') {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 须为对象引用字符串（契约类型 ref）`)
+        }
+        const target = parseObjectRef(v)
+        if (target === null) {
+          throw new AgentToolError('INVALID_ARGS', `payload.${key} 不是完整实例引用（TYPE:instance）`)
+        }
+        const allowed = spec.refTypes ?? []
+        if (allowed.length > 0 && !allowed.includes(target.type)) {
+          throw new AgentToolError(
+            'INVALID_ARGS',
+            `payload.${key} 引用类型 ${target.type} 不在契约允许类型（${allowed.join('、')}）`,
+          )
+        }
+        break
+      }
+      default:
+        break
+    }
+  }
+  for (const spec of contract.fields) {
+    if (spec.required && (payload[spec.name] === undefined || payload[spec.name] === null)) {
+      throw new AgentToolError('INVALID_ARGS', `payload.${spec.name} 必填（动作契约）`)
+    }
+  }
 }
 
 export interface ExecuteActionInput {
@@ -421,12 +545,13 @@ function replayNote(record: ActionRecord): string {
   return `回读业务操作 ${op}（连接器 ${record.connector.id}，环境 ${record.connector.env}）`
 }
 
-/** 在途记录处置（R1 并发互斥）：有界等待回读；超时后 dispatched 相位按外部回执对账恢复。 */
+/** 在途记录处置（R1 并发互斥 + M0-A 统一上下文校验）：有界等待回读；超时后 dispatched 相位按外部回执对账恢复。 */
 async function handleInFlight(
   root: string,
   businessKey: string,
   conn: ActionConnector,
   waitMs: number,
+  contextDigest: string,
 ): Promise<ExecuteActionResult> {
   const deadline = Date.now() + waitMs
   for (;;) {
@@ -436,6 +561,11 @@ async function handleInFlight(
         'ACTION_IN_FLIGHT',
         `业务操作 ${businessKey.slice(0, 12)} 的占位已被回收——稍后重试（不重复批准/执行）`,
       )
+    }
+    // M0-A：统一动作上下文校验——每次回读（含在途等待、抢占失败回读）都先核对批准上下文，
+    // 校验先于回读成功与触发对账；跨版本/跨契约请求不得把旧批准结果当自己的回读。
+    if (record.approvalContext !== contextDigest) {
+      throw contextChangedError(businessKey)
     }
     if (record.status !== 'executing') {
       return { record, replayed: true, note: replayNote(record) }
@@ -452,6 +582,15 @@ async function handleInFlight(
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(5, waitMs))))
   }
+}
+
+/** 批准上下文变化（M0-A 同口径复用）：不静默回读旧结果、不直接再执行。 */
+function contextChangedError(businessKey: string): AgentToolError {
+  return new AgentToolError(
+    'ACTION_CONTEXT_CHANGED',
+    `业务操作 ${businessKey.slice(0, 12)} 的批准上下文已变化（包版本/行为契约/连接器目标）——`
+      + '不静默回读旧结果、不直接再执行；请人工检查并外部对账后以新的业务操作标识发起',
+  )
 }
 
 /** 恢复在途记录（R1）：查外部回执 → 恢复/对账；禁止自动二次执行。 */
@@ -529,17 +668,24 @@ export async function executeBehaviorAction(
 
   const existing = loadActionRecord(root, businessKey)
   if (existing !== null) {
-    if (existing.status === 'executing') {
-      return handleInFlight(root, businessKey, conn, waitMs)
-    }
+    // M0-A：统一动作上下文校验——首次读台账先核对（校验先于回读成功与触发对账）
     if (existing.approvalContext !== contextDigest) {
-      throw new AgentToolError(
-        'ACTION_CONTEXT_CHANGED',
-        `业务操作 ${businessKey.slice(0, 12)} 的批准上下文已变化（包版本/行为契约/连接器目标）——`
-          + '不静默回读旧结果、不直接再执行；请人工检查并外部对账后以新的业务操作标识发起',
-      )
+      throw contextChangedError(businessKey)
+    }
+    if (existing.status === 'executing') {
+      return handleInFlight(root, businessKey, conn, waitMs, contextDigest)
     }
     return { record: existing, replayed: true, note: replayNote(existing) }
+  }
+
+  // M0-A 正式动作总开关（缺省关闭）：formal 连接器派发前检查；回读/对账不受限（停用保留读取与对账能力）。
+  // 演练/模拟连接器不受限，但结果须显式标注非真实业务成功（见 connectorNature / 工具渲染）。
+  if (connectorIdentity.kind === 'formal' && !formalActionEnabled) {
+    throw new AgentToolError(
+      'FORMAL_ACTION_DISABLED',
+      '正式业务动作总开关未开启（缺省关闭）——formal 连接器动作一律拒绝（零外部效应）。'
+        + 'M3 验收通过并经用户明确启用前保持关闭；演练/模拟连接器不受此限。',
+    )
   }
 
   // 原子占位（跨会话/跨进程互斥）：wx 创建 = 唯一键事务
@@ -565,8 +711,8 @@ export async function executeBehaviorAction(
   try {
     saveActionRecord(root, claim, { createNew: true })
   } catch {
-    // 占位失败 = 已有同键记录（并发方抢先）→ 等待回读，不重复批准/执行
-    return handleInFlight(root, businessKey, conn, waitMs)
+    // 占位失败 = 已有同键记录（并发方抢先）→ 等待回读，不重复批准/执行（M0-A：回读同样先校验上下文）
+    return handleInFlight(root, businessKey, conn, waitMs, contextDigest)
   }
 
   // 批准卡（占位后）：同键并发第二路不会走到这里
@@ -652,5 +798,15 @@ export async function executeBehaviorAction(
 /** 固定连接器实例（执行与补偿之间不换注册）。 */
 function pinConnector(): ActionConnector {
   return connector
+}
+
+/**
+ * 连接器性质标注（M0-A）：演练/模拟执行不得显示成真实业务成功。
+ * 无 kind 标注的旧记录缺省按 simulated 展示（安全方向：不确认为正式业务前不得声称真实成功）；
+ * dryrun → simulated:true；formal → simulated:false。
+ */
+export function connectorNature(identity: ConnectorIdentity): { kind: ConnectorKind; simulated: boolean } {
+  const kind: ConnectorKind = identity.kind ?? (identity.id === 'dryrun' ? 'dryrun' : 'simulated')
+  return { kind, simulated: kind !== 'formal' }
 }
 

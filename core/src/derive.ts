@@ -113,6 +113,24 @@ export function buildDerived(pkg: OntologyPackage): Record<string, unknown> {
         outputs: (r.attributes ?? []).map((a) => `${r.id}.${a.name}`),
       })),
     ],
+    // M1-C 动作契约（方案 §6）：随派生走 DERIVED_DRIFT 链（改契约 → 派生物指纹变化 → 拒载）。
+    // 无契约包不落此键（零回归：输出逐字节不变）。
+    ...(pkg.behaviors.some((b) => b.actionContract !== undefined)
+      ? {
+          actionContracts: pkg.behaviors
+            .filter((b) => b.actionContract !== undefined)
+            .map((b) => ({
+              behaviorId: b.id,
+              anchor: b.anchor,
+              requiredRoles: b.actionContract!.requiredRoles,
+              connector: b.actionContract!.connector,
+              scenarioBinding: b.actionContract!.scenarioBinding,
+              fields: b.actionContract!.fields,
+              ...(b.actionContract!.requires !== undefined ? { requires: b.actionContract!.requires } : {}),
+              ...(b.actionContract!.precondition !== undefined ? { precondition: b.actionContract!.precondition } : {}),
+            })),
+        }
+      : {}),
   }
 
   // O2 → 规则引擎配置（exclusion 先于 scoring；权重来自 O2；llmForbidden）

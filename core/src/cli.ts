@@ -277,9 +277,14 @@ function cmdRun(args: Args): void {
   const scenarioId = args._[2]
   if (!dir || !scenarioId) fail('run requires <versionDir> <scenarioId>')
   const dataPath = flagStr(args, 'data')
-  const dataset = JSON.parse(readFileSync(dataPath, 'utf8')) as RuntimeDataset
+  // 入口策略（M1-B，Agent/wire/CLI 同一口径）：文件供数打 provenance=file（不得自称 connector）
+  const dataset: RuntimeDataset = {
+    ...(JSON.parse(readFileSync(dataPath, 'utf8')) as RuntimeDataset),
+    provenance: 'file',
+  }
   const versionDir = resolve(dir)
-  const result = runScenario(versionDir, scenarioId, dataset)
+  const analysisMode = flagStr(args, 'mode', 'explore') === 'formal' ? 'formal' : 'explore'
+  const result = runScenario(versionDir, scenarioId, dataset, { analysisMode })
   // 运行留痕（run-insight S2.1）：root 由 versionDir 上溯、--root 显式覆盖；不可达跳过不破坏既有契约。
   let runRecord: string | null = null
   try {
