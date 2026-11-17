@@ -17,7 +17,7 @@ import { registerTicketSimConnector } from './action-connector-ticketsim.js'
 import { registerExtApiConnector } from './action-connector-ext.js'
 import { createExtDataConnector } from './data-source-ext.js'
 import { dataSources } from './data-sources.js'
-import { businessPolicy } from './business-policy.js'
+import { businessPolicy, createLazyUserResolver } from './business-policy.js'
 import { setFormalActionEnabled } from './action-executor.js'
 
 export * from './services.js'
@@ -67,11 +67,20 @@ export function apply(ctx: Context): void {
     console.log('[dsh-onto] ext-api connector + data source registered (kind=' + extKind
       + ', auth=' + (hasCreds ? 'client_credentials' : 'static') + '):', extApiUrl)
   }
-  // M1-C 六元组身份提供者（部署面）：userId/tenant/roles/dataScope 只认部署断言（环境变量），
-  // 不认工具参数自称；拿不到完整部署断言 → null（正式模式保持关闭，不以自由字符串替代身份集成）。
+  // M1-C 六元组身份提供者：userId 优先取宿主账号会话（可信宿主，迟到读取），部署断言 DSH_BIZ_USER_ID 兜底；
+  // tenant/roles/dataScope 只认部署断言（环境变量；账号服务不承载业务角色），不认工具参数自称。
+  // 拿不到完整身份 → null（正式模式保持关闭，不以自由字符串替代身份集成）。
   // roles 只认部署断言（DSH_BIZ_ROLES）——模型/工具参数自称的角色一律无效。
+  const resolveHostUserId = createLazyUserResolver(async () => {
+    const svc = (ctx as {
+      deepseekAccount?: { getDeviceIdentity?: () => Promise<{ userId?: unknown }> }
+    }).deepseekAccount
+    if (svc === undefined || typeof svc.getDeviceIdentity !== 'function') return null
+    const id = await svc.getDeviceIdentity()
+    return typeof id?.userId === 'string' ? id.userId : null
+  }, 5_000)
   businessPolicy.setIdentityProvider(() => {
-    const userId = process.env.DSH_BIZ_USER_ID
+    const userId = resolveHostUserId() ?? process.env.DSH_BIZ_USER_ID
     const tenant = process.env.DSH_BIZ_TENANT
     const roles = (process.env.DSH_BIZ_ROLES ?? '').split(',').map((r) => r.trim()).filter((r) => r !== '')
     if (typeof userId !== 'string' || userId === '' || typeof tenant !== 'string' || tenant === '' || roles.length === 0) {

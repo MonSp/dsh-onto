@@ -785,13 +785,20 @@ export async function executeBehaviorAction(
         `执行意图与提案 ${proposal.proposalId} 不符（行为/对象/载荷指纹）——错提案不可套用，须新提案并重新批准`,
       )
     }
-    // 错连接器不可套用（M2/D）：提案创建时绑定 connectorId/connectorEnv（currentConnectorIdentity 存入），
-    // 执行时必须与当前连接器一致——simulated 提案不得在 formal 开关开启后经 formal 连接器执行
-    if (proposal.connectorId !== identity.id || proposal.connectorEnv !== identity.env) {
+    // 错连接器不可套用（M2/D）：提案创建时绑定 connectorId/connectorEnv/kind（currentConnectorIdentity 存入），
+    // 执行时必须与当前连接器一致——simulated 提案不得在 formal 开关开启后经 formal 连接器执行。
+    // kind 同核（同 id/env 跨性质换注册也不可套用）；旧库提案行无 kind 时仅 id/env 核对（新提案必带）。
+    const proposalKind = proposal.connectorKind ?? null
+    const currentKind = identity.kind ?? (identity.id === 'dryrun' ? 'dryrun' : 'simulated')
+    if (
+      proposal.connectorId !== identity.id
+      || proposal.connectorEnv !== identity.env
+      || (proposalKind !== null && proposalKind !== currentKind)
+    ) {
       throw new AgentToolError(
         'PROPOSAL_CONNECTOR_MISMATCH',
-        `执行连接器 ${identity.id}/${identity.env} 与提案 ${proposal.proposalId} 绑定的连接器 `
-          + `${proposal.connectorId}/${proposal.connectorEnv} 不符——错连接器不可套用，须新提案并重新批准`,
+        `执行连接器 ${identity.id}/${identity.env}/${currentKind} 与提案 ${proposal.proposalId} 绑定的连接器 `
+          + `${proposal.connectorId}/${proposal.connectorEnv}/${proposalKind ?? '(未绑定 kind)'} 不符——错连接器不可套用，须新提案并重新批准`,
       )
     }
     const dec: ReviewDecision | null = store.getDecision(proposal.decisionId)

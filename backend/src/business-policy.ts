@@ -158,6 +158,38 @@ export class BusinessPolicy {
   }
 }
 
+/**
+ * 迟到读取的宿主账号 userId 解析（可信宿主会话；方案「身份来自可信宿主或业务认证服务（迟到读取）」）：
+ * 账号服务是异步 API 而授权入口是同步的——首次调用发起解析并返回 null（身份暂不可确认，
+ * 受控面照 fail-closed），解析落地后供后续调用缓存使用。解析得空/失败不落定、下轮再试，
+ * 不以自由字符串冒充身份。minRetryMs 抑制未登录时的回源风暴（缺省 0 = 每轮可重试）。
+ */
+export function createLazyUserResolver(
+  fetch: () => Promise<string | null>,
+  minRetryMs = 0,
+  now: () => number = Date.now,
+): () => string | null {
+  let cached: string | null = null
+  let inflight = false
+  let lastAttemptAt = Number.NEGATIVE_INFINITY
+  return () => {
+    if (cached !== null) return cached
+    if (!inflight && now() - lastAttemptAt >= minRetryMs) {
+      inflight = true
+      lastAttemptAt = now()
+      fetch()
+        .then((id) => {
+          if (typeof id === 'string' && id !== '') cached = id
+        })
+        .catch(() => { /* 服务缺席/异常：迟到读取下轮再试，不冒充身份 */ })
+        .finally(() => {
+          inflight = false
+        })
+    }
+    return null
+  }
+}
+
 /** 服务端共享策略面（同 dataSources 模式；部署适配器接身份提供者）。 */
 export const businessPolicy = new BusinessPolicy()
 

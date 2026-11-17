@@ -63,6 +63,8 @@ export interface ActionProposal {
   intentDigest: string
   connectorId: string
   connectorEnv: string
+  /** 连接器性质（dryrun/simulated/formal）：创建即绑定，执行时同核（旧库行可缺，仅 id/env 核对）。 */
+  connectorKind?: string
   /** 服务端分配并固定（业务键组成）。 */
   operationId: string
   status: 'pending' | 'consumed' | 'canceled'
@@ -122,6 +124,7 @@ const SCHEMA = `
     intent_digest text not null,
     connector_id text not null,
     connector_env text not null,
+    connector_kind text,
     operation_id text not null unique,
     status text not null,
     created_at text not null,
@@ -210,6 +213,9 @@ function rowToProposal(row: Record<string, unknown>): ActionProposal {
     intentDigest: row.intent_digest as string,
     connectorId: row.connector_id as string,
     connectorEnv: row.connector_env as string,
+    ...(row.connector_kind !== null && row.connector_kind !== undefined
+      ? { connectorKind: row.connector_kind as string }
+      : {}),
     operationId: row.operation_id as string,
     status: row.status as ActionProposal['status'],
     createdAt: row.created_at as string,
@@ -236,6 +242,11 @@ export class ActionStore {
     const db = new DatabaseSync(this.dbPath, this.dbPath === ':memory:' ? {} : { timeout: 5_000 })
     try {
       db.exec(SCHEMA)
+      // 显式迁移：proposals.connector_kind 为后加列（提案绑定连接器性质）——旧库补列，nullable 不动旧行
+      const cols = db.prepare('pragma table_info(proposals)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'connector_kind')) {
+        db.exec('alter table proposals add column connector_kind text')
+      }
       return fn(db)
     } finally {
       db.close()
@@ -408,6 +419,8 @@ export class ActionStore {
     intentDigest: string
     connectorId: string
     connectorEnv: string
+    /** 连接器性质（dryrun/simulated/formal）；缺省 dryrun——错性质不可套用（提案即绑定）。 */
+    connectorKind?: string
   }): ActionProposal {
     const dec = this.getDecision(input.decisionId)
     if (dec === null) {
@@ -435,8 +448,8 @@ export class ActionStore {
     this.withDb((db) => {
       db.prepare(
         `insert into proposals (proposal_id, decision_id, run_id, candidate_id, behavior_id, object_ref,
-          payload_json, intent_digest, connector_id, connector_env, operation_id, status, created_at)
-         values (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          payload_json, intent_digest, connector_id, connector_env, connector_kind, operation_id, status, created_at)
+         values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         proposal.proposalId,
         proposal.decisionId,
@@ -448,6 +461,7 @@ export class ActionStore {
         proposal.intentDigest,
         proposal.connectorId,
         proposal.connectorEnv,
+        proposal.connectorKind ?? null,
         proposal.operationId,
         proposal.status,
         proposal.createdAt,

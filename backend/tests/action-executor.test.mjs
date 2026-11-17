@@ -731,6 +731,54 @@ test('R6-7 提案重载验证：错连接器（connectorId/env 不符）不可�
   }
 })
 
+test('R6-8 提案绑定连接器性质：同 id/env 跨性质换注册（simulated→formal）不可套用', async () => {
+  const root = mkRoot()
+  const store = actionStoreFor(root)
+  const dec = store.createDecision({
+    runId: 'run-x',
+    candidateIds: ['CAND-001'],
+    snapshotDigest: 'snap',
+    ruleFingerprint: 'rule',
+    reviewer: 'host:u1',
+    decision: 'approved',
+  })
+  const proposal = store.createProposal({
+    decisionId: dec.decisionId,
+    runId: 'run-x',
+    candidateId: 'CAND-001',
+    behaviorId: INTENT.behaviorId,
+    objectRef: INTENT.objectRef,
+    payload: INTENT.payload,
+    intentDigest: digestAction(INTENT),
+    connectorId: 'conn-1',
+    connectorEnv: 'env-1',
+    connectorKind: 'simulated',
+  })
+  assert.equal(store.getProposal(proposal.proposalId).connectorKind, 'simulated', 'kind 随提案落台账')
+  let calls = 0
+  // 同 id/env 但性质换注册（formal）——kind 绑定须拦（id/env 相同也套不进）
+  registerActionConnector({
+    async execute() {
+      calls++
+      return { externalRef: 'x' }
+    },
+    async compensate() {},
+  }, { id: 'conn-1', env: 'env-1', kind: 'formal' })
+  try {
+    await assert.rejects(
+      () => executeBehaviorAction(input(root, { proposalId: proposal.proposalId })),
+      (e) => e.code === 'PROPOSAL_CONNECTOR_MISMATCH',
+      'kind 不符须拒绝（同 id/env 跨性质不可套用）',
+    )
+    assert.equal(calls, 0, '错性质零派发')
+    assert.equal(store.getProposal(proposal.proposalId).status, 'pending', '拒绝不得消费提案')
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('M0-A5 正式动作总开关缺省关闭：formal 连接器零派发；演练/模拟不受限但显式标注非真实成功', async () => {
   const root = mkRoot()
   let calls = 0

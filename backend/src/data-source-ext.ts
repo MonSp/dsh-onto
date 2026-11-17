@@ -39,7 +39,9 @@ const DEFAULT_TYPE_MAP = { customers: 'OBJ-AML-CUSTOMER', accounts: 'OBJ-AML-ACC
 const DEFAULT_REL_TYPES = { holds: 'REL-AML-HOLDS', inbound: 'REL-AML-INBOUND' }
 
 /** 记录时间字段识别（键名启发：At/Time/Date/ts 结尾，或常见时间键）。 */
-const TIME_KEY_RE = /(?:^|_)(?:at|ts|time|date|timestamp|datetime|occurredat|createdat|updatedat|lastupdated|occurred)$|(?:At|Time|Date|Ts|Timestamp|Datetime|On)$/
+// 记录时间字段键名白名单（camel/snake/裸词/数字 epoch）：Updated 覆盖 lastUpdated 等 camel 尾缀
+// （原式只认小写 lastupdated，camel 键会漏识别 → 窗外记录不剔、时效门失真）
+const TIME_KEY_RE = /(?:^|_)(?:at|ts|time|date|timestamp|datetime|occurredat|createdat|updatedat|lastupdated|occurred)$|(?:At|Time|Date|Ts|Timestamp|Datetime|On|Updated)$/
 
 /**
  * 记录时间（毫秒时间戳）：扫描 attrs 里的时间字段——ISO 串或数字 epoch。

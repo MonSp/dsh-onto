@@ -198,3 +198,29 @@ test('F2-5 client_credentials 续签：401 TOKEN_EXPIRED 失效重签后安全�
   await conn.execute(INTENT, 'act-2', 'key-10')
   assert.deepEqual(issued, [1, 2], '有效期内缓存命中，不重复签发')
 })
+
+
+test('F2-6 记录时间别名识别与窗口过滤：TIME_KEY_RE 各族键名须进时效门', async () => {
+  // 键名白名单覆盖：At 后缀 / _at / 裸 ts / 数字 epoch timestamp / camel lastUpdated
+  const items = [
+    { custNo: 'C-IN', custType: 'personal', occurredAt: '2026-11-15T10:00:00Z' },
+    { custNo: 'C-OUT', custType: 'personal', ts: '2026-11-01T00:00:00Z' },
+    { custNo: 'C-ALIAS', custType: 'personal', created_at: '2026-11-15T12:00:00Z' },
+    { custNo: 'C-NUM', custType: 'personal', timestamp: 1794736800 },
+    { custNo: 'C-CAMEL', custType: 'personal', lastUpdated: '2026-10-01T00:00:00Z' },
+  ]
+  const conn = createExtDataConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: stubFetch(async () => jsonRes(200, { items, nextCursor: null, complete: true, fetchedAt: 'T0' })),
+  })
+  const out = await conn.fetch({
+    objectTypes: ['OBJ-AML-CUSTOMER'],
+    timeWindow: { from: '2026-11-15T00:00:00Z', to: '2026-11-16T00:00:00Z' },
+  }, { tenant: 't', objectTypes: ['OBJ-AML-CUSTOMER'] })
+  const ids = out.dataset.objects.map((o) => o.id).sort()
+  assert.deepEqual(ids, ['C-ALIAS', 'C-IN', 'C-NUM'], '窗内保留/窗外剔除，别名键都须被识别: ' + JSON.stringify(ids))
+  // businessWindow 由存活记录的别名时间字段计算（不回显查询窗/取数时刻）
+  assert.equal(out.businessWindow.to, '2026-11-15T12:00:00.000Z', '窗尾 = 存活记录最晚别名时间')
+  assert.equal(out.businessWindow.from, '2026-11-15T10:00:00.000Z', '窗头 = 存活记录最早别名时间')
+})

@@ -3756,6 +3756,7 @@ export function apply(ctx: Context): void {
             parseTargetRef(args.objectRef),
             actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(ws.root)),
           )
+          const connIdentity = currentConnectorIdentity()
           const proposal = actionStoreFor(ws.root).createProposal({
             decisionId: args.decisionId,
             runId: args.runId,
@@ -3764,8 +3765,10 @@ export function apply(ctx: Context): void {
             objectRef: args.objectRef,
             payload: args.payload,
             intentDigest: actionDigest({ action: 'execute_behavior_action', behaviorId: args.behaviorId, objectRef: args.objectRef, payload: args.payload }),
-            connectorId: currentConnectorIdentity().id,
-            connectorEnv: currentConnectorIdentity().env,
+            connectorId: connIdentity.id,
+            connectorEnv: connIdentity.env,
+            // 提案即绑定连接器性质（错性质不可套用）：simulated 提案不得经 formal 连接器执行
+            connectorKind: connIdentity.kind ?? 'dryrun',
           })
           return toolOut({
             proposalId: proposal.proposalId,

@@ -105,3 +105,32 @@ test('C1-7 共享策略面 businessPolicy 在场（部署适配器接线用）',
   assert.equal(typeof businessPolicy.resolveIdentity, 'function')
   assert.equal(businessPolicy.resolveIdentity(), null, '未接线时身份不可确认（正式模式关闭）')
 })
+
+test('C1-8 迟到读取宿主账号 userId：首轮 null、落地后缓存；得空不冒充、可重试', async () => {
+  const { createLazyUserResolver } = await import('../dist/business-policy.js')
+  let calls = 0
+  const resolve = createLazyUserResolver(async () => {
+    calls += 1
+    return calls >= 2 ? 'u-host-1' : null
+  })
+  assert.equal(resolve(), null, '首轮解析未落地 → null（迟到读取，受控面照 fail-closed）')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(resolve(), null, '解析得空不冒充身份')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(resolve(), 'u-host-1', '落地后可用')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(resolve(), 'u-host-1', '缓存命中')
+  assert.equal(calls, 2, '命中缓存不再回源')
+  // 解析抛错不落定、不冒充，下轮可重试
+  let attempts = 0
+  const flaky = createLazyUserResolver(async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('auth service down')
+    return 'u-late'
+  })
+  assert.equal(flaky(), null, '异常 → null（fail-closed）')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(flaky(), null)
+  await new Promise((r) => setTimeout(r, 0))
+  assert.equal(flaky(), 'u-late', '异常后可重试成功')
+})

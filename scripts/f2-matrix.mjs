@@ -226,7 +226,7 @@ if (!tokens) {
   if (timeoutCode === '' && elapsed < 400) {
     // 首派远快于调用方超时窗口：外部服务未注入受理延迟，超时对账路径未被触发（缺演练条件，非产品失败）
     rec('F2-M9', '超时但外部已受理：unknown→人工对账→恢复同单号、不重跑', 'SKIP',
-      `外部服务未注入受理延迟（TICKET_ACCEPT_DELAY_MS 演练未开）：首派 ${elapsed}ms 未触发调用方超时，本环境未演练超时路径`)
+      `外部服务未注入受理延迟（需服务端 TICKET_ACCEPT_DELAY_MS=2500 演练配置）：首派 ${elapsed}ms 未触发调用方超时，本环境未演练超时路径`)
   } else {
     recExec('F2-M9', '超时但外部已受理：unknown→人工对账→恢复同单号、不重跑',
       timeoutCode === 'ACTION_UNKNOWN_EFFECT' && rec2.record.status === 'succeeded'

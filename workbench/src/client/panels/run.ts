@@ -184,7 +184,7 @@ export function RunPanel(props: {
             'table',
             { className: 'ow-table' },
             h('thead', null, h('tr', null,
-              h('th', null, 'ID'), h('th', null, t('riskScore')), h('th', null, t('hits')),
+              h('th', null, t('chainCandidateId')), h('th', null, t('riskScore')), h('th', null, t('hits')),
               h('th', null, t('evidenceChains')), h('th', null, t('pending')), h('th', null, t('narrative'))),
             ),
             h(
@@ -484,7 +484,7 @@ export function RunPanel(props: {
         'table',
         { className: 'ow-table' },
         h('thead', null, h('tr', null,
-          h('th', null, 'ID'), h('th', null, t('scoreAB')), h('th', null, t('hits')), h('th', null, t('pending')))),
+          h('th', null, t('chainCandidateId')), h('th', null, t('scoreAB')), h('th', null, t('hits')), h('th', null, t('pending')))),
         h(
           'tbody',
           null,
