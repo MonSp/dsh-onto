@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   approvalContextDigest,
@@ -95,6 +96,43 @@ test('S1 台账占位/CAS/同键不同载荷显式冲突', () => {
     () => store.settle('bk-s1', 1, { status: 'failed' }),
     (e) => e.code === 'ACTION_LEDGER_CONFLICT',
     'CAS：旧版本不得覆盖并发方推进的终态',
+  )
+  closeActionStore(root)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('S1b 台账损坏行 fail-closed：payload_json 损坏抛 ACTION_LEDGER_CORRUPT（不裸抛 SyntaxError）', () => {
+  const root = mkRoot()
+  const store = actionStoreFor(root)
+  const base = {
+    actionId: 'act-s1b',
+    businessKey: 'bk-s1b',
+    approvalContext: 'ctx-a',
+    connector: { id: 'c', env: 'e', kind: 'simulated' },
+    behaviorId: 'BHV-1',
+    objectRef: 'OBJ-A:1',
+    payload: { amount: 1 },
+    status: 'executing',
+    phase: 'claimed',
+    approvalDigest: '',
+    approvedAt: '',
+    executedAt: '',
+    intentDigest: 'digest-a',
+  }
+  store.claim(base)
+  // 损坏行注入（模拟半写/磁盘截断）：payload_json 不是合法 JSON
+  const db = new DatabaseSync(join(root, 'actions', 'ledger.db'))
+  db.prepare('update actions set payload_json = ? where business_key = ?').run('{ "amount":1', 'bk-s1b')
+  db.close()
+  assert.throws(
+    () => store.load('bk-s1b'),
+    (e) => e.name === 'AgentToolError' && e.code === 'ACTION_LEDGER_CORRUPT',
+    '损坏行须抛受控 ACTION_LEDGER_CORRUPT，不得裸抛 SyntaxError',
+  )
+  assert.throws(
+    () => store.listActions(),
+    (e) => e.name === 'AgentToolError' && e.code === 'ACTION_LEDGER_CORRUPT',
+    '清单回读同样 fail-closed',
   )
   closeActionStore(root)
   rmSync(root, { recursive: true, force: true })

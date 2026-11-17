@@ -34,6 +34,7 @@ import {
   exportRunArchive,
   isInsideDir,
   isSafeRelPath,
+  isSafeRunId,
   listExperienceNotes,
   loadExperienceNote,
   loadPackage,
@@ -124,6 +125,17 @@ function guard<T>(fn: () => T): T {
   } catch (e) {
     throw toRemoteError(e)
   }
+}
+
+/**
+ * runId 路径段复核（与 core runstore 同口径；本层独立过一遍，不依赖调用顺序——
+ * 治理链文件名直拼 runId 前必须先验，防路径段注入写出工作区外）。
+ */
+function requireSafeRunId(runId: unknown): string {
+  if (!isSafeRunId(runId)) {
+    throw new AgentToolError('INVALID_ARGS', `runId 非法（须为单段安全路径）: ${String(runId)}`)
+  }
+  return runId
 }
 
 async function guardAsync<T>(fn: () => Promise<T>): Promise<T> {
@@ -746,12 +758,14 @@ export class OntoRuntime extends TypertRemoteService {
     chainLocator?: string
   }> {
     return guard(() => {
-      const { locator, archive } = exportRunArchive(this.ws.root, request.runId)
+      // 本层独立复核 runId（不依赖 exportRunArchive 内部校验的调用顺序）：治理链文件名直拼入参
+      const safeRunId = requireSafeRunId(request.runId)
+      const { locator, archive } = exportRunArchive(this.ws.root, safeRunId)
       // 治理链串联（F1 步骤 7）：snapshot → run → decision → proposal → approval → externalRef
-      const chain = this.reviewChainOf(request.runId)
-      const chainLocator = `runs/exports/${request.runId}-chain.json`
-      const chainPath = join(this.ws.root, 'runs', 'exports', `${request.runId}-chain.json`)
-      writeFileSync(chainPath, `${JSON.stringify({ runId: request.runId, ...chain }, null, 2)}\n`, 'utf8')
+      const chain = this.reviewChainOf(safeRunId)
+      const chainLocator = `runs/exports/${safeRunId}-chain.json`
+      const chainPath = join(this.ws.root, 'runs', 'exports', `${safeRunId}-chain.json`)
+      writeFileSync(chainPath, `${JSON.stringify({ runId: safeRunId, ...chain }, null, 2)}\n`, 'utf8')
       return { locator, archivedAt: archive.archivedAt, chainLocator }
     })
   }

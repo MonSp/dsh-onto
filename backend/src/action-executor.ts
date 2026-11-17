@@ -240,8 +240,28 @@ export function loadActionRecord(root: string, businessKey: string): ActionRecor
     throw new AgentToolError('ACTION_LEDGER_CORRUPT', `动作台账 ${businessKey} 结构非法——fail-closed，请人工核对（不自动重跑）`)
   }
   const record = parsed as unknown as ActionRecord
-  if (record.businessKey !== businessKey || typeof record.approvalContext !== 'string' || record.connector === undefined) {
+  // 摘要/上下文核对补全（不只验字段存在）：结构面 + 载荷指纹（intentDigest）重算比对——
+  // 内容被篡改/半损坏（payload 与指纹不符）与键不符同判 ACTION_LEDGER_CORRUPT，fail-closed 不自动重跑
+  if (
+    record.businessKey !== businessKey
+    || typeof record.approvalContext !== 'string' || record.approvalContext === ''
+    || !isRecord(record.connector)
+    || typeof record.connector.id !== 'string' || typeof record.connector.env !== 'string'
+    || typeof record.behaviorId !== 'string' || typeof record.objectRef !== 'string'
+    || !isRecord(record.payload)
+  ) {
     throw new AgentToolError('ACTION_LEDGER_CORRUPT', `动作台账 ${businessKey} 摘要/上下文不符——fail-closed，请人工核对（不自动重跑）`)
+  }
+  // 载荷指纹核对（摘要不符 fail-closed）：intentDigest 在场时必须等于行为/对象/载荷的重算指纹
+  if (typeof record.intentDigest === 'string' && record.intentDigest !== '' && record.intentDigest !== 'legacy') {
+    const recomputed = digestAction({
+      behaviorId: record.behaviorId,
+      objectRef: record.objectRef,
+      payload: record.payload,
+    })
+    if (recomputed !== record.intentDigest) {
+      throw new AgentToolError('ACTION_LEDGER_CORRUPT', `动作台账 ${businessKey} 载荷指纹不符（摘要不符）——fail-closed，请人工核对（不自动重跑）`)
+    }
   }
   return record
 }
@@ -638,6 +658,24 @@ function contextChangedError(businessKey: string): AgentToolError {
 
 /** 恢复在途记录（R1）：查外部回执 → 恢复/对账；禁止自动二次执行。 */
 async function recoverInFlight(root: string, record: ActionRecord, conn: ActionConnector): Promise<ExecuteActionResult> {
+  // 换连接器不翻态（M2/D 对账面）：外部回执只能由台账记录的连接器（record.connector）回答——
+  // 当前注册与台账不一致时不得用新连接器的「查无/回执」定旧账终态（误翻 unknown → 人工重发 → 重复外部效应）。
+  const current = currentConnectorIdentity()
+  if (current.id !== record.connector.id || current.env !== record.connector.env) {
+    const kept = record.status === 'unknown'
+      ? record
+      : saveActionRecord(root, {
+        ...record,
+        status: 'unknown',
+        error: `连接器已更换（台账 ${record.connector.id}/${record.connector.env} → 当前 ${current.id}/${current.env}）`
+          + '——不以新连接器回执定旧账终态，效应待核实（请在原连接器下人工对账）',
+      })
+    return {
+      record: kept,
+      replayed: true,
+      note: `${replayNote(kept)}——连接器身份与台账不一致，保持效应待核实（不翻态）`,
+    }
+  }
   const intent: ActionIntent = {
     behaviorId: record.behaviorId,
     objectRef: record.objectRef,
@@ -701,6 +739,17 @@ export async function reconcileActionRecord(
 }
 
 /**
+ * CAS 输方重读定状态（M2/D 并发恢复）：settle 撞版本（并发恢复方已推进）时重读台账——
+ * 读到已定状态则交还调用方如实返回；不得把外部已成功的动作报成 ACTION_LEDGER_CONFLICT
+ * （旧口径：输方拿旧 version 二次 settle 'unknown' 再失败 → 抛冲突，与事实不符）。
+ */
+function settledAfterCasLoss(root: string, businessKey: string, e: unknown): ActionRecord | null {
+  if (!(e instanceof AgentToolError) || e.code !== 'ACTION_LEDGER_CONFLICT') return null
+  const settled = loadActionRecord(root, businessKey)
+  return settled !== null && settled.status !== 'executing' ? settled : null
+}
+
+/**
  * 执行闭环（R1/R6）：
  * 旧台账 fail-closed → 既有记录核对（重放/上下文冲突/在途恢复）→ 原子占位（互斥）
  * → 系统批准卡 → 持久已批意图 → 连接器执行（固定实例 + 完整幂等键）
@@ -734,6 +783,15 @@ export async function executeBehaviorAction(
       throw new AgentToolError(
         'PROPOSAL_INTENT_MISMATCH',
         `执行意图与提案 ${proposal.proposalId} 不符（行为/对象/载荷指纹）——错提案不可套用，须新提案并重新批准`,
+      )
+    }
+    // 错连接器不可套用（M2/D）：提案创建时绑定 connectorId/connectorEnv（currentConnectorIdentity 存入），
+    // 执行时必须与当前连接器一致——simulated 提案不得在 formal 开关开启后经 formal 连接器执行
+    if (proposal.connectorId !== identity.id || proposal.connectorEnv !== identity.env) {
+      throw new AgentToolError(
+        'PROPOSAL_CONNECTOR_MISMATCH',
+        `执行连接器 ${identity.id}/${identity.env} 与提案 ${proposal.proposalId} 绑定的连接器 `
+          + `${proposal.connectorId}/${proposal.connectorEnv} 不符——错连接器不可套用，须新提案并重新批准`,
       )
     }
     const dec: ReviewDecision | null = store.getDecision(proposal.decisionId)
@@ -857,11 +915,25 @@ export async function executeBehaviorAction(
   try {
     const out = await conn.execute(intent, actionId, businessKey)
     externalRef = out.externalRef
-    const record = saveActionRecord(root, {
-      ...dispatched,
-      status: 'succeeded',
-      externalRef,
-    })
+    let record: ActionRecord
+    try {
+      record = saveActionRecord(root, {
+        ...dispatched,
+        status: 'succeeded',
+        externalRef,
+      })
+    } catch (e) {
+      // 执行成功后 settle CAS 输给并发恢复方：重读台账定状态——外部已成功，不得把已成功报成冲突
+      const settled = settledAfterCasLoss(root, businessKey, e)
+      if (settled !== null) {
+        return {
+          record: settled,
+          replayed: true,
+          note: `${replayNote(settled)}——并发恢复方已定状态（本次外部已成功 ${externalRef}），按台账如实返回`,
+        }
+      }
+      throw e
+    }
     return { record, replayed: false }
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
@@ -898,11 +970,30 @@ export async function executeBehaviorAction(
       )
     }
     // 超时/中断等效应不明：不写「无效应失败」、不补偿（无回执）——对账待核实
-    saveActionRecord(root, {
-      ...dispatched,
-      status: 'unknown',
-      error: `${error}（效应不明——待人工对账，不自动重试）`,
-    })
+    try {
+      saveActionRecord(root, {
+        ...dispatched,
+        status: 'unknown',
+        error: `${error}（效应不明——待人工对账，不自动重试）`,
+      })
+    } catch (settleErr) {
+      // 二次 settle 也撞 CAS：输方重读台账定状态（不裸抛 ACTION_LEDGER_CONFLICT、不把已定事实报成冲突）
+      const settled = settledAfterCasLoss(root, businessKey, settleErr)
+      if (settled !== null) {
+        if (settled.status === 'succeeded') {
+          return {
+            record: settled,
+            replayed: true,
+            note: `${replayNote(settled)}——并发恢复方按外部回执定为成功，如实返回`,
+          }
+        }
+        throw new AgentToolError(
+          'ACTION_UNKNOWN_EFFECT',
+          `动作执行中断（效应待核实，台账 ${actionId}）：并发恢复方已定为 ${settled.status}——按台账人工对账，不报冲突、不自动重试`,
+        )
+      }
+      throw settleErr
+    }
     throw new AgentToolError(
       'ACTION_UNKNOWN_EFFECT',
       `动作执行中断（效应待核实，台账 ${actionId}）：${error}——超时/中断不等于无副作用，须外部对账后再处置`,

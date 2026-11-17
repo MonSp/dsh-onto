@@ -48,6 +48,16 @@ import {
 } from '../dist/agent-tools.js'
 import { dedupeSkillNames, isCurrentWinner, pickSkillSources, renderModelingGuideBody } from '../dist/agent-skills.js'
 import { actionDigest, digestDraftBatch, requestHostApproval } from '../dist/agent-approval.js'
+import { businessPolicy, requireBizAuth } from '../dist/business-policy.js'
+import {
+  digestAction,
+  executeBehaviorAction,
+  registerActionConnector,
+} from '../dist/action-executor.js'
+import { actionStoreFor, closeActionStore } from '../dist/action-store.js'
+import { createExtApiConnector } from '../dist/action-connector-ext.js'
+import { createExtDataConnector } from '../dist/data-source-ext.js'
+import { DataSourceRegistry } from '../dist/data-sources.js'
 import {
   PackageStoreError,
   PackageWorkspace,
@@ -1308,4 +1318,198 @@ test('T4-1/T4-2 源断言：动作执行器闭环 + 全工具沙箱收口在场'
   const toolsSrc2 = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(toolsSrc2.includes('toolSandboxDecision('), 'guard 须收口沙箱判定')
   assert.ok(toolsSrc2.includes('await approve(exec'), '动作执行须过系统批准卡')
+})
+
+/* ── PR#20 复审修复不变量表：1/2/3 三面行为断言 + item5/6 行为（全表重放） ── */
+
+test('INV-1 六元组入口门行为（item1）：身份 null → act/history/export/formal-read 拒、explore 读放行；三查/角色/dataScope 各拒', () => {
+  const CHECKS = {
+    typeExists: (t) => t === 'OBJ-AML-ACCOUNT',
+    instanceExists: (t, i) => t === 'OBJ-AML-ACCOUNT' && i === 'ACCT-001',
+  }
+  const TARGET = { type: 'OBJ-AML-ACCOUNT', instance: 'ACCT-001' }
+  businessPolicy.setIdentityProvider(null)
+  try {
+    // 身份不可解析（正式模式保持关闭）：act / history / export / formal-read 一律拒
+    expectCode(() => requireBizAuth('act', TARGET, CHECKS), 'OBJECT_NOT_GRANTED')
+    expectCode(() => requireBizAuth('history', null, CHECKS), 'OBJECT_NOT_GRANTED')
+    expectCode(() => requireBizAuth('export', null, CHECKS), 'OBJECT_NOT_GRANTED')
+    expectCode(() => requireBizAuth('read', TARGET, CHECKS, { analysisMode: 'formal' }), 'OBJECT_NOT_GRANTED')
+    // explore 读面放行（未核验降级轴）
+    assert.equal(requireBizAuth('read', TARGET, CHECKS, { analysisMode: 'explore' }), undefined)
+    assert.equal(requireBizAuth('expand', TARGET, CHECKS, { analysisMode: 'explore' }), undefined)
+    assert.equal(requireBizAuth('related-read', TARGET, CHECKS), undefined)
+    // 可解析身份 → 全量 authorize：三查各拒一次 + 角色不足 + dataScope 越界
+    businessPolicy.setIdentityProvider(() => ({
+      userId: 'u-1',
+      tenant: 't-1',
+      roles: ['analyst'],
+      dataScope: { objectTypes: ['OBJ-AML-ACCOUNT'] },
+    }))
+    expectCode(
+      () => requireBizAuth('read', { type: 'OBJ-GHOST', instance: 'x' }, CHECKS),
+      'OBJECT_NOT_GRANTED', // 检查一：类型不存在
+    )
+    expectCode(
+      () => requireBizAuth('read', { type: 'OBJ-AML-ACCOUNT', instance: 'GHOST' }, CHECKS),
+      'OBJECT_NOT_GRANTED', // 检查二：实例不存在
+    )
+    businessPolicy.setIdentityProvider(() => ({
+      userId: 'u-1',
+      tenant: 't-1',
+      roles: ['viewer'],
+      dataScope: { objectTypes: ['OBJ-AML-ACCOUNT'] },
+    }))
+    expectCode(() => requireBizAuth('act', TARGET, CHECKS), 'OBJECT_NOT_GRANTED') // 检查三：角色不足
+    businessPolicy.setIdentityProvider(() => ({
+      userId: 'u-1',
+      tenant: 't-1',
+      roles: ['analyst'],
+      dataScope: { objectTypes: ['OBJ-AML-TXN'] },
+    }))
+    expectCode(() => requireBizAuth('act', TARGET, CHECKS), 'OBJECT_NOT_GRANTED') // dataScope 越界
+  } finally {
+    businessPolicy.setIdentityProvider(null)
+  }
+})
+
+test('INV-2 提案错连接器行为（item2）：simulated 提案不得经换名/换环境连接器执行（零派发、不消费）', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-onto-inv2-'))
+  const store = actionStoreFor(root)
+  const INTENT = { behaviorId: 'BHV-TST-X', objectRef: 'OBJ-TST-A:inst1', payload: { amount: 1 } }
+  const dec = store.createDecision({
+    runId: 'run-inv2',
+    candidateIds: ['CAND-001'],
+    snapshotDigest: 'snap',
+    ruleFingerprint: 'rule',
+    reviewer: 'host:u-1',
+    decision: 'approved',
+  })
+  const proposal = store.createProposal({
+    decisionId: dec.decisionId,
+    runId: 'run-inv2',
+    candidateId: 'CAND-001',
+    behaviorId: INTENT.behaviorId,
+    objectRef: INTENT.objectRef,
+    payload: INTENT.payload,
+    intentDigest: digestAction(INTENT),
+    connectorId: 'sim-conn',
+    connectorEnv: 'local-sim',
+  })
+  let calls = 0
+  registerActionConnector({
+    async execute() {
+      calls++
+      return { externalRef: 'x' }
+    },
+    async compensate() {},
+  }, { id: 'formal-conn', env: 'prod', kind: 'simulated' })
+  try {
+    await assert.rejects(
+      () =>
+        executeBehaviorAction({
+          root,
+          intent: INTENT,
+          pkg: { name: 'p', version: '1.0.0' },
+          behavior: { id: INTENT.behaviorId },
+          proposalId: proposal.proposalId,
+          requestGrant: async () => ({ approvalDigest: 'ap', approvedAt: 't' }),
+          inFlightWaitMs: 0,
+        }),
+      (e) => e.code === 'PROPOSAL_CONNECTOR_MISMATCH',
+    )
+    assert.equal(calls, 0, '错连接器零派发')
+    assert.equal(store.getProposal(proposal.proposalId).status, 'pending', '拒绝不得消费提案')
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('INV-3 query-miss 不翻态行为（item3）：查无/截断窗口保持 unknown，仅外部明确回执定终态', async () => {
+  const INTENT = { behaviorId: 'BHV-TST-X', objectRef: 'OBJ-TST-A:inst1', payload: {} }
+  // 查无（外部回 unknown）→ 保持 unknown（不得收窄成 not-executed）
+  const miss = createExtApiConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: async () => new Response(JSON.stringify({ state: 'unknown' }), { status: 200 }),
+  })
+  assert.equal((await miss.queryResult(INTENT, 'key-miss')).state, 'unknown')
+  // 截断审计窗口（200 条不含本键）→ 同样保持 unknown（人工重发会重复外部效应）
+  const items = Array.from({ length: 200 }, (_, i) => ({ idempotencyKey: `other-${i}` }))
+  const truncated = createExtApiConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: async (url) =>
+      String(url).includes('audit')
+        ? new Response(JSON.stringify({ items }), { status: 200 })
+        : new Response(JSON.stringify({ state: 'unknown' }), { status: 200 }),
+  })
+  assert.equal((await truncated.queryResult(INTENT, 'key-buried')).state, 'unknown')
+  // 仅外部明确回执可定终态
+  const explicit = createExtApiConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: async () => new Response(JSON.stringify({ state: 'not-executed' }), { status: 200 }),
+  })
+  assert.equal((await explicit.queryResult(INTENT, 'key-none')).state, 'not-executed')
+})
+
+test('INV-5/6 连接器性质按 kind 标注 + businessWindow 按记录时间（fresh 门 fail-closed）', async () => {
+  const jsonRes = (body) => new Response(JSON.stringify(body), { status: 200 })
+  // item5：nature 按 kind 标注——测试 API 不得自称 business-source
+  const stub = async () => jsonRes({ items: [], nextCursor: null, complete: true, fetchedAt: 'T0' })
+  assert.equal(createExtDataConnector({ baseUrl: 'http://x', token: 't', fetchImpl: stub }).nature, 'simulated', '缺省 simulated')
+  assert.equal(createExtDataConnector({ baseUrl: 'http://x', token: 't', fetchImpl: stub, kind: 'simulated' }).nature, 'simulated')
+  assert.equal(createExtDataConnector({ baseUrl: 'http://x', token: 't', fetchImpl: stub, kind: 'formal' }).nature, 'business-source')
+  // item6：businessWindow 按记录时间——窗外记录剔除，窗口=存活记录 [min,max]
+  const rows = {
+    items: [
+      { custNo: 'C1', custType: 'personal', createdAt: '2026-11-10T00:00:00Z' },
+      { custNo: 'C2', custType: 'personal', createdAt: '2026-11-20T00:00:00Z' },
+    ],
+    nextCursor: null,
+    complete: true,
+    fetchedAt: 'T0',
+  }
+  const conn = createExtDataConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: async () => jsonRes(rows),
+  })
+  const out = await conn.fetch(
+    { objectTypes: ['OBJ-AML-CUSTOMER'], timeWindow: { from: '2026-11-01T00:00:00Z', to: '2026-11-15T00:00:00Z' } },
+    { tenant: 't', objectTypes: ['OBJ-AML-CUSTOMER'] },
+  )
+  assert.deepEqual(out.dataset.objects.map((o) => o.id), ['C1'], '窗外记录按记录时间剔除（C2 2026-11-20 在窗外）')
+  assert.equal(out.businessWindow.from, '2026-11-10T00:00:00.000Z')
+  assert.equal(out.businessWindow.to, '2026-11-10T00:00:00.000Z', '窗口 = 存活记录的记录时间 [min,max]')
+  // 无记录时间 → to 留空（fresh 门 fail-closed：不得以取数时刻冒充记录时间使 fresh 恒真）
+  const noTime = createExtDataConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: async () => jsonRes({ items: [{ custNo: 'C3', custType: 'x' }], nextCursor: null, complete: true, fetchedAt: 'T0' }),
+  })
+  const out2 = await noTime.fetch(
+    { objectTypes: ['OBJ-AML-CUSTOMER'] },
+    { tenant: 't', objectTypes: ['OBJ-AML-CUSTOMER'] },
+  )
+  assert.equal(out2.businessWindow.to, '', '无记录时间不得声称时效')
+  // fresh 门生效：to 非法 → dataBasis.fresh=false（registry 判定）
+  const root = mkdtempSync(join(tmpdir(), 'dsh-onto-inv6-'))
+  const reg = new DataSourceRegistry()
+  reg.register('SRC-INV-6', noTime)
+  try {
+    const res = await reg.fetch({
+      sourceId: 'SRC-INV-6',
+      query: {},
+      tenant: 't',
+      root,
+      now: () => new Date('2026-11-16T00:00:00Z'),
+    })
+    assert.equal(res.dataBasis.fresh, false, 'businessWindow.to 空 → fresh=false（时效不可证）')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

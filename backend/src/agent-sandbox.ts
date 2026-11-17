@@ -165,7 +165,9 @@ export function toolSandboxDecision(toolName: string, presetId: PresetIdentity |
  * - 解析成功即按会话缓存；preset 服务异常**或临时缺席**时回退缓存——
  *   已知受控身份不丢失，不把受控专家退化为标准会话；
  * - 从未解析成功且服务不可用（缺席/异常）→ {@link UNRESOLVED_PRESET}（身份不可确认，
- *   fail-closed 收口危险工具；不缓存哨兵，容许晚注册后正常解析）。
+ *   fail-closed 收口危险工具；不缓存哨兵，容许晚注册后正常解析）；
+ * - **会话缺失（agent.session 缺失/为 null）→ 同样 {@link UNRESOLVED_PRESET}**：无会话对象
+ *   无从向 preset 服务核对身份，不得当「已确认无 preset」放行全工具面（fail-closed）。
  */
 export function createPresetResolver(
   getService: () => { presetForSession?: (session: unknown) => string | null } | undefined,
@@ -174,7 +176,9 @@ export function createPresetResolver(
   return (agent: unknown): PresetIdentity => {
     const session = (agent as { session?: unknown } | null | undefined)?.session
     const key = session !== null && typeof session === 'object' ? session : null
-    if (session === undefined || session === null) return null
+    // 会话缺失 ≠ 已确认无 preset（M0-A fail-closed）：没有会话对象就无法向 preset 服务核对身份，
+    // 不得按「标准会话」放行受控工具面——身份不可确认一律走 UNRESOLVED_PRESET 收口。
+    if (session === undefined || session === null) return UNRESOLVED_PRESET
     const cachedOrUnresolved = (): PresetIdentity =>
       key !== null && known.has(key) ? (known.get(key) as string | null) : UNRESOLVED_PRESET
     try {

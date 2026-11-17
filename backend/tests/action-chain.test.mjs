@@ -27,7 +27,9 @@ import {
   readToolContracts,
   checkGrant,
 } from '../dist/agent-grants.js'
-import { derivePackage } from '@dsh-onto/core'
+import { buildRunRecord, derivePackage, saveRunRecord } from '@dsh-onto/core'
+import { actionStoreFor } from '../dist/action-store.js'
+import { businessPolicy } from '../dist/business-policy.js'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_SRC = join(REPO, 'packages', 'aml', '1.0.0')
@@ -91,6 +93,49 @@ function chainGuard(chain, { name, args, session }) {
 
 const SESSION = { id: 's-chain' }
 
+/** 合法部署身份（M1-C 六元组防线注入——工具参数自称无效，只认身份提供者）。 */
+const CHAIN_IDENTITY = {
+  userId: 'u-chain',
+  tenant: 'tenant-a',
+  roles: ['analyst'],
+  dataScope: { objectTypes: ['OBJ-AML-ACCOUNT', 'OBJ-AML-CUSTOMER', 'OBJ-AML-TXN'] },
+}
+
+/**
+ * 按新口径种 RunRecord：act 目标的实例存在性证据 = 运行台账候选对象Ref（数据面实例）。
+ * 工作区 ws.root = <chain.root>/dsh-onto/workspace。
+ */
+function seedChainRun(chain, runId, objectRefs) {
+  const wsRoot = join(chain.root, 'dsh-onto', 'workspace')
+  const result = {
+    scenarioId: 'SCN-AML-FIND-CLUES',
+    runId,
+    startedAt: '2026-01-01T00:00:00.000Z',
+    candidates: objectRefs.map((objectRef, i) => ({
+      candidateId: `CAND-${String(i + 1).padStart(3, '0')}`,
+      objectRef,
+      riskScore: 10,
+      hitRuleIds: [],
+      evidenceChains: [],
+      narrative: [],
+      pendingChecks: [],
+      pendingVerification: false,
+    })),
+    excluded: [],
+    humanReviewRequired: true,
+    reviewGate: { threshold: 60, required: true, requireReviewFor: [] },
+    ruleHitLog: [],
+    audit: { checks: [], forbiddenPhraseHits: [], passed: true },
+  }
+  saveRunRecord(wsRoot, buildRunRecord({
+    package: { name: 'aml-analysis', version: '1.0.0' },
+    dataset: { objects: [], relations: [], candidates: [] },
+    result,
+    redlines: [],
+  }))
+  return wsRoot
+}
+
 test('R3-1 顶层 onto 专家：定时创建/更新/删除均拒；只读查询与本体工具正常', () => {
   // 每个顶层专家 preset 各自实测（M0-A4：onto-aml / onto-tax / onto-med 实际注册链）
   for (const preset of ['onto-aml', 'onto-tax', 'onto-med']) {
@@ -141,8 +186,10 @@ test('R3-3 标准及无 preset 会话不受本体沙箱误伤', () => {
     presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
   })
   try {
+    // 注入合法会话（服务确认无 preset）：会话在场且经 preset 服务核对才是「已确认的标准/无 preset」
     const other = { id: 's-std' }
-    for (const session of [other, undefined]) {
+    const noPreset = { id: 's-nopreset' }
+    for (const session of [other, noPreset]) {
       for (const name of ['schedule_create', 'bash', 'write', 'frobnicate']) {
         assert.equal(
           chainGuard(chain, { name, args: {}, session }),
@@ -150,6 +197,28 @@ test('R3-3 标准及无 preset 会话不受本体沙箱误伤', () => {
           `标准/无 preset 会话 ${String(session?.id)} 的 ${name} 不受沙箱约束`,
         )
       }
+    }
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('R3-3b 会话缺失 fail-closed：无 session 不得当标准会话放行受控工具面', () => {
+  const chain = setupChain({
+    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
+  })
+  try {
+    // 会话缺失（agent 无 session / agent 缺席）→ 身份不可确认，受控面一律拒；只读/交互放行
+    for (const session of [undefined, null]) {
+      for (const name of ['schedule_create', 'bash', 'write', 'frobnicate', 'run_scenario']) {
+        const denial = chainGuard(chain, { name, args: {}, session })
+        assert.ok(
+          typeof denial === 'string' && denial.startsWith('TOOL_SANDBOX_DENIED'),
+          `会话缺失 ${String(session)} 的 ${name} 须 fail-closed 拒: ${String(denial)}`,
+        )
+      }
+      assert.equal(chainGuard(chain, { name: 'read', args: {}, session }), undefined, '只读照常')
+      assert.equal(chainGuard(chain, { name: 'ask_user_question', args: {}, session }), undefined, '人审交互照常')
     }
   } finally {
     chain.dispose()
@@ -370,6 +439,9 @@ test('R4-5 执行链：合法动作正常批准、执行、留痕；错误锚点
   const chain = setupChain({
     presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
   })
+  // M1-C 六元组防线生效（注入合法身份 + 数据面实例）：act 无身份一律拒——夹具按新口径种 RunRecord
+  businessPolicy.setIdentityProvider(() => CHAIN_IDENTITY)
+  seedChainRun(chain, 'run-chain0001', ['OBJ-AML-ACCOUNT:ACCT-001'])
   let connectorCalls = 0
   registerActionConnector({
     async execute() {
@@ -413,6 +485,7 @@ test('R4-5 执行链：合法动作正常批准、执行、留痕；错误锚点
     assert.equal(chain.approvalCount(), 1, '合法动作弹一次批准卡')
     assert.equal(connectorCalls, 1)
   } finally {
+    businessPolicy.setIdentityProvider(null)
     registerActionConnector(null)
     chain.dispose()
   }
@@ -423,6 +496,8 @@ test('R4-5 执行链：合法动作正常批准、执行、留痕；错误锚点
 
 test('B2-7 run_scenario sourceId 通道：服务端取数 + dataStatus；与 dataset 内联互斥', async () => {
   const chain = setupChain()
+  // M1-C 六元组防线生效：formal read 无身份一律拒——注入合法身份（防线生效证据）
+  businessPolicy.setIdentityProvider(() => CHAIN_IDENTITY)
   const { registerDataSourceForTest, clearDataSourcesForTest } = await import('../dist/data-sources.js')
   const example = JSON.parse(readFileSync(join(REPO, 'examples', 'aml-run.json'), 'utf8'))
   let fetchCalls = 0
@@ -472,7 +547,174 @@ test('B2-7 run_scenario sourceId 通道：服务端取数 + dataStatus；与 dat
       (e) => /未登记/.test(e.message),
     )
   } finally {
+    businessPolicy.setIdentityProvider(null)
     clearDataSourcesForTest()
+    chain.dispose()
+  }
+})
+
+/* ── D 包：record_review_decision 与 RunRecord 台账核对 + 复核人口径（item 7） ── */
+
+test('D-7 record_review_decision：runId/snapshotDigest/ruleFingerprint 台账核对，不匹配拒绝；reviewer=宿主用户 id', async () => {
+  const chain = setupChain({
+    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
+  })
+  // 注入合法身份（宿主用户 id → reviewer 绑定；这是防线生效前提）
+  businessPolicy.setIdentityProvider(() => ({
+    userId: 'u-host-1',
+    tenant: 'tenant-a',
+    roles: ['analyst'],
+    dataScope: { objectTypes: ['OBJ-AML-ACCOUNT', 'OBJ-AML-CUSTOMER'] },
+  }))
+  try {
+    // 种 RunRecord（数据面/规则面锚点）：ws.root = <chain.root>/dsh-onto/workspace
+    const wsRoot = join(chain.root, 'dsh-onto', 'workspace')
+    const result = {
+      scenarioId: 'SCN-AML-FIND-CLUES',
+      runId: 'run-dec00001',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      candidates: [],
+      excluded: [],
+      humanReviewRequired: true,
+      reviewGate: { threshold: 60, required: true, requireReviewFor: [] },
+      ruleHitLog: [{ ruleId: 'RULE-AML-01', candidateId: 'CAND-001', score: 10, ts: '2026-01-01T00:00:01.000Z' }],
+      audit: { checks: [], forbiddenPhraseHits: [], passed: true },
+    }
+    const rec = buildRunRecord({
+      package: { name: 'aml-analysis', version: '1.0.0' },
+      dataset: { objects: [], relations: [], candidates: [] },
+      result,
+      redlines: [],
+    })
+    saveRunRecord(wsRoot, rec)
+    const tool = chain.tools.get('record_review_decision')
+    assert.ok(tool, 'record_review_decision 须经真实注册面在场')
+    const okArgs = {
+      runId: 'run-dec00001',
+      candidateIds: ['CAND-001'],
+      snapshotDigest: rec.datasetDigest,
+      ruleFingerprint: 'aml-analysis@1.0.0',
+      decision: 'approved',
+      humanApproved: true,
+    }
+    // 1) 不存在的 runId → 拒（旧口径自报可立决定）
+    await assert.rejects(
+      () => tool.execute({ ...okArgs, runId: 'run-nope' }, { agent: { session: SESSION }, callId: 'd7a' }),
+      (e) => e.code === 'REVIEW_RUN_NOT_FOUND',
+    )
+    // 2) snapshotDigest 与运行数据面不符 → 拒
+    await assert.rejects(
+      () => tool.execute({ ...okArgs, snapshotDigest: 'deadbeef1234' }, { agent: { session: SESSION }, callId: 'd7b' }),
+      (e) => e.code === 'REVIEW_SNAPSHOT_MISMATCH',
+    )
+    // 3) ruleFingerprint 与运行规则面不符 → 拒
+    await assert.rejects(
+      () => tool.execute({ ...okArgs, ruleFingerprint: 'other@9.9.9' }, { agent: { session: SESSION }, callId: 'd7c' }),
+      (e) => e.code === 'REVIEW_RULE_MISMATCH',
+    )
+    // 4) 合法三元组 → 立决定；reviewer = 宿主用户 id（不是批准摘要 12 位）
+    const out = await tool.execute(okArgs, { agent: { session: SESSION }, callId: 'd7d' })
+    assert.equal(out.reviewer, 'host:u-host-1', 'reviewer 绑定宿主用户 id（不拿批准摘要冒充）')
+    assert.equal(out.decision, 'approved')
+    const dec = actionStoreFor(wsRoot).getDecision(out.decisionId)
+    assert.equal(dec.reviewer, 'host:u-host-1')
+    assert.equal(dec.runId, 'run-dec00001')
+    // 5) 复核人身份不可确认 → fail-closed 拒（不落决定）
+    businessPolicy.setIdentityProvider(null)
+    await assert.rejects(
+      () => tool.execute({ ...okArgs, runId: 'run-dec00001' }, { agent: { session: SESSION }, callId: 'd7e' }),
+      (e) => e.code === 'REVIEWER_UNCONFIRMED',
+    )
+  } finally {
+    businessPolicy.setIdentityProvider(null)
+    chain.dispose()
+  }
+})
+
+/* ── M1-C 六元组行为测试（经工具层：三查/角色/dataScope/身份 null 口径） ── */
+
+test('C6-1 三查各拒一次 + 角色不足 + dataScope 越界（经工具层，防线生效证据）', async () => {
+  const chain = setupChain({
+    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
+  })
+  seedChainRun(chain, 'run-auth00001', ['OBJ-AML-ACCOUNT:ACCT-001'])
+  try {
+    const run = chain.tools.get('run_scenario')
+    const act = chain.tools.get('execute_behavior_action')
+    const baseRun = { name: 'aml-analysis', version: '1.0.0', scenarioId: 'SCN-AML-FIND-CLUES' }
+    const actArgs = {
+      name: 'aml-analysis',
+      version: '1.0.0',
+      behaviorId: 'BHV-AML-TRANSFER',
+      objectRef: 'OBJ-AML-ACCOUNT:ACCT-001',
+      payload: { amount: 1 },
+      humanApproved: true,
+    }
+    businessPolicy.setIdentityProvider(() => CHAIN_IDENTITY)
+    // 检查一（类型存在）：dataset 对象类型不在包对象表 → 拒
+    await assert.rejects(
+      () => run.execute(
+        { ...baseRun, dataset: { objects: [{ id: 'X1', type: 'OBJ-GHOST', attrs: {} }], relations: [], candidates: [] } },
+        { agent: { session: SESSION }, callId: 'c6a' },
+      ),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /类型不存在/.test(e.message),
+    )
+    // 检查二（实例存在）：目标实例不在数据面（运行台账候选）→ 拒
+    await assert.rejects(
+      () => act.execute({ ...actArgs, objectRef: 'OBJ-AML-ACCOUNT:GHOST-1' }, { agent: { session: SESSION }, callId: 'c6b' }),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /实例不存在/.test(e.message),
+    )
+    // 检查三（有权操作）：act 需 analyst，viewer 拒
+    businessPolicy.setIdentityProvider(() => ({ ...CHAIN_IDENTITY, roles: ['viewer'] }))
+    await assert.rejects(
+      () => act.execute(actArgs, { agent: { session: SESSION }, callId: 'c6c' }),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /需要角色/.test(e.message),
+    )
+    // dataScope 越界：目标类型不在数据范围 → 拒
+    businessPolicy.setIdentityProvider(() => ({ ...CHAIN_IDENTITY, dataScope: { objectTypes: ['OBJ-AML-TXN'] } }))
+    await assert.rejects(
+      () => act.execute(actArgs, { agent: { session: SESSION }, callId: 'c6d' }),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /不在数据范围/.test(e.message),
+    )
+  } finally {
+    businessPolicy.setIdentityProvider(null)
+    chain.dispose()
+  }
+})
+
+test('C6-2 身份不可解析口径：act 拒、explore read 放行、formal read 拒', async () => {
+  const chain = setupChain({
+    presetForSession: (session) => (session === SESSION ? 'onto-aml' : null),
+  })
+  seedChainRun(chain, 'run-auth00002', ['OBJ-AML-ACCOUNT:ACCT-001'])
+  const example = JSON.parse(readFileSync(join(REPO, 'examples', 'aml-run.json'), 'utf8'))
+  try {
+    businessPolicy.setIdentityProvider(null) // 身份不可解析（可信宿主/认证服务缺席）
+    const run = chain.tools.get('run_scenario')
+    const act = chain.tools.get('execute_behavior_action')
+    const baseRun = { name: 'aml-analysis', version: '1.0.0', scenarioId: 'SCN-AML-FIND-CLUES' }
+    // act 一律拒（正式模式保持关闭）
+    await assert.rejects(
+      () => act.execute({
+        name: 'aml-analysis',
+        version: '1.0.0',
+        behaviorId: 'BHV-AML-TRANSFER',
+        objectRef: 'OBJ-AML-ACCOUNT:ACCT-001',
+        payload: { amount: 1 },
+        humanApproved: true,
+      }, { agent: { session: SESSION }, callId: 'c6e' }),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /身份不可确认/.test(e.message),
+    )
+    // explore read 放行（结果已有未核验降级轴）
+    const out = await run.execute({ ...baseRun, dataset: example }, { agent: { session: SESSION }, callId: 'c6f' })
+    assert.ok(out.candidates, 'explore read 无身份放行（未核验降级轴）')
+    // formal read 拒（正式模式保持关闭）
+    await assert.rejects(
+      () => run.execute({ ...baseRun, dataset: example, analysisMode: 'formal' }, { agent: { session: SESSION }, callId: 'c6g' }),
+      (e) => e.code === 'OBJECT_NOT_GRANTED' && /身份不可确认/.test(e.message),
+    )
+  } finally {
+    businessPolicy.setIdentityProvider(null)
     chain.dispose()
   }
 })

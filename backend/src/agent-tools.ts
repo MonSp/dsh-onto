@@ -56,6 +56,7 @@ import {
   type OntologyPackage,
   type RunArchive,
   type RunDiff,
+  type RunRecord,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SkeletonRecord,
@@ -114,11 +115,96 @@ import {
   validateActionIntent,
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
+import { businessPolicy, parseTargetRef, requireBizAuth, type ExistenceChecks } from './business-policy.js'
 import { resolveDataDir } from './services.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills.js'
 import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
+
+/**
+ * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
+ * 与 RunRecord 台账可核对，换规则后旧决定不得照常套用（ruleFingerprint 二选一口径之一）。
+ */
+export function ruleBasisDigest(rec: RunRecord): string {
+  return actionDigest({
+    action: 'review-rule-basis',
+    package: `${rec.package.name}@${rec.package.version}`,
+    ruleHitLog: [...rec.result.ruleHitLog]
+      .map((h) => ({ ruleId: h.ruleId, score: h.score }))
+      .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
+  })
+}
+
+/* ───────────────────────── M1-C 六元组接线（requireBizAuth） ───────────────────────── */
+
+/**
+ * 数据面授权收口（M1-C）：取数逐对象 read、候选之外的关系/行为读取逐引用 related-read。
+ * ExistenceChecks = 包对象表（pkg.objects）+ 数据面实例（dataset.objects）。
+ * analysisMode 透传：formal 读面无身份即拒（正式模式保持关闭），explore 读面无身份放行（未核验降级轴）。
+ */
+function gateDatasetAccess(
+  pkg: OntologyPackage,
+  dataset: RuntimeDataset,
+  analysisMode: 'formal' | 'explore',
+): void {
+  const types = new Set(pkg.objects.map((o) => o.id))
+  const byId = new Map(dataset.objects.map((o) => [o.id, o]))
+  const plane = new Set(dataset.objects.map((o) => `${o.type}:${o.id}`))
+  const checks: ExistenceChecks = {
+    typeExists: (t) => types.has(t),
+    instanceExists: (t, i) => plane.has(`${t}:${i}`),
+  }
+  for (const o of dataset.objects) {
+    requireBizAuth('read', { type: o.type, instance: o.id }, checks, { analysisMode })
+  }
+  for (const r of dataset.relations) {
+    for (const end of [r.from, r.to]) {
+      const o = byId.get(end)
+      // 端点不在数据面 → type 空串落类型存在性检查拒绝（fail-closed，不放行悬空引用）
+      requireBizAuth('related-read', { type: o?.type ?? '', instance: String(end) }, checks, { analysisMode })
+    }
+  }
+  for (const b of dataset.behaviors ?? []) {
+    for (const ref of [b.anchorRef, b.objectRef]) {
+      const s = String(ref)
+      const i = s.indexOf(':')
+      // ref 两形态：TYPE:instance 完整引用 / 裸实例 id（按数据面对象解析类型；解析不到 → 拒）
+      if (i > 0) {
+        requireBizAuth('related-read', { type: s.slice(0, i), instance: s.slice(i + 1) }, checks, { analysisMode })
+      } else {
+        const o = byId.get(s)
+        requireBizAuth('related-read', { type: o?.type ?? '', instance: s }, checks, { analysisMode })
+      }
+    }
+  }
+}
+
+/** 数据面实例面（act 目标的 ExistenceChecks.instanceExists 证据）：运行台账候选对象Ref 并集。 */
+function runPlaneInstances(root: string): Set<string> {
+  const refs = new Set<string>()
+  for (const rec of listRunRecords(root)) {
+    for (const c of rec.result.candidates ?? []) {
+      if (typeof c.objectRef === 'string' && c.objectRef !== '') refs.add(c.objectRef)
+    }
+  }
+  return refs
+}
+
+/**
+ * act 面 ExistenceChecks（包对象表 + 数据面实例）：类型 = 包内 O1 对象类型（无包时以数据面类型佐证）；
+ * 实例 = 运行台账候选对象Ref 并集（动作目标须是分析面可见实例）。对账面以动作台账记录本体补充为
+ * 存在性证据（执行时已过锚点/收权校验），仍过身份/角色/dataScope。
+ */
+function actChecks(pkgObjects: ReadonlySet<string> | null, plane: ReadonlySet<string>, selfRef?: string) {
+  return {
+    typeExists: (t: string) =>
+      (pkgObjects?.has(t) ?? false)
+      || [...plane].some((r) => r.startsWith(`${t}:`))
+      || (selfRef !== undefined && selfRef.startsWith(`${t}:`)),
+    instanceExists: (t: string, i: string) => plane.has(`${t}:${i}`) || selfRef === `${t}:${i}`,
+  }
+}
 
 /* ───────────────────────── 数据集双通道（S2.3） ───────────────────────── */
 
@@ -1857,6 +1943,8 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute((args: { limit?: number }) => {
+        // M1-C 六元组：运行历史（history）——身份/角色面（target=null 不查实例面）
+        requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
         const limitRaw = args.limit
         const limit =
           typeof limitRaw === 'number' && Number.isFinite(limitRaw) && limitRaw >= 1
@@ -2191,6 +2279,8 @@ export function apply(ctx: Context): void {
             )
           }
           const contracts = readToolContracts(versionDir)
+          // M1-C 六元组：取数（read）+ 候选外关系/行为读取（related-read）在收权/执行之前收口
+          gateDatasetAccess(pkg, dataset, analysisMode)
           assertDatasetGranted(dataset, contracts)
           const result = runScenario(versionDir, args.scenarioId, dataset, {
             ...(seedIds !== undefined ? { seedIds } : {}),
@@ -2256,6 +2346,8 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: { runIdA: string; runIdB: string }) => {
+          // M1-C 六元组：运行历史（history）——身份/角色面（target=null 不查实例面，authorize 同口径）
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
           const a = loadRunRecord(ws.root, args.runIdA)
           const b = loadRunRecord(ws.root, args.runIdB)
           const diff = compareRunRecords(a, b)
@@ -2323,6 +2415,8 @@ export function apply(ctx: Context): void {
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const contracts = readToolContracts(versionDir)
+          // M1-C 六元组：批量取数同口径（read + related-read；批量面仅 explore）
+          gateDatasetAccess(pkg, dataset, 'explore')
           assertDatasetGranted(dataset, contracts)
           const ids = resolveBatchIds(args.scenarioIds, pkg)
           const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids, seedIds })
@@ -2378,6 +2472,21 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: ExpandEntityArgs) => {
+          // M1-C 六元组：扩图（expand）——种子逐实例授权（包对象表 + 数据面实例；explore 读面口径）
+          const dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
+          const pkg = load(args.name, args.version)
+          const types = new Set(pkg.objects.map((o) => o.id))
+          const byId = new Map(dataset.objects.map((o) => [o.id, o]))
+          const plane = new Set(dataset.objects.map((o) => `${o.type}:${o.id}`))
+          for (const seed of ((args.seedIds ?? []) as unknown as string[])) {
+            const o = byId.get(String(seed))
+            requireBizAuth(
+              'expand',
+              { type: o?.type ?? '', instance: String(seed) },
+              { typeExists: (t) => types.has(t), instanceExists: (t, i) => plane.has(`${t}:${i}`) },
+              { analysisMode: 'explore' },
+            )
+          }
           const result = executeExpandEntity(args, { ws })
           return toolOut(enforceOutputPolicy(result, redlines(args)))
         },
@@ -2468,6 +2577,8 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: { runId: string }) => {
+          // M1-C 六元组：导出（export）——身份/角色面（target=null 不查实例面）
+          requireBizAuth('export', null, { typeExists: () => true, instanceExists: () => true })
           // 固定导出目录（S2.4）：不接受调用方路径，无路径面可攻击。
           const exported = exportRunArchive(ws.root, args.runId)
           const summary = exportSummaryOf(exported)
@@ -3312,6 +3423,13 @@ export function apply(ctx: Context): void {
           if (behavior === undefined) {
             throw new AgentToolError('INVALID_ARGS', `行为 ${args.behaviorId} 未在包内声明（O2 闭合）`)
           }
+          // M1-C 六元组：动作面（act）——权限判定在批准卡之前（批准卡不授予权限），
+          // 目标过包对象表 + 数据面实例（运行台账候选）三查/角色/dataScope
+          requireBizAuth(
+            'act',
+            parseTargetRef(args.objectRef),
+            actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(ws.root)),
+          )
           // R1/R6：占位互斥 → 批准卡（绑定包/契约/对象/载荷/连接器上下文）→ 连接器执行
           const res = await executeBehaviorAction({
             root: ws.root,
@@ -3378,8 +3496,16 @@ export function apply(ctx: Context): void {
           required: true,
           description: '本次决定覆盖的候选集合（JSON 字符串数组，如 ["CAND-001"]；approved 时即获准提案集合）',
         },
-        snapshotDigest: { type: 'string', required: true, description: '数据快照摘要（绑定数据面）' },
-        ruleFingerprint: { type: 'string', required: true, description: '本体/规则指纹（绑定规则面）' },
+        snapshotDigest: {
+          type: 'string',
+          required: true,
+          description: '数据快照摘要（绑定数据面）：须与 RunRecord 台账核对——填运行的 datasetDigest（完整或 ≥8 位前缀）',
+        },
+        ruleFingerprint: {
+          type: 'string',
+          required: true,
+          description: '本体/规则指纹（绑定规则面）：须与 RunRecord 台账核对——填 包名@版本 或运行规则基指纹',
+        },
         decision: {
           type: 'string',
           required: true,
@@ -3455,6 +3581,51 @@ export function apply(ctx: Context): void {
           if (args.decision !== 'approved' && args.decision !== 'rejected') {
             throw new AgentToolError('INVALID_ARGS', 'decision 必须是 approved / rejected')
           }
+          // 与 RunRecord 台账核对（D 包防伪造）：自报不核对 = 不存在的 run 也能立决定、
+          // 换数据/换规则后旧决定照常套用——runId 必须真实存在，snapshotDigest/ruleFingerprint
+          // 必须与运行台账一致（不匹配拒绝，不落决定）。
+          const runRec = (() => {
+            try {
+              return loadRunRecord(ws.root, args.runId)
+            } catch {
+              throw new AgentToolError(
+                'REVIEW_RUN_NOT_FOUND',
+                `运行 ${args.runId} 不存在于 RunRecord 台账——复核决定须绑定真实运行，不得对自报 run 立决定`,
+              )
+            }
+          })()
+          const snapshotOk =
+            args.snapshotDigest === runRec.datasetDigest
+            || (runRec.inputDigest !== undefined && args.snapshotDigest === runRec.inputDigest)
+            || (args.snapshotDigest.length >= 8
+              && (runRec.datasetDigest.startsWith(args.snapshotDigest)
+                || (runRec.inputDigest ?? '').startsWith(args.snapshotDigest)))
+          if (!snapshotOk) {
+            throw new AgentToolError(
+              'REVIEW_SNAPSHOT_MISMATCH',
+              `snapshotDigest 与运行 ${args.runId} 的数据快照不符（datasetDigest ${runRec.datasetDigest.slice(0, 12)}…）——`
+                + '换数据不可沿用自报摘要立决定',
+            )
+          }
+          const ruleOk =
+            args.ruleFingerprint === `${runRec.package.name}@${runRec.package.version}`
+            || args.ruleFingerprint === ruleBasisDigest(runRec)
+          if (!ruleOk) {
+            throw new AgentToolError(
+              'REVIEW_RULE_MISMATCH',
+              `ruleFingerprint 与运行 ${args.runId} 的规则面不符（期望 ${runRec.package.name}@${runRec.package.version} 或运行规则基指纹）——`
+                + '换规则不可沿用自报指纹立决定',
+            )
+          }
+          // 复核人 = 宿主用户 id（可信身份提供者；不收模型自称、不拿批准摘要冒充用户 id）
+          const reviewerId = businessPolicy.resolveIdentity()?.userId
+          if (typeof reviewerId !== 'string' || reviewerId === '') {
+            throw new AgentToolError(
+              'REVIEWER_UNCONFIRMED',
+              '复核人身份不可确认（可信宿主/业务认证服务缺席）——复核决定须绑定宿主用户 id（fail-closed），'
+                + '不以批准摘要/模型自称冒充复核人',
+            )
+          }
           const content = actionDigest({
             action: 'record_review_decision',
             runId: args.runId,
@@ -3475,8 +3646,9 @@ export function apply(ctx: Context): void {
             candidateIds: rawIds as string[],
             snapshotDigest: args.snapshotDigest,
             ruleFingerprint: args.ruleFingerprint,
-            // 复核人身份绑定宿主批准回执（可信面），不收模型自称
-            reviewer: `host:${grant.approvalDigest.slice(0, 12)}`,
+            // 复核人 = 宿主用户 id（BusinessIdentity.userId，宿主/部署断言）——与 action-store ReviewDecision
+            // 口径一致；不收模型自称、不拿批准摘要 12 位冒充用户 id
+            reviewer: `host:${reviewerId}`,
             decision: args.decision as 'approved' | 'rejected',
             ...(args.reason !== undefined ? { reason: args.reason } : {}),
           })
@@ -3578,6 +3750,12 @@ export function apply(ctx: Context): void {
             isGranted: (ref) =>
               checkGrant(readToolContracts(ws.versionDir(args.name, args.version)), ref) === undefined,
           })
+          // M1-C 六元组：动作面（act）——提案目标过包对象表 + 数据面实例（权限判定在人审/批准之前）
+          requireBizAuth(
+            'act',
+            parseTargetRef(args.objectRef),
+            actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(ws.root)),
+          )
           const proposal = actionStoreFor(ws.root).createProposal({
             decisionId: args.decisionId,
             runId: args.runId,
@@ -3657,6 +3835,13 @@ export function apply(ctx: Context): void {
           if (record === undefined) {
             throw new AgentToolError('INVALID_ARGS', `动作台账 ${args.actionId} 不存在`)
           }
+          // M1-C 六元组：对账（act）——身份/角色/dataScope；实例存在性以数据面 ∪ 台账记录本体为证据
+          //（记录执行时已过锚点/收权校验），仍不得跳过身份面
+          requireBizAuth(
+            'act',
+            parseTargetRef(record.objectRef),
+            actChecks(null, runPlaneInstances(ws.root), record.objectRef),
+          )
           await approve(exec, {
             toolName: 'reconcile_action',
             action: `人工对账 ${args.actionId}（${record.status}）`,

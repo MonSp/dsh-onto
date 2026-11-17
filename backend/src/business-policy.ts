@@ -161,6 +161,40 @@ export class BusinessPolicy {
 /** 服务端共享策略面（同 dataSources 模式；部署适配器接身份提供者）。 */
 export const businessPolicy = new BusinessPolicy()
 
+/**
+ * 业务授权入口门（六元组接线面）：可解析身份 → 全量 {@link authorize}（三查 + 角色 + dataScope），
+ * 拒绝抛 {@link AgentToolError} `OBJECT_NOT_GRANTED`（批准卡不是授予权限的工具——权限判定在批准之前）。
+ *
+ * WHY（身份不可解析口径）：act / export / history / formal-read 一律拒绝（正式模式保持关闭，
+ * 宿主拿不到可信业务身份时不以自由字符串替代身份集成）；explore 的 read / expand / related-read
+ * 放行——探索通道结果已有未核验降级轴（dataStatus=unverified/conditional、pendingVerification），
+ * 不冒充可信分析。`opts.analysisMode='formal'` 的读面视同 formal-read。
+ */
+export function requireBizAuth(
+  operation: BusinessOperation,
+  target: TargetRef | null,
+  checks: ExistenceChecks,
+  opts?: { analysisMode?: 'formal' | 'explore' },
+): void {
+  const identity = businessPolicy.resolveIdentity()
+  if (identity === null) {
+    const readFamily = operation === 'read' || operation === 'expand' || operation === 'related-read'
+    const formal = opts?.analysisMode === 'formal'
+    if (!readFamily || formal) {
+      throw new AgentToolError(
+        'OBJECT_NOT_GRANTED',
+        `业务身份不可确认（可信宿主/业务认证服务缺席）——${operation}${formal ? '（formal 正式模式）' : ''}`
+          + '一律拒绝（正式模式保持关闭）；explore 读面（read/expand/related-read）放行（结果带未核验降级轴）',
+      )
+    }
+    return
+  }
+  const denial = authorize(identity, operation, target, checks)
+  if (denial !== undefined) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', denial)
+  }
+}
+
 /** 解析 TYPE:instance 目标引用（授权判定入参；非法形态 → INVALID_ARGS）。 */
 export function parseTargetRef(objectRef: string): TargetRef {
   const i = objectRef.indexOf(':')

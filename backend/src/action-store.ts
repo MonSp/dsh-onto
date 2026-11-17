@@ -137,6 +137,21 @@ function shortId(prefix: string): string {
   return `${prefix}-${randomUUID().replace(/-/g, '').slice(0, 12)}`
 }
 
+/**
+ * 台账行 JSON 字段解析（R1 fail-closed）：损坏行抛 ACTION_LEDGER_CORRUPT（AgentToolError），
+ * 不裸抛 SyntaxError——损坏台账不得被当作「未执行」，也不得以原始解析异常冒充受控错误面。
+ */
+function parseRowJson(raw: unknown, rowId: string, field: string): unknown {
+  try {
+    return JSON.parse(raw as string)
+  } catch {
+    throw new AgentToolError(
+      'ACTION_LEDGER_CORRUPT',
+      `动作台账 ${rowId} 的 ${field} 无法解析（损坏行）——fail-closed，请人工核对（不自动重跑）`,
+    )
+  }
+}
+
 function rowToAction(row: Record<string, unknown>): StoredActionRecord {
   return {
     businessKey: row.business_key as string,
@@ -150,7 +165,7 @@ function rowToAction(row: Record<string, unknown>): StoredActionRecord {
     },
     behaviorId: row.behavior_id as string,
     objectRef: row.object_ref as string,
-    payload: JSON.parse(row.payload_json as string) as Record<string, unknown>,
+    payload: parseRowJson(row.payload_json, row.business_key as string, 'payload_json') as Record<string, unknown>,
     status: row.status as ActionRecord['status'],
     ...(row.phase !== null ? { phase: row.phase as ActionRecord['phase'] } : {}),
     ...(row.external_ref !== null ? { externalRef: row.external_ref as string } : {}),
@@ -172,7 +187,7 @@ function rowToDecision(row: Record<string, unknown>): ReviewDecision {
   return {
     decisionId: row.decision_id as string,
     runId: row.run_id as string,
-    candidateIds: JSON.parse(row.candidate_ids_json as string) as string[],
+    candidateIds: parseRowJson(row.candidate_ids_json, row.decision_id as string, 'candidate_ids_json') as string[],
     snapshotDigest: row.snapshot_digest as string,
     ruleFingerprint: row.rule_fingerprint as string,
     reviewer: row.reviewer as string,
@@ -191,7 +206,7 @@ function rowToProposal(row: Record<string, unknown>): ActionProposal {
     candidateId: row.candidate_id as string,
     behaviorId: row.behavior_id as string,
     objectRef: row.object_ref as string,
-    payload: JSON.parse(row.payload_json as string) as Record<string, unknown>,
+    payload: parseRowJson(row.payload_json, row.proposal_id as string, 'payload_json') as Record<string, unknown>,
     intentDigest: row.intent_digest as string,
     connectorId: row.connector_id as string,
     connectorEnv: row.connector_env as string,

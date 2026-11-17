@@ -49,8 +49,16 @@ export interface ApprovalGrant {
   approvedAt: string
 }
 
-/** 键序稳定的 canonical JSON（与 runstore 同口径：对象键排序，数组保序）。 */
+/**
+ * 键序稳定的 canonical JSON（与 runstore 同口径：对象键排序，数组保序）。
+ * undefined/NaN/±Infinity 用裸标记（JSON.stringify 永不产出的形态）与字面 null 区分——
+ * 摘要碰撞会让不同载荷共用同一批准凭证（凭证跨内容生效），故不可塌缩成 'null'。
+ */
 function canonicalJson(value: unknown): string {
+  if (value === undefined) return 'undefined'
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    return Number.isNaN(value) ? 'NaN' : value > 0 ? 'Infinity' : '-Infinity'
+  }
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   const rec = value as Record<string, unknown>

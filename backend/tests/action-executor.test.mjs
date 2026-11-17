@@ -20,10 +20,12 @@ import {
   loadActionRecord,
   legacyRecordPath,
   parseObjectRef,
+  reconcileActionRecord,
   registerActionConnector,
   setFormalActionEnabled,
   validateActionIntent,
 } from '../dist/action-executor.js'
+import { actionStoreFor, closeActionStore } from '../dist/action-store.js'
 import { isDangerousGeneralTool, isOntoPreset, toolSandboxDecision } from '../dist/agent-sandbox.js'
 
 const INTENT = { behaviorId: 'BHV-TST-X', objectRef: 'OBJ-TST-A:inst1', payload: { amount: 1 } }
@@ -468,6 +470,23 @@ test('R1-4 台账截断/非法 JSON/摘要不符：明确拒绝，连接器调�
       status: 'succeeded',
     }), 'utf8')
     await assert.rejects(() => executeBehaviorAction(input(root)), (e) => e.code === 'ACTION_LEDGER_CORRUPT')
+    // 载荷指纹不符（摘要不符补全）：键/上下文都在但 payload 被篡改 → intentDigest 重算不符 → fail-closed
+    writeFileSync(file, JSON.stringify({
+      actionId: 'act-x',
+      businessKey: key,
+      approvalContext: 'ctx',
+      connector: { id: 'billing', env: 'test' },
+      behaviorId: INTENT.behaviorId,
+      objectRef: INTENT.objectRef,
+      payload: { amount: 999 },
+      intentDigest: digestAction(INTENT),
+      status: 'succeeded',
+    }), 'utf8')
+    await assert.rejects(
+      () => executeBehaviorAction(input(root)),
+      (e) => e.code === 'ACTION_LEDGER_CORRUPT' && /指纹|摘要/.test(e.message),
+      'payload 与 intentDigest 不符 = 摘要不符，不得只验字段存在',
+    )
     assert.equal(calls, 0, '台账损坏不得当作未执行重跑')
   } finally {
     registerActionConnector(null)
@@ -572,6 +591,143 @@ test('R1-6 执行/补偿/补偿失败及补偿错误详情均可回查', async (
   } finally {
     registerActionConnector(null)
     rmSync(root3, { recursive: true, force: true })
+  }
+})
+
+test('R1-7 换连接器不得翻 unknown：回执只认台账记录的连接器（不一致保持 unknown）', async () => {
+  const root = mkRoot()
+  const identityA = { id: 'conn-a', env: 'test', kind: 'simulated' }
+  const store = actionStoreFor(root)
+  const base = {
+    actionId: 'act-swap',
+    businessKey: 'bk-swap',
+    approvalContext: 'ctx',
+    connector: identityA,
+    behaviorId: INTENT.behaviorId,
+    objectRef: INTENT.objectRef,
+    payload: INTENT.payload,
+    status: 'unknown',
+    error: '中断——效应不明',
+    approvalDigest: 'ap',
+    approvedAt: 't',
+    executedAt: 't',
+    intentDigest: digestAction(INTENT),
+  }
+  store.claim(base)
+  // 换连接器注册（B）：其 queryResult 声称「未执行」——若被采信会把 unknown 误翻 failed（人工重发 → 重复外部效应）
+  const connB = {
+    async execute() {
+      throw new Error('no')
+    },
+    async compensate() {},
+    async queryResult() {
+      return { state: 'not-executed' }
+    },
+  }
+  const connA = {
+    async execute() {
+      throw new Error('no')
+    },
+    async compensate() {},
+    async queryResult() {
+      return { state: 'not-executed' }
+    },
+  }
+  registerActionConnector(connB, { id: 'conn-b', env: 'test', kind: 'simulated' })
+  try {
+    const r1 = await reconcileActionRecord(root, 'bk-swap')
+    assert.equal(r1.record.status, 'unknown', '换连接器后不得把 unknown 翻成错误终态')
+    assert.match(r1.note ?? '', /连接器身份/, 'note 说明保持待核实的原因')
+    // 换回台账记录的连接器（A）：外部明确回执才允许定终态
+    registerActionConnector(connA, identityA)
+    const r2 = await reconcileActionRecord(root, 'bk-swap')
+    assert.equal(r2.record.status, 'failed', '原连接器明确回执（not-executed）→ 定终态')
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('R1-8 执行成功后 settle CAS 输给并发恢复方：重读台账如实返回，不报 ACTION_LEDGER_CONFLICT', async () => {
+  const root = mkRoot()
+  registerActionConnector({
+    async execute(_i, _a, key) {
+      // 确定性模拟并发恢复方：连接器执行期间抢先把台账推进到成功终态（CAS 版本领先）
+      const store = actionStoreFor(root)
+      const cur = store.load(key)
+      store.settle(key, cur.version, { ...cur, status: 'succeeded', externalRef: 'ext-concurrent' })
+      return { externalRef: 'ext-winner' }
+    },
+    async compensate() {},
+  }, { id: 'billing', env: 'test', kind: 'simulated' })
+  try {
+    const res = await executeBehaviorAction(input(root))
+    assert.equal(res.record.status, 'succeeded', '外部已成功——不得报成冲突/unknown')
+    assert.equal(res.record.externalRef, 'ext-concurrent', '按并发恢复方落的台账如实返回')
+    assert.equal(res.replayed, true)
+    assert.match(res.note ?? '', /并发恢复方/)
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('R6-7 提案重载验证：错连接器（connectorId/env 不符）不可套用', async () => {
+  const root = mkRoot()
+  const store = actionStoreFor(root)
+  const dec = store.createDecision({
+    runId: 'run-x',
+    candidateIds: ['CAND-001'],
+    snapshotDigest: 'snap',
+    ruleFingerprint: 'rule',
+    reviewer: 'host:u1',
+    decision: 'approved',
+  })
+  const proposal = store.createProposal({
+    decisionId: dec.decisionId,
+    runId: 'run-x',
+    candidateId: 'CAND-001',
+    behaviorId: INTENT.behaviorId,
+    objectRef: INTENT.objectRef,
+    payload: INTENT.payload,
+    intentDigest: digestAction(INTENT),
+    connectorId: 'sim-conn',
+    connectorEnv: 'local-sim',
+  })
+  let calls = 0
+  // 错连接器（formal 接管后拿 simulated 提案套用——须被拒）
+  registerActionConnector({
+    async execute() {
+      calls++
+      return { externalRef: 'x' }
+    },
+    async compensate() {},
+  }, { id: 'formal-conn', env: 'prod', kind: 'simulated' })
+  try {
+    await assert.rejects(
+      () => executeBehaviorAction(input(root, { proposalId: proposal.proposalId })),
+      (e) => e.code === 'PROPOSAL_CONNECTOR_MISMATCH',
+      '提案绑定的连接器与执行连接器不一致须拒绝',
+    )
+    assert.equal(calls, 0, '错连接器零派发')
+    assert.equal(store.getProposal(proposal.proposalId).status, 'pending', '拒绝不得消费提案')
+    // 连接器一致放行
+    registerActionConnector({
+      async execute() {
+        calls++
+        return { externalRef: 'ext-ok' }
+      },
+      async compensate() {},
+    }, { id: 'sim-conn', env: 'local-sim', kind: 'simulated' })
+    const res = await executeBehaviorAction(input(root, { proposalId: proposal.proposalId }))
+    assert.equal(res.record.status, 'succeeded')
+    assert.equal(calls, 1)
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

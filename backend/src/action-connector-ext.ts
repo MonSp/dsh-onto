@@ -5,7 +5,9 @@
  * 语义对齐：
  * - externalRef 恒来自外部回执（EXT-TKT-*），不在本进程伪造；
  * - 超时/网络失败 → 效应不明（对账口径）；受理前拒/鉴权失败/业务冲突 → 无效应；
- * - queryResult：外部回 `unknown`（未见该键）时用外部审计面收窄——审计零记录 = 确认未执行；
+ * - queryResult：S7 三态——只有外部系统明确回执（succeeded 带回执 / not-executed）才能定终态；
+ *   查无/未见键一律保持 unknown（待人工对账）——不得用审计窗口「查不到」收窄成 not-executed
+ *   （分页截断/并发冲刷会把「效应不明」误判为「未执行」，人工重发 → 重复外部效应）；
  * - kind 由部署配置：演练为 simulated；真实 F2 验收用 formal（受正式动作总开关约束）。
  * @module @dsh-onto/backend/action-connector-ext
  */
@@ -139,15 +141,10 @@ export function createExtApiConnector(opts: ExtApiConnectorOptions): ActionConne
         return { state: 'succeeded' as const, externalRef: out.body.externalRef }
       }
       if (out.body.state === 'not-executed') return { state: 'not-executed' as const }
-      // 外部对未见键回 unknown：用外部审计面收窄——审计零记录 = 确认从未受理
-      try {
-        const audit = await request(`/api/v1/audit/operations?limit=200`, { method: 'GET' })
-        const ops = Array.isArray(audit.body.items) ? (audit.body.items as Array<Record<string, unknown>>) : []
-        const seen = ops.some((o) => o.idempotencyKey === idempotencyKey || o.operationId === idempotencyKey)
-        return seen ? { state: 'unknown' as const } : { state: 'not-executed' as const }
-      } catch {
-        return { state: 'unknown' as const }
-      }
+      // 查无/未见键 → 保持 unknown（S7 三态，待人工对账）：只有外部系统明确回执才能定终态。
+      // 禁回退「审计窗口收窄」（audit/operations?limit=200 查不到即断言 not-executed）——
+      // 分页截断/并发冲刷会把「效应不明」误判为「未执行」，人工重发 → 重复外部效应（fail-open）。
+      return { state: 'unknown' as const }
     },
   }
 }

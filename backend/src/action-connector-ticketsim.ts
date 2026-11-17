@@ -31,6 +31,7 @@ export function createTicketSimConnector(opts: TicketSimConnectorOptions): Actio
     try {
       res = await fetchImpl(`${baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(requestTimeoutMs) })
     } catch (e) {
+      // 双副本之一：mock-services/ticket-sim/connector.mjs 有同一处理（其头注释指回本文件），改动须两处同步。
       throw new Error(`ticket-sim 请求失败（效应不明，须对账）：${e instanceof Error ? e.message : String(e)}`)
     }
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>

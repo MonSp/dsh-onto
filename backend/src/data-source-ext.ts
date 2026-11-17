@@ -27,10 +27,40 @@ export interface ExtDataConnectorOptions {
   relationTypes?: { holds: string; inbound: string }
   /** 单次 fetch 最大页数（防失控；触顶即 complete=false）。 */
   maxPages?: number
+  /**
+   * 连接器性质（M0-A 口径，data-sources.ts `nature` 语义）：`simulated` 本地/测试闭环、
+   * `formal` 真实业务来源。缺省 simulated——测试 API 不得自称 business-source
+   * （模拟来源即使 formal 计算通过也不能调用真实业务动作）。
+   */
+  kind?: 'dryrun' | 'simulated' | 'formal'
 }
 
 const DEFAULT_TYPE_MAP = { customers: 'OBJ-AML-CUSTOMER', accounts: 'OBJ-AML-ACCOUNT', txns: 'OBJ-AML-TXN' }
 const DEFAULT_REL_TYPES = { holds: 'REL-AML-HOLDS', inbound: 'REL-AML-INBOUND' }
+
+/** 记录时间字段识别（键名启发：At/Time/Date/ts 结尾，或常见时间键）。 */
+const TIME_KEY_RE = /(?:^|_)(?:at|ts|time|date|timestamp|datetime|occurredat|createdat|updatedat|lastupdated|occurred)$|(?:At|Time|Date|Ts|Timestamp|Datetime|On)$/
+
+/**
+ * 记录时间（毫秒时间戳）：扫描 attrs 里的时间字段——ISO 串或数字 epoch。
+ * 取不到 → undefined（业务窗口不以取数时刻冒充记录时间）。
+ */
+function recordTimeMs(attrs: Record<string, unknown>): number | undefined {
+  let best: number | undefined
+  for (const [k, v] of Object.entries(attrs)) {
+    if (!TIME_KEY_RE.test(k)) continue
+    let ms: number | undefined
+    if (typeof v === 'string' && v !== '') {
+      const p = Date.parse(v)
+      if (Number.isFinite(p)) ms = p
+    } else if (typeof v === 'number' && Number.isFinite(v)) {
+      // 数字 epoch：秒/毫秒启发（>1e12 视为毫秒）
+      ms = v > 1e12 ? v : v * 1000
+    }
+    if (ms !== undefined && (best === undefined || ms > best)) best = ms
+  }
+  return best
+}
 
 export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConnector {
   const baseUrl = opts.baseUrl.trim().replace(/\/$/, '')
@@ -106,7 +136,9 @@ export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConne
 
   return {
     version: 'ext-data-1.0.0',
-    nature: 'business-source',
+    // 来源性质按适配器 kind 标注（与 data-sources.ts 口径一致）：simulated 测试 API
+    // 不得标 business-source（模拟来源即使 formal 计算通过也不能调用真实业务动作）。
+    nature: opts.kind === 'formal' ? 'business-source' : 'simulated',
     async fetch(query: DataQuery, scope): Promise<ConnectorFetchOutput> {
       const wanted = query.objectTypes && query.objectTypes.length > 0
         ? query.objectTypes
@@ -116,7 +148,6 @@ export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConne
       const objects: RuntimeObjectInstance[] = []
       const relations: RuntimeRelationInstance[] = []
       let complete = true
-      let fetchedAt = new Date().toISOString()
 
       if (need(typeMap.customers)) {
         const r = await fetchAll('customers')
@@ -172,15 +203,38 @@ export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConne
         }
       }
 
+      // businessWindow 按记录时间计算真实窗口（不是查询回显）：窗外记录剔除，
+      // 窗口 = 存活记录的记录时间 [min, max]。无记录时间无法证明时效 → to 留空
+      //（data-sources 侧 Date.parse 失败 → fresh=false），不再缺省 to=取数时刻使 fresh 恒真。
+      const winFrom = query.timeWindow !== undefined ? Date.parse(query.timeWindow.from) : NaN
+      const winTo = query.timeWindow !== undefined ? Date.parse(query.timeWindow.to) : NaN
+      const hasWin = query.timeWindow !== undefined && Number.isFinite(winFrom) && Number.isFinite(winTo)
+      const kept: RuntimeObjectInstance[] = []
+      const recordTimes: number[] = []
+      for (const o of objects) {
+        const ms = recordTimeMs(o.attrs)
+        if (hasWin && ms !== undefined && (ms < winFrom || ms > winTo)) continue // 按记录时间过滤
+        if (ms !== undefined) recordTimes.push(ms)
+        kept.push(o)
+      }
+      const keptIds = new Set(kept.map((o) => o.id))
+      const keptRelations = relations.filter((r) => keptIds.has(r.from) && keptIds.has(r.to))
+      const businessWindow = recordTimes.length > 0
+        ? {
+            from: new Date(Math.min(...recordTimes)).toISOString(),
+            to: new Date(Math.max(...recordTimes)).toISOString(),
+          }
+        : {
+            from: query.timeWindow?.from ?? '1970-01-01T00:00:00.000Z',
+            to: '', // 无记录时间不声称时效（fresh 门生效，fail-closed）
+          }
+
       return {
-        dataset: { objects, relations, candidates: [], provenance: 'connector' },
+        dataset: { objects: kept, relations: keptRelations, candidates: [], provenance: 'connector' },
         complete,
         paged: true,
         ...(complete ? {} : { truncatedReason: '外部取数分页不全或触顶截断（complete=false）' }),
-        businessWindow: {
-          from: query.timeWindow?.from ?? '1970-01-01T00:00:00.000Z',
-          to: query.timeWindow?.to ?? fetchedAt,
-        },
+        businessWindow,
       }
     },
   }

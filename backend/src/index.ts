@@ -17,6 +17,7 @@ import { registerTicketSimConnector } from './action-connector-ticketsim.js'
 import { registerExtApiConnector } from './action-connector-ext.js'
 import { createExtDataConnector } from './data-source-ext.js'
 import { dataSources } from './data-sources.js'
+import { businessPolicy } from './business-policy.js'
 import { setFormalActionEnabled } from './action-executor.js'
 
 export * from './services.js'
@@ -62,10 +63,32 @@ export function apply(ctx: Context): void {
       ...auth,
       identity: { id: 'ext-api', env: 'test', kind: extKind },
     })
-    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, ...auth }))
+    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, ...auth, kind: extKind }))
     console.log('[dsh-onto] ext-api connector + data source registered (kind=' + extKind
       + ', auth=' + (hasCreds ? 'client_credentials' : 'static') + '):', extApiUrl)
   }
+  // M1-C 六元组身份提供者（部署面）：userId/tenant/roles/dataScope 只认部署断言（环境变量），
+  // 不认工具参数自称；拿不到完整部署断言 → null（正式模式保持关闭，不以自由字符串替代身份集成）。
+  // roles 只认部署断言（DSH_BIZ_ROLES）——模型/工具参数自称的角色一律无效。
+  businessPolicy.setIdentityProvider(() => {
+    const userId = process.env.DSH_BIZ_USER_ID
+    const tenant = process.env.DSH_BIZ_TENANT
+    const roles = (process.env.DSH_BIZ_ROLES ?? '').split(',').map((r) => r.trim()).filter((r) => r !== '')
+    if (typeof userId !== 'string' || userId === '' || typeof tenant !== 'string' || tenant === '' || roles.length === 0) {
+      return null
+    }
+    const types = (process.env.DSH_BIZ_SCOPE_TYPES ?? '').split(',').map((t) => t.trim()).filter((t) => t !== '')
+    const filter = process.env.DSH_BIZ_SCOPE_FILTER
+    return {
+      userId,
+      tenant,
+      roles,
+      dataScope: {
+        objectTypes: types,
+        ...(typeof filter === 'string' && filter !== '' ? { instanceFilter: filter } : {}),
+      },
+    }
+  })
   // 正式动作总开关（部署面）：DSH_FORMAL_ACTION_ENABLED=1 由用户在部署侧显式开启——
   // AI/工具面不得代开（方案红线）。缺省关闭：formal 动作一律 FORMAL_ACTION_DISABLED（零外部效应）。
   if (process.env.DSH_FORMAL_ACTION_ENABLED === '1') {

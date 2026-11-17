@@ -79,7 +79,7 @@ test('F2-2 受理后失败带单号 → 部分效应错误（可补偿）；网�
   )
 })
 
-test('F2-3 queryResult：命中带回执；未见键用审计收窄（零记录=not-executed）', async () => {
+test('F2-3 queryResult：命中带回执；查无保持 unknown（S7 三态，不收窄成 not-executed）', async () => {
   const hit = createExtApiConnector({
     baseUrl: 'http://x',
     token: 't',
@@ -100,7 +100,7 @@ test('F2-3 queryResult：命中带回执；未见键用审计收窄（零记录=
     }),
   })
   const r2 = await miss.queryResult(INTENT, 'key-gone')
-  assert.equal(r2.state, 'not-executed', '审计零记录 = 确认从未受理')
+  assert.equal(r2.state, 'unknown', '查无 ≠ 确认未执行——保持 unknown 待人工对账（审计零记录不得翻 not-executed）')
 
   const seen = createExtApiConnector({
     baseUrl: 'http://x',
@@ -112,6 +112,30 @@ test('F2-3 queryResult：命中带回执；未见键用审计收窄（零记录=
   })
   const r3 = await seen.queryResult(INTENT, 'key-mid')
   assert.equal(r3.state, 'unknown', '审计有记录但无回执 → 保持效应不明')
+
+  // 仅外部明确回执（not-executed）可定终态
+  const explicit = createExtApiConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: stubFetch(async () => jsonRes(200, { state: 'not-executed' })),
+  })
+  const r4 = await explicit.queryResult(INTENT, 'key-none')
+  assert.equal(r4.state, 'not-executed', '外部明确回执 not-executed 才定终态')
+})
+
+test('F2-3b 截断窗口不得翻 unknown：审计窗口查无（分页截断/并发冲刷）≠未执行', async () => {
+  // 模拟被截断的审计窗口：200 条里不含本键（分页截断会漏掉旧记录；并发冲刷同理）
+  const items = Array.from({ length: 200 }, (_, i) => ({ idempotencyKey: `other-${i}`, result: 'accepted' }))
+  const truncated = createExtApiConnector({
+    baseUrl: 'http://x',
+    token: 't',
+    fetchImpl: stubFetch(async (url) => {
+      if (url.includes('audit')) return jsonRes(200, { items })
+      return jsonRes(200, { state: 'unknown' })
+    }),
+  })
+  const r = await truncated.queryResult(INTENT, 'key-buried')
+  assert.equal(r.state, 'unknown', '截断窗口查无不得把 unknown 翻成 not-executed（人工重发会重复外部效应）')
 })
 
 test('F2-4 取数映射与完整性：对象/关系映射、分页循环、complete=false 如实上报', async () => {
