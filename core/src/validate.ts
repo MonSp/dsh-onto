@@ -189,13 +189,28 @@ export function validatePackage(
           if (!['string', 'int', 'float', 'bool', 'date', 'ref'].includes(f.type)) {
             err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} 类型非法: ${String(f.type)}`)
           }
+          if (typeof f.required !== 'boolean') {
+            err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} required 须为布尔: ${String(f.required)}`)
+          }
           if (f.type === 'ref') {
+            if (!Array.isArray(f.refTypes) || f.refTypes.length === 0) {
+              err('ACTION_CONTRACT_INVALID', where, `ref 字段 ${f.name} 须声明非空 refTypes（允许的对象类型）`)
+            }
             for (const rt of f.refTypes ?? []) {
               if (!resolved(rt)) err('REF_UNCLOSED', where, `字段 ${f.name} refTypes 引用未闭合: ${rt}`)
             }
           }
-          if (f.range !== undefined && f.type !== 'int' && f.type !== 'float') {
-            err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} 仅 int/float 可有 range`)
+          if (f.range !== undefined) {
+            if (f.type !== 'int' && f.type !== 'float') {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} 仅 int/float 可有 range`)
+            }
+            const { min, max } = f.range
+            if ((min !== undefined && (typeof min !== 'number' || !Number.isFinite(min)))
+              || (max !== undefined && (typeof max !== 'number' || !Number.isFinite(max)))) {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} range 须为有限数值`)
+            } else if (typeof min === 'number' && typeof max === 'number' && min > max) {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} range min(${min}) > max(${max})`)
+            }
           }
         }
       }
@@ -217,6 +232,8 @@ export function validatePackage(
       }
       if (!Array.isArray(ac.requiredRoles) || ac.requiredRoles.length === 0) {
         err('ACTION_CONTRACT_INVALID', where, 'requiredRoles 须为非空数组（所需业务角色）')
+      } else if (ac.requiredRoles.some((r) => typeof r !== 'string' || r === '')) {
+        err('ACTION_CONTRACT_INVALID', where, 'requiredRoles 元素须为非空字符串')
       }
       if (
         typeof ac.connector?.capability !== 'string' || ac.connector.capability === ''

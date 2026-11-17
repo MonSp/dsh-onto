@@ -590,3 +590,100 @@ test('T2.2-2 人审屏障：其后步骤不自动执行，reviewBarrier 留痕�
     rmWorkspace(root)
   }
 })
+
+test('T2.2-3 屏障后 AUDIT_CHECK 不计 skipped（审计是恒执行的核验，非未执行动作）', () => {
+  const base = minimalPkg()
+  const sc = base.scenarios[0]
+  const pkg2 = minimalPkg({
+    scenarios: [{
+      ...sc,
+      pipeline: [
+        { stepId: 's1', stepType: 'DATA_INGEST' },
+        { stepId: 's3', stepType: 'RULE_EVALUATE', order: 'before-scoring' },
+        { stepId: 's4', stepType: 'RULE_EVALUATE' },
+        { stepId: 's7', stepType: 'HUMAN_REVIEW' },
+        { stepId: 's8', stepType: 'AUDIT_CHECK' },
+        { stepId: 's9', stepType: 'SKILL_RUN', skillRefs: ['SKL-TST-N'] },
+      ],
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg2)
+    derivePackage(dir)
+    const result = runScenario(dir, 'SCN-TST-1', {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.5 }, tags: [] }],
+    })
+    // AUDIT_CHECK（s8）恒执行，不计 skipped；只有 SKILL_RUN（s9）真正未执行
+    assert.deepEqual(result.reviewBarrier, { stepId: 's7', skipped: ['s9'] })
+    assert.ok(result.audit.checks.length > 0, '审计仍随输出装配执行')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T1.4 禁语扫描面含 prep.featureOverrides（调用方字符串不得绕过红线）', () => {
+  const base = minimalPkg()
+  const pkg = minimalPkg({
+    scoreRules: [{ ...base.scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+    scenarios: [{
+      ...base.scenarios[0],
+      prep: { features: true },
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg)
+    derivePackage(dir)
+    // 调用方预置值带禁语、被对象事实覆盖 → featureOverrides.caller 进扫描面
+    const result = runScenario(dir, 'SCN-TST-1', {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x', f1: 1 } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: '认定违规' }, tags: [] }],
+    })
+    assert.equal(result.prep?.featureOverrides?.length, 1, JSON.stringify(result.prep))
+    assert.ok(
+      result.audit.forbiddenPhraseHits.some((h) => h.phrase === '认定违规' && h.where.includes('prep')),
+      JSON.stringify(result.audit.forbiddenPhraseHits),
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('T1.5 待补数备注进禁语扫描面（备注先上墙再扫描，不留绕过口）', () => {
+  const base = minimalPkg()
+  const pkg = minimalPkg({
+    scoreRules: [{ ...base.scoreRules[0], featureSources: { f1: 'OBJ-TST-A' } }],
+    scenarios: [{
+      ...base.scenarios[0],
+      outputContract: { ...base.scenarios[0].outputContract, forbiddenPhrases: ['依据不足'] },
+    }],
+  })
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePackage(dir, pkg)
+    derivePackage(dir)
+    // formal 缺依据 → 触发「正式分析依据不足…」备注；包把「依据不足」列为禁语 → 须命中
+    const result = runScenario(dir, 'SCN-TST-1', {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 1 }, tags: [] }],
+    }, {
+      analysisMode: 'formal',
+      dataBasis: { nature: 'simulated', complete: true, fresh: true, snapshotId: 'snap-1', sourceId: 'SRC-TST-1' },
+    })
+    assert.equal(result.dataStatus, 'insufficient')
+    assert.ok(
+      result.audit.forbiddenPhraseHits.some((h) => h.phrase === '依据不足'),
+      JSON.stringify(result.audit.forbiddenPhraseHits),
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})

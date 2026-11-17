@@ -260,15 +260,24 @@ export function runAudit(input: AuditInput): AuditOutcome {
     const problems: string[] = []
     const unverified = new Map<string, number>()
     const external = new Map<string, number>()
+    const absent = new Map<string, number>()
     for (const cand of input.dataset.candidates) {
       const obj = objectsById.get(cand.objectRef)
-      for (const [key, val] of Object.entries(cand.features)) {
+      // 键集 = features 现存键 ∪ 来源记录键 ∪ 本轮使用键——formal 剔除的键只在 provenance
+      // 留痕、整体缺失的键两处皆无：只遍历 features 键集会漏掉而假报「复算通过」（评审 P1/P2）
+      const keys = new Set(Object.keys(cand.features))
+      for (const r of input.featureProvenance ?? []) {
+        if (r.candidateId === cand.candidateId) keys.add(r.key)
+      }
+      if (used !== null) for (const k of used) keys.add(k)
+      for (const key of keys) {
         if (used !== null && !used.has(key)) continue
+        const val = cand.features[key]
         const targets = sources.get(key)
         const fact =
           obj !== undefined && targets !== undefined && targets.has(obj.type) ? obj.attrs?.[key] : undefined
-        if (typeof fact === 'number' || typeof fact === 'string') {
-          if (fact !== val) problems.push(`候选 ${cand.candidateId} 特征 ${key} 与对象事实不符`)
+        if (val !== undefined && (typeof fact === 'number' || typeof fact === 'string') && fact !== val) {
+          problems.push(`候选 ${cand.candidateId} 特征 ${key} 与对象事实不符`)
         }
         const rec = prov.get(`${cand.candidateId}|${key}`)
         if (rec !== undefined) {
@@ -276,6 +285,9 @@ export function runAudit(input: AuditInput): AuditOutcome {
             const bag = rec.declared ? unverified : external
             bag.set(key, (bag.get(key) ?? 0) + 1)
           }
+        } else if (val === undefined) {
+          // 使用面要求而值/来源记录两缺 = 必需特征缺失（缺事实不得显示复算通过）
+          absent.set(key, (absent.get(key) ?? 0) + 1)
         } else if (typeof fact !== 'number' && typeof fact !== 'string') {
           // 无来源记录（runAudit 直调兜底）：按声明契约区分伪装面与旧输入面
           const bag = targets !== undefined ? unverified : external
@@ -291,19 +303,22 @@ export function runAudit(input: AuditInput): AuditOutcome {
     }
     const unverifiedNote = summarize(unverified)
     const externalNote = summarize(external)
+    const absentNote = summarize(absent)
     checks.push({
       check: 'FEATURE_RECOMPUTED',
-      closed: problems.length === 0 && unverified.size === 0,
-      // 契约缺事实/来源未声明是数据依据提示轴（同 DATA_TRUST）：不阻断本数据集三层闭合，
-      // 但绝不显示「复算通过」；与对象事实不符才是篡改（阻断）。
-      blocking: problems.length > 0 ? undefined : false,
+      closed: problems.length === 0 && unverified.size === 0 && absent.size === 0,
+      // 契约缺事实/来源未声明/必需特征缺失是数据依据提示轴（同 DATA_TRUST）：不阻断本数据集
+      // 三层闭合，但绝不显示「复算通过」；与对象事实不符才是篡改（阻断）。
+      // blocking 显式布尔：true=阻断（篡改），false=提示轴——不用 undefined 表默认阻断。
+      blocking: problems.length > 0,
       detail:
-        problems.length === 0 && unverifiedNote === '' && externalNote === ''
+        problems.length === 0 && unverifiedNote === '' && externalNote === '' && absentNote === ''
           ? '特征均可由对象事实/合法配方复算'
           : [
               problems.length === 0 ? '' : problems.join('；'),
               unverifiedNote === '' ? '' : `声明契约缺事实（不可复算）: ${unverifiedNote}`,
               externalNote === '' ? '' : `外部输入特征（来源未声明，不参与复算）: ${externalNote}`,
+              absentNote === '' ? '' : `必需特征缺失（无值无来源记录，不可复算）: ${absentNote}`,
             ]
               .filter(Boolean)
               .join('；'),

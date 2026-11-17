@@ -249,3 +249,38 @@ test('R5-7 deriveFeatures：来源状态含实际输入与计算条件；未核�
   assert.equal(skipRec?.source, 'unverified-caller')
   assert.equal(skipRec?.declared, true)
 })
+
+test('R5-8 正式剔除后 FEATURE_RECOMPUTED 须按来源记录全集计数（不得假报「复算通过」）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePkg(dir, pkgWithF1())
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 1 }, tags: [] }],
+    }
+    const result = runScenario(dir, 'SCN-TST-1', dataset, { analysisMode: 'formal' })
+    // f1 已被 formal 剔除（不入分）——审计仍须按 provenance 记录数到它
+    assert.equal(result.candidates[0].riskScore, 0, '无依据值不参与评分')
+    const feat = result.audit.checks.find((c) => c.check === 'FEATURE_RECOMPUTED')
+    assert.equal(feat.closed, false, '被剔除键不得消失于核对面而假报复算通过')
+    assert.match(feat.detail, /不可复算/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('R5-9 ratio 上游无来源记录（直调 prior 缺省）→ 不得误标 derived', () => {
+  const ds = {
+    objects: [{ id: 'i1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+    relations: [],
+    behaviors: [],
+    candidates: [{ candidateId: 'c1', objectRef: 'i1', features: { num: 8, den: 4 }, tags: [] }],
+  }
+  // prior 缺省 []：num/den 只有调用方值、无来源记录 → ratio 不可复算（fail-closed）
+  const r = deriveFeatures(ds.candidates, ds, [{ name: 'ratio', kind: 'ratio', num: 'num', den: 'den' }])
+  const rec = r.sources.find((s) => s.key === 'ratio')
+  assert.equal(rec?.source, 'unverified-caller', '上游无来源记录不得视为可复算')
+  assert.match(rec?.detail ?? '', /上游未核实/)
+})

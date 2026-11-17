@@ -153,3 +153,33 @@ test('C2-6 契约进派生链：tool-contracts 落 actionContracts；手改派�
     rmWorkspace(root)
   }
 })
+
+test('C2-7 弱字段不得 0 error 放行：required 非布尔 / range 颠倒或非数值 / requiredRoles 非串 / refTypes 空（评审 P6）', () => {
+  // required 非布尔
+  const bad1 = pkgWithContract()
+  bad1.behaviors[0].actionContract.fields = [{ name: 'x', type: 'string', required: 'yes' }]
+  assert.ok(issuesOf(bad1).some((i) => /required 须为布尔/.test(i.message)), JSON.stringify(issuesOf(bad1)))
+
+  // range min>max
+  const bad2 = pkgWithContract()
+  bad2.behaviors[0].actionContract.fields = [{ name: 'x', type: 'float', required: true, range: { min: 10, max: 1 } }]
+  assert.ok(issuesOf(bad2).some((i) => /range min\(10\) > max\(1\)/.test(i.message)))
+
+  // range 非数值
+  const bad3 = pkgWithContract()
+  bad3.behaviors[0].actionContract.fields = [{ name: 'x', type: 'int', required: true, range: { min: '0' } }]
+  assert.ok(issuesOf(bad3).some((i) => /range 须为有限数值/.test(i.message)))
+
+  // requiredRoles 元素非字符串
+  const bad4 = pkgWithContract()
+  bad4.behaviors[0].actionContract.requiredRoles = [1]
+  assert.ok(issuesOf(bad4).some((i) => /requiredRoles 元素须为非空字符串/.test(i.message)))
+
+  // ref 字段 refTypes 空/缺失
+  const bad5 = pkgWithContract()
+  bad5.behaviors[0].actionContract.fields = [{ name: 'r', type: 'ref', required: true, refTypes: [] }]
+  assert.ok(issuesOf(bad5).some((i) => /须声明非空 refTypes/.test(i.message)))
+  const bad6 = pkgWithContract()
+  bad6.behaviors[0].actionContract.fields = [{ name: 'r', type: 'ref', required: true }]
+  assert.ok(issuesOf(bad6).some((i) => /须声明非空 refTypes/.test(i.message)))
+})

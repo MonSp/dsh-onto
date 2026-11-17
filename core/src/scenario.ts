@@ -274,7 +274,9 @@ export function runScenario(
   let reviewBarrier: { stepId: string; skipped: string[] } | undefined
   for (const [stepIdx, step] of scenario.pipeline.entries()) {
     if (reviewBarrier !== undefined) {
-      reviewBarrier.skipped.push(step.stepId)
+      // AUDIT_CHECK 是输出装配时恒执行的核验（非动作），不计 skipped——
+      // 「其后步骤不自动执行」只记真正未执行的步骤
+      if (step.stepType !== 'AUDIT_CHECK') reviewBarrier.skipped.push(step.stepId)
       continue
     }
     // 打分/排除段入口：prep 未应用则先做（无 DATA_INGEST / 顺序异常均兜住）
@@ -497,10 +499,7 @@ export function runScenario(
 
   const mustIncludeSatisfied = checkMustInclude(scenario, result)
 
-  /* ── AUDIT_CHECK：三层闭合闸门（§9.3） ────────────────────────────── */
-  const outputStrings = collectStrings(
-    { candidates: result.candidates, excluded: result.excluded, reviewGate: result.reviewGate, ingestProblems },
-  )
+  /* ── M1-B dataStatus（先于禁语扫描：待补数备注须进扫描面） ───────── */
   // R5：核验对象 = 本轮实际参与评分/排除的特征（scenario 收窄后的规则引用面）
   const usedFeatureKeys = new Set<string>()
   for (const r of [...config.scoring, ...config.exclusion]) {
@@ -513,6 +512,70 @@ export function runScenario(
       /* 语法错误由 validate 拦；运行侧跳过扫描 */
     }
   }
+  // 可信来源 = 服务端取数上下文（dataBasis 仅由服务端连接器产线构造）；
+  // inline/file 显式标签的通道不得被 basis 升级；自称 provenance=connector 无 basis → 不算可信（伪造来源拒绝）。
+  // 对账锚点齐全（snapshotId/sourceId 非空）才算可信来源——dataBasis: {} 不得升级信任（评审 P3）；
+  // complete/fresh 显式核验（=== true），缺省 = 未核验（fail-closed，不得缺省为真）。
+  const basis = opts.dataBasis
+  const sourceVerified =
+    basis !== undefined
+    && typeof basis.snapshotId === 'string' && basis.snapshotId !== ''
+    && typeof basis.sourceId === 'string' && basis.sourceId !== ''
+    && provenance !== 'inline' && provenance !== 'file'
+  const complete = basis?.complete === true
+  const fresh = basis?.fresh === true
+  // 必需特征依据全过：本轮实际参与评分/排除的特征逐候选均有可复算来源——
+  // 整体缺失（无键、无来源记录）同样是缺依据，不得按 verified/低风险处置（评审 P2）
+  const unverifiedUsed = featureSources.filter(
+    (rec) => rec.source === 'unverified-caller' && usedFeatureKeys.has(rec.key),
+  )
+  const featureGapKeys = new Set<string>(unverifiedUsed.map((r) => r.key))
+  const provByKey = new Map(featureSources.map((r) => [`${r.candidateId}|${r.key}`, r]))
+  for (const c of effective.candidates) {
+    for (const key of usedFeatureKeys) {
+      if (!provByKey.has(`${c.candidateId}|${key}`)) featureGapKeys.add(key)
+    }
+  }
+  const featuresOk = featureGapKeys.size === 0
+  const formal = opts.analysisMode === 'formal'
+  let dataStatus: DataStatus
+  if (formal) {
+    // 正式模式：缺源/超时效/取数不完整/必需特征缺依据 → 不可完成/待补数（不得按低风险处置）
+    dataStatus = sourceVerified && complete && fresh && featuresOk ? 'verified' : 'insufficient'
+  } else if (!sourceVerified) {
+    dataStatus = 'unverified'
+  } else if (complete && fresh && featuresOk) {
+    dataStatus = 'verified'
+  } else {
+    dataStatus = 'conditional'
+  }
+  result.dataStatus = dataStatus
+  // formal 依据不足：结果态为待补数——逐候选显式上墙，分数不得被解读为低风险结论
+  if (dataStatus === 'insufficient') {
+    const gaps: string[] = []
+    if (!sourceVerified) gaps.push('缺可信来源')
+    if (!complete) gaps.push('取数不完整')
+    if (!fresh) gaps.push('数据超时效')
+    if (!featuresOk) gaps.push(`必需特征缺依据（${[...featureGapKeys].join('、')}）`)
+    for (const c of result.candidates) {
+      c.pendingChecks.push({
+        note: `正式分析依据不足（${gaps.join('；')}）——结果不可处置，待补数后重跑`,
+      })
+      c.pendingVerification = true
+    }
+  }
+
+  /* ── AUDIT_CHECK：三层闭合闸门（§9.3） ────────────────────────────── */
+  // 扫描面含 prep（featureOverrides 带调用方字符串）；待补数备注已先上墙再扫描
+  const outputStrings = collectStrings(
+    {
+      candidates: result.candidates,
+      excluded: result.excluded,
+      reviewGate: result.reviewGate,
+      ingestProblems,
+      prep: result.prep,
+    },
+  )
   const audit = runAudit({
     pkg,
     scenario,
@@ -526,47 +589,9 @@ export function runScenario(
   })
   result.audit = { checks: audit.checks, forbiddenPhraseHits: audit.forbiddenPhraseHits, passed: audit.passed }
 
-  /* ── M1-B 三状态：contractStatus / dataStatus（不与 audit.passed 混用） ── */
+  /* ── M1-B 三状态：contractStatus（不与 audit.passed 混用） ── */
   const contractStatus: ContractStatus = audit.passed ? 'conformant' : 'non-conformant'
-  // 可信来源 = 服务端取数上下文（dataBasis 仅由服务端连接器产线构造）；
-  // inline/file 显式标签的通道不得被 basis 升级；自称 provenance=connector 无 basis → 不算可信（伪造来源拒绝）
-  const sourceVerified =
-    opts.dataBasis !== undefined && provenance !== 'inline' && provenance !== 'file'
-  const complete = opts.dataBasis?.complete !== false
-  const fresh = opts.dataBasis?.fresh !== false
-  // 必需特征依据全过：本轮实际参与评分/排除的特征均非 unverified-caller
-  const unverifiedUsed = featureSources.filter(
-    (rec) => rec.source === 'unverified-caller' && usedFeatureKeys.has(rec.key),
-  )
-  const featuresOk = unverifiedUsed.length === 0
-  const formal = opts.analysisMode === 'formal'
-  let dataStatus: DataStatus
-  if (formal) {
-    // 正式模式：缺源/超时效/取数不完整/必需特征缺依据 → 不可完成/待补数（不得按低风险处置）
-    dataStatus = sourceVerified && complete && fresh && featuresOk ? 'verified' : 'insufficient'
-  } else if (!sourceVerified) {
-    dataStatus = 'unverified'
-  } else if (complete && fresh && featuresOk) {
-    dataStatus = 'verified'
-  } else {
-    dataStatus = 'conditional'
-  }
   result.contractStatus = contractStatus
-  result.dataStatus = dataStatus
-  // formal 依据不足：结果态为待补数——逐候选显式上墙，分数不得被解读为低风险结论
-  if (dataStatus === 'insufficient') {
-    const gaps: string[] = []
-    if (!sourceVerified) gaps.push('缺可信来源')
-    if (!complete) gaps.push('取数不完整')
-    if (!fresh) gaps.push('数据超时效')
-    if (!featuresOk) gaps.push(`必需特征缺依据（${unverifiedUsed.map((r) => r.key).join('、')}）`)
-    for (const c of result.candidates) {
-      c.pendingChecks.push({
-        note: `正式分析依据不足（${gaps.join('；')}）——结果不可处置，待补数后重跑`,
-      })
-      c.pendingVerification = true
-    }
-  }
 
   /* 不闭合 → 降级为「待核实点」（§9.3；非阻断提示项不降级） */
   if (!audit.passed) {

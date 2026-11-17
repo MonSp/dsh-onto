@@ -180,3 +180,98 @@ test('B1-7 同输入快照与同本体版本可复算：两次运行 dataStatus/
     rmWorkspace(root)
   }
 })
+
+test('B1-8 必需特征整体缺失（无值无来源记录）→ 不得 verified（评审 P2）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = pkgWithF1()
+    pkg.scenarios[0].prep = { features: true }
+    savePkg(dir, pkg)
+    // features 无键、对象事实也缺 → 无任何来源记录 ≠ 有依据
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x' } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: {}, tags: [] }],
+    }
+    const formal = runScenario(dir, 'SCN-TST-1', dataset, {
+      analysisMode: 'formal',
+      dataBasis: BASIS_OK,
+    })
+    assert.equal(formal.dataStatus, 'insufficient', '整体缺失不得按 verified/0 分低风险处置')
+    assert.ok(
+      formal.candidates[0].pendingChecks.some((p) => /必需特征缺依据/.test(p.note)),
+      JSON.stringify(formal.candidates[0].pendingChecks),
+    )
+    const feat = formal.audit.checks.find((c) => c.check === 'FEATURE_RECOMPUTED')
+    assert.equal(feat.closed, false, '缺事实不得显示复算通过')
+    assert.match(feat.detail, /必需特征缺失/)
+    // explore 同口径：有 basis 但缺依据 → conditional（不是 verified）
+    const explore = runScenario(dir, 'SCN-TST-1', dataset, { dataBasis: BASIS_OK })
+    assert.equal(explore.dataStatus, 'conditional')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('B1-9 dataBasis 缺对账锚点/缺省 complete、fresh → 不得升级信任（评审 P3）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    const pkg = pkgWithF1()
+    pkg.scenarios[0].prep = { features: true }
+    savePkg(dir, pkg)
+    // dataBasis: {} 自称——explore 不得 verified
+    const empty = runScenario(dir, 'SCN-TST-1', datasetWithFact(), { dataBasis: {} })
+    assert.equal(empty.dataStatus, 'unverified', '空 basis 不构成可信来源')
+    // formal + 空 basis → insufficient（缺可信来源）
+    const formalEmpty = runScenario(dir, 'SCN-TST-1', datasetWithFact(), {
+      analysisMode: 'formal',
+      dataBasis: {},
+    })
+    assert.equal(formalEmpty.dataStatus, 'insufficient')
+    assert.ok(formalEmpty.candidates[0].pendingChecks.some((p) => /缺可信来源/.test(p.note)))
+    // 缺 snapshotId/sourceId 锚点 → 同样不算可信来源
+    const noAnchor = runScenario(dir, 'SCN-TST-1', datasetWithFact(), {
+      analysisMode: 'formal',
+      dataBasis: { nature: 'simulated', complete: true, fresh: true },
+    })
+    assert.equal(noAnchor.dataStatus, 'insufficient')
+    // complete/fresh 缺省 = 未核验（fail-closed，不得缺省为真）
+    const silent = runScenario(dir, 'SCN-TST-1', datasetWithFact(), {
+      analysisMode: 'formal',
+      dataBasis: { snapshotId: 'snap-test-1', sourceId: 'SRC-TST-1' },
+    })
+    assert.equal(silent.dataStatus, 'insufficient', 'complete/fresh 未显式核验不得视为真')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('B1-10 篡改值（与对象事实不符）不得按事实依据入分（评审 P7b）', () => {
+  const { dir, root } = mkWorkspaceWithPkg()
+  try {
+    savePkg(dir, pkgWithF1())
+    // 对象事实 f1=1，调用方篡改为 0.9（无 prep → 投影不跑，值留在 features）
+    const dataset = {
+      objects: [{ id: 'A1', type: 'OBJ-TST-A', attrs: { a1: 'x', f1: 1 } }],
+      relations: [],
+      behaviors: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'A1', features: { f1: 0.9 }, tags: [] }],
+    }
+    // formal：篡改值按无依据剔除，不入分；dataStatus 不得 verified
+    const formal = runScenario(dir, 'SCN-TST-1', dataset, {
+      analysisMode: 'formal',
+      dataBasis: BASIS_OK,
+    })
+    assert.equal(formal.candidates[0].riskScore, 0, '篡改值不参与评分')
+    assert.equal(formal.dataStatus, 'insufficient')
+    const feat = formal.audit.checks.find((c) => c.check === 'FEATURE_RECOMPUTED')
+    assert.equal(feat.closed, false)
+    // explore：条件性计算保留（0.9 入分），但信任面不得 verified
+    const explore = runScenario(dir, 'SCN-TST-1', dataset, { dataBasis: BASIS_OK })
+    assert.equal(explore.candidates[0].riskScore, 0.9)
+    assert.notEqual(explore.dataStatus, 'verified', '篡改值不得支撑 verified')
+  } finally {
+    rmWorkspace(root)
+  }
+})

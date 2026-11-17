@@ -256,8 +256,12 @@ export function deriveFeatures(
       if (recipe.kind === 'ratio') {
         const numRec = status.get(`${cand.candidateId}|${String(recipe.num)}`)
         const denRec = status.get(`${cand.candidateId}|${String(recipe.den)}`)
+        // 上游无来源记录（如直调 prior 缺省）＝不可复算（fail-closed），不得误标 derived
         const upstreamUnverified =
-          numRec?.source === 'unverified-caller' || denRec?.source === 'unverified-caller'
+          numRec === undefined
+          || denRec === undefined
+          || numRec.source === 'unverified-caller'
+          || denRec.source === 'unverified-caller'
         rec = {
           candidateId: cand.candidateId,
           key: recipe.name,
@@ -325,13 +329,14 @@ export function inferFeatureSources(
             })
             continue
           }
-          // 值与对象事实不符：可复算性成立（审计另按篡改口径报不符）
+          // 值与对象事实不符（篡改面）：不得标 object-fact——formal 按无依据剔除、
+          // 不参与计算；审计仍按篡改口径报不符（双重防线上墙）
           out.push({
             candidateId: cand.candidateId,
             key,
-            source: trusted ? 'connector' : 'object-fact',
+            source: 'unverified-caller',
             declared: true,
-            detail: `对象投影 ${[...targets].join('/')}.${key}（值与事实不符，审计报篡改）`,
+            detail: `对象投影 ${[...targets].join('/')}.${key}（值与对象事实不符，不得视为可复算事实；审计报篡改）`,
           })
           continue
         }
