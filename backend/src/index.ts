@@ -13,6 +13,7 @@ import {
   OntoValidate,
   OntoWorkspace,
 } from './services.js'
+import { registerTicketSimConnector } from './action-connector-ticketsim.js'
 
 export * from './services.js'
 export * from './agent-hooks.js'
@@ -31,4 +32,10 @@ export function apply(ctx: Context): void {
   // agent 面按服务依赖各自挂载：tools/skills 缺席只跳过对应能力。
   ctx.plugin(agentTools)
   ctx.plugin(agentSkills)
+  // F1 模拟连接器（kind=simulated）：显式配置 DSH_TICKET_SIM_URL 才注册（缺省 dryrun，不触达外部）。
+  const ticketSimUrl = process.env.DSH_TICKET_SIM_URL
+  if (typeof ticketSimUrl === 'string' && ticketSimUrl !== '') {
+    registerTicketSimConnector({ baseUrl: ticketSimUrl })
+    console.log('[dsh-onto] ticket-sim connector registered (kind=simulated):', ticketSimUrl)
+  }
 }

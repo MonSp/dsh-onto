@@ -21,7 +21,8 @@ export interface TicketSimConnectorOptions {
 
 /** 创建 ticket-sim 连接器（不注册；调 {@link registerTicketSimConnector} 或 registerActionConnector）。 */
 export function createTicketSimConnector(opts: TicketSimConnectorOptions): ActionConnector {
-  const baseUrl = opts.baseUrl.replace(/\/$/, '')
+  // trim：环境变量注入可能带首尾空白（cmd set 的经典坑），URL 拼接前先收干净
+  const baseUrl = opts.baseUrl.trim().replace(/\/$/, '')
   const fetchImpl = opts.fetchImpl ?? fetch
   const requestTimeoutMs = opts.requestTimeoutMs ?? 5_000
 

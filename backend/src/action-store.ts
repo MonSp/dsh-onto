@@ -498,6 +498,21 @@ export class ActionStore {
       return rows.map((r) => rowToProposal(r as Record<string, unknown>))
     })
   }
+
+  /** 动作台账记录（治理链末端：decision → proposal → action → externalRef）。 */
+  listActions(filter?: { decisionId?: string; proposalId?: string }): StoredActionRecord[] {
+    return this.withDb((db) => {
+      let rows: unknown[]
+      if (filter?.decisionId !== undefined) {
+        rows = db.prepare('select * from actions where decision_id = ? order by created_at asc').all(filter.decisionId)
+      } else if (filter?.proposalId !== undefined) {
+        rows = db.prepare('select * from actions where proposal_id = ? order by created_at asc').all(filter.proposalId)
+      } else {
+        rows = db.prepare('select * from actions order by created_at asc').all()
+      }
+      return rows.map((r) => rowToAction(r as Record<string, unknown>))
+    })
+  }
 }
 
 const storeCache = new Map<string, ActionStore>()

@@ -63,6 +63,7 @@ import { invalidateSkillCatalog } from './agent-hooks.js'
 import { buildGraphForTool } from './model-face.js'
 import { AgentToolError } from './agent-policy.js'
 import { dataSources } from './data-sources.js'
+import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -737,16 +738,49 @@ export class OntoRuntime extends TypertRemoteService {
     })
   }
 
-  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。 */
+  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。D 包：附治理链条文件。 */
   @Remote('exportAudit')
   async remoteExportExportAudit(request: { runId: string }): Promise<{
     locator: string
     archivedAt: string
+    chainLocator?: string
   }> {
     return guard(() => {
       const { locator, archive } = exportRunArchive(this.ws.root, request.runId)
-      return { locator, archivedAt: archive.archivedAt }
+      // 治理链串联（F1 步骤 7）：snapshot → run → decision → proposal → approval → externalRef
+      const chain = this.reviewChainOf(request.runId)
+      const chainLocator = `runs/exports/${request.runId}-chain.json`
+      const chainPath = join(this.ws.root, 'runs', 'exports', `${request.runId}-chain.json`)
+      writeFileSync(chainPath, `${JSON.stringify({ runId: request.runId, ...chain }, null, 2)}\n`, 'utf8')
+      return { locator, archivedAt: archive.archivedAt, chainLocator }
     })
+  }
+
+  /** 治理链（D 包人审面）：复核决定 → 动作提案 → 动作台账（含批准与外部回执）。 */
+  @Remote('reviewChain')
+  async remoteExportReviewChain(request: { runId: string }): Promise<{
+    decisions: ReviewDecision[]
+    proposals: ActionProposal[]
+    actions: StoredActionRecord[]
+  }> {
+    return guard(() => this.reviewChainOf(request.runId))
+  }
+
+  private reviewChainOf(runId: string): {
+    decisions: ReviewDecision[]
+    proposals: ActionProposal[]
+    actions: StoredActionRecord[]
+  } {
+    const store = actionStoreFor(this.ws.root)
+    const decisions = store.listDecisions(runId)
+    const decisionIds = new Set(decisions.map((d) => d.decisionId))
+    const proposals = store.listProposals().filter((p) => decisionIds.has(p.decisionId))
+    const proposalIds = new Set(proposals.map((p) => p.proposalId))
+    const actions = store.listActions().filter(
+      (a) => (a.decisionId !== undefined && decisionIds.has(a.decisionId))
+        || (a.proposalId !== undefined && proposalIds.has(a.proposalId)),
+    )
+    return { decisions, proposals, actions }
   }
 
   /* ── 经验闭环（experience-loop P2）：人审面 wire ── */
