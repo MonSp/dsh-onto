@@ -1,9 +1,15 @@
 /** F1 步骤 6 恢复段：对崩溃遗留的 dispatched 记录重放同提案 → 按外部回执恢复同一单号。 */
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { executeBehaviorAction, registerActionConnector, ActionExecuteError, ActionNoEffectError } from '../backend/dist/action-executor.js'
 import { actionStoreFor, closeActionStore } from '../backend/dist/action-store.js'
 import { createTicketSimConnector } from '../backend/dist/action-connector-ticketsim.js'
 
-const ROOT = 'C:/Users/qgh13/.dsh/profiles/dsh-onto/dsh-onto/workspace'
+// 台账 ROOT：DSH_PROFILE_DIR 指向 dsh profile 目录（缺省 ~/.dsh/profiles/dsh-onto）；工作区 = <profile>/dsh-onto/workspace
+const ROOT = join(
+  process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', 'dsh-onto'),
+  'dsh-onto', 'workspace',
+)
 const BASE = 'http://127.0.0.1:3901'
 const IDENTITY = { id: 'ticket-sim', env: 'local-sim', kind: 'simulated' }
 const intent = {

@@ -4,14 +4,18 @@
  */
 import { spawn } from 'node:child_process'
 import { writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { executeBehaviorAction, registerActionConnector, digestAction, ActionExecuteError, ActionNoEffectError } from '../backend/dist/action-executor.js'
 import { actionStoreFor, closeActionStore } from '../backend/dist/action-store.js'
 import { createTicketSimConnector } from '../backend/dist/action-connector-ticketsim.js'
 
-const ROOT = 'C:/Users/qgh13/.dsh/profiles/dsh-onto/dsh-onto/workspace'
+// 台账 ROOT：DSH_PROFILE_DIR 指向 dsh profile 目录（缺省 ~/.dsh/profiles/dsh-onto）；工作区 = <profile>/dsh-onto/workspace
+const ROOT = join(
+  process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', 'dsh-onto'),
+  'dsh-onto', 'workspace',
+)
 const BASE = 'http://127.0.0.1:3901'
 const IDENTITY = { id: 'ticket-sim', env: 'local-sim', kind: 'simulated' }
 const PKG = { name: 'aml-analysis', version: '1.0.0' }

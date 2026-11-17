@@ -1,12 +1,19 @@
 /** F2 演练补演：accept-timeout 打穿调用方超时 → unknown → 人工对账恢复同单号。 */
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { executeBehaviorAction, reconcileActionRecord, registerActionConnector, digestAction, ActionExecuteError, ActionNoEffectError } from '../backend/dist/action-executor.js'
 import { actionStoreFor, closeActionStore } from '../backend/dist/action-store.js'
 import { createExtApiConnector } from '../backend/dist/action-connector-ext.js'
 
-const ROOT = 'C:/Users/qgh13/.dsh/profiles/dsh-onto/dsh-onto/workspace'
+// 台账 ROOT：DSH_PROFILE_DIR 指向 dsh profile 目录（缺省 ~/.dsh/profiles/dsh-onto）；工作区 = <profile>/dsh-onto/workspace
+const ROOT = join(
+  process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', 'dsh-onto'),
+  'dsh-onto', 'workspace',
+)
 const BASE = 'http://127.0.0.1:3910'
-const TOKEN = 'token-analyst-a'
-const ADMIN = 'token-admin'
+// 开发缺省静态 token（仅限本地演练面）；一律可经 env 覆盖
+const TOKEN = process.env.F2_TIMEOUT_TOKEN ?? 'token-analyst-a'
+const ADMIN = process.env.F2_TIMEOUT_ADMIN ?? 'token-admin'
 const IDENTITY = { id: 'ext-api', env: 'test', kind: 'simulated' }
 const PKG = { name: 'aml-analysis', version: '1.0.0' }
 const BEHAVIOR = { id: 'BHV-AML-OPEN-REVIEW-TICKET', anchor: 'OBJ-AML-ACCOUNT', name: '创建复核工单' }

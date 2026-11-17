@@ -1,15 +1,20 @@
 /** F2 真实服务 OAuth 签发流：admin 引导 → 注册租户 client（幂等）→ 换业务 token。 */
+// 开发缺省凭证（仅限本地测试面）；一律可经 env 覆盖，共享/正式环境必须注入真实值
 const DEFAULT_BASE = process.env.F2_BASE ?? 'http://127.0.0.1:3920'
 const ADMIN_ID = process.env.F2_ADMIN_ID ?? 'adm-dev'
 const ADMIN_SECRET = process.env.F2_ADMIN_SECRET ?? 'adm-dev-secret-0123456789'
+const CLIENT_A_ID = process.env.F2_CLIENT_A_ID ?? 'cli-tenant-a-analyst'
+const CLIENT_A_SECRET = process.env.F2_CLIENT_A_SECRET ?? 'analyst-a-secret-0123456789'
+const CLIENT_B_ID = process.env.F2_CLIENT_B_ID ?? 'cli-tenant-b-analyst'
+const CLIENT_B_SECRET = process.env.F2_CLIENT_B_SECRET ?? 'analyst-b-secret-0123456789'
 
 export const CLIENTS = {
   a: {
-    clientId: 'cli-tenant-a-analyst',
-    clientSecret: 'analyst-a-secret-0123456789',
+    clientId: CLIENT_A_ID,
+    clientSecret: CLIENT_A_SECRET,
     body: {
-      clientId: 'cli-tenant-a-analyst',
-      clientSecret: 'analyst-a-secret-0123456789',
+      clientId: CLIENT_A_ID,
+      clientSecret: CLIENT_A_SECRET,
       name: 'tenant-A analyst',
       tenant: 'tenant-A',
       userId: 'user-analyst-a',
@@ -18,11 +23,11 @@ export const CLIENTS = {
     },
   },
   b: {
-    clientId: 'cli-tenant-b-analyst',
-    clientSecret: 'analyst-b-secret-0123456789',
+    clientId: CLIENT_B_ID,
+    clientSecret: CLIENT_B_SECRET,
     body: {
-      clientId: 'cli-tenant-b-analyst',
-      clientSecret: 'analyst-b-secret-0123456789',
+      clientId: CLIENT_B_ID,
+      clientSecret: CLIENT_B_SECRET,
       name: 'tenant-B analyst',
       tenant: 'tenant-B',
       userId: 'user-analyst-b',

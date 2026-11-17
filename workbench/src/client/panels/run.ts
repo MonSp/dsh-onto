@@ -394,13 +394,13 @@ export function RunPanel(props: {
       c.decisions.length > 0
         ? h('table', { className: 'ow-table' },
             h('thead', null, h('tr', null,
-              h('th', null, t('chainDecision')), h('th', null, 'ID'), h('th', null, t('chainStatus')),
-              h('th', null, 'candidates'), h('th', null, t('chainReviewer')), h('th', null, 'snapshot / ruleFp'))),
+              h('th', null, t('chainDecision')), h('th', null, t('chainDecisionId')), h('th', null, t('chainReason')),
+              h('th', null, t('chainCandidates')), h('th', null, t('chainReviewer')), h('th', null, t('chainSnapshot')))),
             h('tbody', null, ...c.decisions.map((d) =>
               h('tr', { key: d.decisionId },
-                h('td', null, d.decision),
-                h('td', { className: 'ow-mono' }, d.decisionId),
                 h('td', null, h(Tag, { text: d.decision, tone: d.decision === 'approved' ? 'ok' : 'err' })),
+                h('td', { className: 'ow-mono' }, d.decisionId),
+                h('td', null, d.reason ?? '—'),
                 h('td', { className: 'ow-mono' }, d.candidateIds.join(', ')),
                 h('td', { className: 'ow-mono' }, d.reviewer),
                 h('td', { className: 'ow-mono' }, `${d.snapshotDigest.slice(0, 8)} / ${d.ruleFingerprint.slice(0, 8)}`),
@@ -409,27 +409,30 @@ export function RunPanel(props: {
       c.proposals.length > 0
         ? h('table', { className: 'ow-table' },
             h('thead', null, h('tr', null,
-              h('th', null, t('chainProposal')), h('th', null, 'ID'), h('th', null, t('chainOperation')),
-              h('th', null, 'candidate'), h('th', null, 'behavior / object'), h('th', null, t('chainStatus')))),
+              h('th', null, t('chainProposal')), h('th', null, t('chainDecisionId')), h('th', null, t('chainCandidateId')),
+              h('th', null, t('chainOperation')), h('th', null, t('chainBehObject')), h('th', null, t('chainStatus')))),
             h('tbody', null, ...c.proposals.map((p) =>
               h('tr', { key: p.proposalId },
-                h('td', null, p.candidateId),
                 h('td', { className: 'ow-mono' }, p.proposalId),
-                h('td', { className: 'ow-mono' }, p.operationId),
                 h('td', { className: 'ow-mono' }, p.decisionId),
+                h('td', { className: 'ow-mono' }, p.candidateId),
+                h('td', { className: 'ow-mono' }, p.operationId),
                 h('td', { className: 'ow-mono' }, `${p.behaviorId} → ${p.objectRef}`),
-                h('td', null, h(Tag, { text: p.status, tone: p.status === 'pending' ? 'warn' : 'ok' })),
+                h('td', null, h(Tag, {
+                  text: p.status,
+                  tone: p.status === 'consumed' ? 'ok' : p.status === 'pending' ? 'warn' : undefined,
+                })),
               ))))
         : null,
       c.actions.length > 0
         ? h('table', { className: 'ow-table' },
             h('thead', null, h('tr', null,
-              h('th', null, t('chainAction')), h('th', null, 'ID'), h('th', null, t('chainStatus')),
-              h('th', null, 'behavior / object'), h('th', null, t('chainExternalRef')), h('th', null, 'approval'))),
+              h('th', null, t('chainAction')), h('th', null, t('chainProposalId')), h('th', null, t('chainStatus')),
+              h('th', null, t('chainBehObject')), h('th', null, t('chainExternalRef')), h('th', null, t('chainApproval')))),
             h('tbody', null, ...c.actions.map((a) =>
               h('tr', { key: a.actionId },
-                h('td', null, a.status),
                 h('td', { className: 'ow-mono' }, a.actionId),
+                h('td', { className: 'ow-mono' }, a.proposalId ?? '—'),
                 h('td', null, h(Tag, {
                   text: a.status,
                   tone: a.status === 'succeeded' ? 'ok' : a.status === 'executing' ? 'warn' : 'err',

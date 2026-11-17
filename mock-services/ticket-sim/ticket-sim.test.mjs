@@ -57,7 +57,8 @@ async function spawnServer(dbPath, env = {}) {
           return
         }
         child.on('exit', () => done())
-        child.kill()
+        // SIGKILL：崩溃级硬杀（不做 SIGTERM 优雅收尾），「重启持久化」验证才名副其实
+        child.kill('SIGKILL')
       }),
   }
 }
@@ -149,6 +150,22 @@ test('故障 reject：受理前拒绝、零效应（回读 not-executed）', asy
   assert.equal(r.body.error, 'rejected-before-effect')
   const q = await get(shared.base, `/tickets?key=${encodeURIComponent(key)}`)
   assert.equal(q.body.state, 'not-executed')
+})
+
+test('x-sim-fault 请求头 override 不消耗 remaining（仅作用于该请求）', async () => {
+  await post(shared.base, '/admin/fault', { mode: 'reject', remaining: 1 })
+  // 显式 override 请求：命中 reject，但不消耗 DB 计数器
+  const r1 = await post(shared.base, '/tickets', { title: 'override 触发' }, {
+    'idempotency-key': 'itest-override-1',
+    'x-sim-fault': 'reject',
+  })
+  assert.equal(r1.status, 422, 'override 请求应被拒绝')
+  // 无 override 的下一请求：计数器仍在 → 依旧 reject
+  const r2 = await post(shared.base, '/tickets', { title: '计数器应仍在' }, { 'idempotency-key': 'itest-override-2' })
+  assert.equal(r2.status, 422, 'override 不得消耗 remaining——本请求仍应被 reject')
+  // remaining=1 已被上一请求消耗 → 恢复正常
+  const r3 = await post(shared.base, '/tickets', { title: '恢复正常' }, { 'idempotency-key': 'itest-override-3' })
+  assert.equal(r3.status, 201, 'remaining 耗尽后应恢复创建')
 })
 
 test('故障 accept-timeout：受理后调用方超时，对账可恢复同一单号', async () => {

@@ -31,7 +31,9 @@ export class SimActionNoEffectError extends Error {
  * @param {number} [opts.requestTimeoutMs] 调用方超时（超时=效应不明，走对账；不静默当失败）
  */
 export function createTicketSimConnector(opts) {
-  const baseUrl = opts.baseUrl.replace(/\/$/, '')
+  // trim：环境变量注入可能带首尾空白（cmd set 的经典坑），URL 拼接前先收干净。
+  // 双副本之一：backend/src/action-connector-ticketsim.ts 有同一处理，改动须两处同步。
+  const baseUrl = opts.baseUrl.trim().replace(/\/$/, '')
   const fetchImpl = opts.fetchImpl ?? fetch
   const requestTimeoutMs = opts.requestTimeoutMs ?? 5_000
   const ExecError = opts.ActionExecuteError ?? SimActionExecuteError

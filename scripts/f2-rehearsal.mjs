@@ -1,14 +1,20 @@
-﻿/**
+/**
  * F2 演练：外部业务 API（http://127.0.0.1:3910）上的治理链验收。
  * 覆盖：提案执行拿外部单号 → 幂等重放零新建 → accept-timeout 故障下对账恢复同单号
  *      → 取数连接器快照（分页/来源回执）。全程 kind=simulated（真实验收才 formal）。
  */
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { executeBehaviorAction, registerActionConnector, digestAction, ActionExecuteError, ActionNoEffectError } from '../backend/dist/action-executor.js'
 import { actionStoreFor, closeActionStore } from '../backend/dist/action-store.js'
 import { createExtApiConnector } from '../backend/dist/action-connector-ext.js'
 import { createExtDataConnector } from '../backend/dist/data-source-ext.js'
 
-const ROOT = 'C:/Users/qgh13/.dsh/profiles/dsh-onto/dsh-onto/workspace'
+// 台账 ROOT：DSH_PROFILE_DIR 指向 dsh profile 目录（缺省 ~/.dsh/profiles/dsh-onto）；工作区 = <profile>/dsh-onto/workspace
+const ROOT = join(
+  process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', 'dsh-onto'),
+  'dsh-onto', 'workspace',
+)
 import { getF2Tokens } from './f2-auth.mjs'
 const { base: BASE, tokenA: TOKEN, admin: ADMIN } = await getF2Tokens()
 

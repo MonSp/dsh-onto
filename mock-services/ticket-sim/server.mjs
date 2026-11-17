@@ -20,7 +20,7 @@
  *   accept-timeout 受理后挂起响应（调用方超时；工单已落，可对账回读）
  *   partial-fail   受理后回执失败（502 带单号；可补偿撤销）
  *   hang           受理前挂起（调用方超时；零效应）
- * 单次请求可用请求头 x-sim-fault 覆盖模式（不消耗 remaining）。
+ * 单次请求可用请求头 x-sim-fault 覆盖模式（不消耗 remaining，仅作用于该请求）。
  *
  * 运行：node server.mjs [--port 3901] [--db <path>]
  * 环境：TICKET_SIM_PORT / TICKET_SIM_DB / TICKET_SIM_FAULT_HOLD_MS（缺省 30000）
@@ -109,7 +109,9 @@ function currentFault(db, override) {
   return { mode: row.mode, remaining: row.remaining, holdMs: row.hold_ms }
 }
 
-function consumeFault(db) {
+function consumeFault(db, hasOverride) {
+  // 请求头 x-sim-fault 显式 override 不消耗 DB 计数器（见文件头文档）
+  if (hasOverride) return
   db.prepare('update fault set remaining = remaining - 1 where id = 1 and remaining > 0').run()
 }
 
@@ -192,14 +194,15 @@ async function handleCreate(db, req, res, body, faultOverride) {
   }
 
   const fault = currentFault(db, faultOverride)
+  const hasOverride = faultOverride !== undefined
   if (fault.mode === 'reject') {
-    consumeFault(db)
+    consumeFault(db, hasOverride)
     audit(db, req, key, 'rejected', 'fault=reject')
     send(res, 422, { ok: false, simulated: true, error: 'rejected-before-effect' })
     return
   }
   if (fault.mode === 'hang') {
-    consumeFault(db)
+    consumeFault(db, hasOverride)
     audit(db, req, key, 'hang', 'fault=hang（受理前挂起，零效应）')
     await sleep(fault.holdMs)
     send(res, 504, { ok: false, simulated: true, error: 'hang-timeout-no-effect' })
@@ -262,7 +265,7 @@ async function handleCreate(db, req, res, body, faultOverride) {
   }
 
   if (fault.mode === 'accept-timeout') {
-    consumeFault(db)
+    consumeFault(db, hasOverride)
     audit(db, req, key, 'accepted-held', `${row.ticket_no}（受理后挂起，调用方超时）`)
     await sleep(fault.holdMs)
     send(res, 201, {
@@ -277,7 +280,7 @@ async function handleCreate(db, req, res, body, faultOverride) {
     return
   }
   if (fault.mode === 'partial-fail') {
-    consumeFault(db)
+    consumeFault(db, hasOverride)
     audit(db, req, key, 'partial-fail', row.ticket_no)
     send(res, 502, { ok: false, simulated: true, error: 'accepted-but-failed', ticketNo: row.ticket_no })
     return
@@ -320,6 +323,7 @@ function routes(db, holdDefault) {
     const path = url.pathname
     const method = req.method ?? 'GET'
     try {
+      // /admin/* 无鉴权：仅限本地测试面（127.0.0.1 回环监听），勿在共享机/对外可达环境运行本服务
       if (method === 'GET' && path === '/admin/health') {
         const count = db.prepare('select count(*) as n from tickets').get().n
         send(res, 200, { ok: true, simulated: true, tickets: count, uptimeSec: Math.round(process.uptime()) })
