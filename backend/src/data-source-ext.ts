@@ -9,10 +9,16 @@
  */
 import type { DataConnector, DataQuery, ConnectorFetchOutput } from './data-sources.js'
 import type { RuntimeDataset, RuntimeObjectInstance, RuntimeRelationInstance } from '@dsh-onto/core'
+import { createTokenProvider, staticTokenProvider, type TokenProvider } from './ext-token.js'
 
 export interface ExtDataConnectorOptions {
   baseUrl: string
-  token: string
+  /** 静态 Bearer token（与 client_credentials 二选一，后者优先）。 */
+  token?: string
+  /** OAuth2 client_credentials 自动续签（真实集成首选）。 */
+  clientId?: string
+  clientSecret?: string
+  tokenUrl?: string
   requestTimeoutMs?: number
   fetchImpl?: typeof fetch
   /** 外部集合 → O1 类型映射（缺省 AML 口径）。 */
@@ -28,12 +34,19 @@ const DEFAULT_REL_TYPES = { holds: 'REL-AML-HOLDS', inbound: 'REL-AML-INBOUND' }
 
 export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConnector {
   const baseUrl = opts.baseUrl.trim().replace(/\/$/, '')
-  const token = opts.token.trim()
   const fetchImpl = opts.fetchImpl ?? fetch
   const requestTimeoutMs = opts.requestTimeoutMs ?? 8_000
   const typeMap = opts.typeMap ?? DEFAULT_TYPE_MAP
   const relTypes = opts.relationTypes ?? DEFAULT_REL_TYPES
   const maxPages = opts.maxPages ?? 20
+  const tokens: TokenProvider = opts.clientId !== undefined && opts.clientSecret !== undefined
+    ? createTokenProvider({
+        tokenUrl: opts.tokenUrl ?? `${baseUrl}/oauth/token`,
+        clientId: opts.clientId,
+        clientSecret: opts.clientSecret,
+        fetchImpl,
+      })
+    : staticTokenProvider((opts.token ?? '').trim())
 
   async function fetchPage(collection: string, cursor: string | null): Promise<{
     items: Array<Record<string, unknown>>
@@ -43,13 +56,22 @@ export function createExtDataConnector(opts: ExtDataConnectorOptions): DataConne
   }> {
     const params = new URLSearchParams({ limit: '100' })
     if (cursor !== null) params.set('cursor', cursor)
-    let res: Response
-    try {
-      res = await fetchImpl(`${baseUrl}/api/v1/data/${collection}?${params.toString()}`, {
+    const send = async (): Promise<Response> => {
+      const token = await tokens.getToken()
+      return fetchImpl(`${baseUrl}/api/v1/data/${collection}?${params.toString()}`, {
         method: 'GET',
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(requestTimeoutMs),
       })
+    }
+    let res: Response
+    try {
+      res = await send()
+      if (res.status === 401) {
+        // 令牌生命周期事件：失效重签后安全重试一次（GET 幂等）
+        tokens.invalidate()
+        res = await send()
+      }
     } catch (e) {
       throw new Error(`外部取数失败（${collection}）：${e instanceof Error ? e.message : String(e)}`)
     }

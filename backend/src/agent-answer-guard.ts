@@ -600,7 +600,7 @@ export function createAnswerGuard(deps: {
       // 整块缓冲：delta 累积不放行；block-end 全量处理后一次放出（跨词元模式增量切分必漏检）。
       const buffers = new Map<number, string>()
       const allNotes: string[] = []
-      let footerDue = false
+      let footerEmitted = false
       for await (const chunk of next()) {
         switch (chunk.type) {
           case 'text-delta': {
@@ -616,11 +616,18 @@ export function createAnswerGuard(deps: {
               const processed = processAnswerText(source, ctx)
               ctx.openClaim = processed.nextOpenClaim
               allNotes.push(...processed.notes)
-              if (processed.claimSeen) footerDue = footerDue || !facts.grounded
-              if (processed.text !== '') {
-                yield { type: 'text-delta', index: chunk.index, text: processed.text }
+              let outText = processed.text
+              // T3.2 无运行支撑页脚：内联进触发声明的文本块——绝不在 finish 另起尾块。
+              // 回合含工具调用时，tool-call 之后再追加文本块会破坏 API 的
+              // tool_use/tool_result 配对（INVALID_REQUEST，回合中断 + 历史中毒）。
+              if (processed.claimSeen && !facts.grounded && !footerEmitted) {
+                footerEmitted = true
+                outText += UNGROUNDED_FOOTER
               }
-              yield { type: 'block-end', index: chunk.index, block: { type: 'text', text: processed.text } }
+              if (outText !== '') {
+                yield { type: 'text-delta', index: chunk.index, text: outText }
+              }
+              yield { type: 'block-end', index: chunk.index, block: { type: 'text', text: outText } }
             } else {
               buffers.delete(chunk.index)
               yield chunk
@@ -628,13 +635,6 @@ export function createAnswerGuard(deps: {
             break
           }
           case 'finish': {
-            if (footerDue) {
-              // 无运行支撑降级页脚：独立文本块附于回答末尾（先于 finish 发出）
-              const index = 1000
-              yield { type: 'block-start', index, blockType: 'text' }
-              yield { type: 'text-delta', index, text: UNGROUNDED_FOOTER }
-              yield { type: 'block-end', index, block: { type: 'text', text: UNGROUNDED_FOOTER } }
-            }
             // M1-E：核验说明持久化（落盘失败不阻断回答——留痕尽力而为，核验已在文本生效）
             if (allNotes.length > 0 && deps.persistNotes !== undefined) {
               try {

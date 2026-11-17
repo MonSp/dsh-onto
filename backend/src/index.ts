@@ -17,6 +17,7 @@ import { registerTicketSimConnector } from './action-connector-ticketsim.js'
 import { registerExtApiConnector } from './action-connector-ext.js'
 import { createExtDataConnector } from './data-source-ext.js'
 import { dataSources } from './data-sources.js'
+import { setFormalActionEnabled } from './action-executor.js'
 
 export * from './services.js'
 export * from './agent-hooks.js'
@@ -41,14 +42,34 @@ export function apply(ctx: Context): void {
     registerTicketSimConnector({ baseUrl: ticketSimUrl })
     console.log('[dsh-onto] ticket-sim connector registered (kind=simulated):', ticketSimUrl)
   }
-  // M3/F2 外部业务 API：显式配置 DSH_EXT_API_URL + DSH_EXT_API_TOKEN 才注册
-  //（演练 kind=simulated；真实验收经 DSH_EXT_API_KIND=formal 走正式动作开关）。
+  // M3/F2 外部业务 API：显式配置才注册。client_credentials（DSH_EXT_API_CLIENT_ID/SECRET）
+  // 优先——自动续签（静态 token 必然过期）；DSH_EXT_API_TOKEN 仅作静态兼容。
+  // 演练 kind=simulated；真实验收经 DSH_EXT_API_KIND=formal 走正式动作开关。
   const extApiUrl = process.env.DSH_EXT_API_URL
+  const extClientId = process.env.DSH_EXT_API_CLIENT_ID
+  const extClientSecret = process.env.DSH_EXT_API_CLIENT_SECRET
   const extApiToken = process.env.DSH_EXT_API_TOKEN
-  if (typeof extApiUrl === 'string' && extApiUrl !== '' && typeof extApiToken === 'string' && extApiToken !== '') {
+  const hasCreds = typeof extClientId === 'string' && extClientId !== ''
+    && typeof extClientSecret === 'string' && extClientSecret !== ''
+  const hasStatic = typeof extApiToken === 'string' && extApiToken !== ''
+  if (typeof extApiUrl === 'string' && extApiUrl !== '' && (hasCreds || hasStatic)) {
     const extKind = process.env.DSH_EXT_API_KIND === 'formal' ? 'formal' : 'simulated'
-    registerExtApiConnector({ baseUrl: extApiUrl, token: extApiToken, identity: { id: 'ext-api', env: 'test', kind: extKind } })
-    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, token: extApiToken }))
-    console.log('[dsh-onto] ext-api connector + data source registered (kind=' + extKind + '):', extApiUrl)
+    const auth = hasCreds
+      ? { clientId: extClientId as string, clientSecret: extClientSecret as string }
+      : { token: extApiToken as string }
+    registerExtApiConnector({
+      baseUrl: extApiUrl,
+      ...auth,
+      identity: { id: 'ext-api', env: 'test', kind: extKind },
+    })
+    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, ...auth }))
+    console.log('[dsh-onto] ext-api connector + data source registered (kind=' + extKind
+      + ', auth=' + (hasCreds ? 'client_credentials' : 'static') + '):', extApiUrl)
+  }
+  // 正式动作总开关（部署面）：DSH_FORMAL_ACTION_ENABLED=1 由用户在部署侧显式开启——
+  // AI/工具面不得代开（方案红线）。缺省关闭：formal 动作一律 FORMAL_ACTION_DISABLED（零外部效应）。
+  if (process.env.DSH_FORMAL_ACTION_ENABLED === '1') {
+    setFormalActionEnabled(true)
+    console.log('[dsh-onto] formal action ENABLED by deployment config')
   }
 }

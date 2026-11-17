@@ -295,7 +295,7 @@ test('R2-8 跨文本块：声明拆在两个块里也能绑定核验', async () 
   assert.ok(!joined.includes('0.95'), '跨块错误数字不得残留')
 })
 
-test('createAnswerGuard 无运行支撑（T3.2）：分数降级 + finish 前追加核验页脚块', async () => {
+test('createAnswerGuard 无运行支撑（T3.2）：分数降级 + 页脚内联进声明块（不另起尾块）', async () => {
   const listener = createAnswerGuard({ phrases: () => [] })
   const chunks = [
     { type: 'block-start', index: 0, blockType: 'text' },
@@ -306,9 +306,29 @@ test('createAnswerGuard 无运行支撑（T3.2）：分数降级 + finish 前追
   const out = await collect(listener, SESSION_OPTS, chunks)
   const end = out.find((c) => c.type === 'block-end' && c.index === 0)
   assert.ok(end.block.text.includes(UNVERIFIED_NUMBER_TOKEN))
+  assert.ok(end.block.text.includes(UNGROUNDED_FOOTER), '页脚内联进触发声明的文本块')
   const finishAt = out.findIndex((c) => c.type === 'finish')
-  const footerBlock = out.slice(0, finishAt).find((c) => c.type === 'block-end' && c.block.type === 'text' && c.block.text === UNGROUNDED_FOOTER)
-  assert.ok(footerBlock, '页脚块须在 finish 之前发出')
+  const stray = out.slice(0, finishAt).filter((c) => c.type === 'block-end' && c.index !== 0)
+  assert.equal(stray.length, 0, '不得另起页脚尾块')
+})
+
+test('createAnswerGuard 工具调用回合：页脚不得落在 tool-call 之后（API tool_use/tool_result 配对）', async () => {
+  const listener = createAnswerGuard({ phrases: () => [] })
+  const chunks = [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'CAND-001 风险分 0.88，现在调用工具。' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'CAND-001 风险分 0.88，现在调用工具。' } },
+    { type: 'block-start', index: 1, blockType: 'tool-call' },
+    { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'call_1', name: 'record_review_decision', arguments: '{}' } },
+    { type: 'finish', reason: 'stop' },
+  ]
+  const out = await collect(listener, SESSION_OPTS, chunks)
+  const finishAt = out.findIndex((c) => c.type === 'finish')
+  const afterTool = out.slice(0, finishAt).filter((c) => c.type === 'block-start' || c.type === 'block-end')
+  const last = afterTool[afterTool.length - 1]
+  assert.equal(last.index, 1, '最后一个块必须是 tool-call——其后不得再有文本块')
+  const textEnd = out.find((c) => c.type === 'block-end' && c.index === 0)
+  assert.ok(textEnd.block.text.includes(UNGROUNDED_FOOTER), '页脚随声明块内联（在 tool-call 之前）')
 })
 
 test('createAnswerGuard 辅助调用不过闸：purpose 非空 / 无 sessionId 直通', async () => {

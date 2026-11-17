@@ -151,3 +151,26 @@ test('F2-4 取数映射与完整性：对象/关系映射、分页循环、compl
   assert.equal(out2.complete, false, '触顶截断须如实上报 complete=false')
   assert.match(out2.truncatedReason ?? '', /分页不全|截断/)
 })
+
+test('F2-5 client_credentials 续签：401 TOKEN_EXPIRED 失效重签后安全重试', async () => {
+  const issued = []
+  const stub = async (url, init) => {
+    if (String(url).includes('/oauth/token')) {
+      issued.push(issued.length + 1)
+      return jsonRes(200, { access_token: `tok-${issued.length}`, expires_in: 3600 })
+    }
+    const auth = init.headers.authorization
+    if (auth === 'Bearer tok-1') return jsonRes(401, { error: { code: 'TOKEN_EXPIRED' } })
+    return jsonRes(201, { ticketNo: 'EXT-TKT-9', replayed: false })
+  }
+  const conn = createExtApiConnector({
+    baseUrl: 'http://x', clientId: 'c', clientSecret: 's', fetchImpl: stub,
+  })
+  const out = await conn.execute(INTENT, 'act-1', 'key-9')
+  assert.equal(out.externalRef, 'EXT-TKT-9')
+  assert.deepEqual(issued, [1, 2], '401 后重签一次并重试（幂等键使重试安全）')
+
+  // 缓存命中：第二次调用不再签发
+  await conn.execute(INTENT, 'act-2', 'key-10')
+  assert.deepEqual(issued, [1, 2], '有效期内缓存命中，不重复签发')
+})

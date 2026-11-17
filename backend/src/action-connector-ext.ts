@@ -17,12 +17,18 @@ import {
   type ActionIntent,
   type ConnectorKind,
 } from './action-executor.js'
+import { createTokenProvider, staticTokenProvider, type TokenProvider } from './ext-token.js'
 
 export interface ExtApiConnectorOptions {
-  /** 外部测试 API 地址（http://127.0.0.1:3910）。 */
+  /** 外部测试 API 地址（http://127.0.0.1:3920）。 */
   baseUrl: string
-  /** Bearer token（可信认证身份来自部署配置，不收调用方自称）。 */
-  token: string
+  /** Bearer token（静态配置；与 client_credentials 二选一，后者优先）。 */
+  token?: string
+  /** OAuth2 client_credentials 自动续签（真实集成首选——静态 token 必然过期）。 */
+  clientId?: string
+  clientSecret?: string
+  /** 签发端点（缺省 <baseUrl>/oauth/token）。 */
+  tokenUrl?: string
   /** 连接器身份：id/env/kind 覆盖（缺省 kind=simulated；真实验收用 formal）。 */
   identity?: { id?: string; env?: string; kind?: ConnectorKind }
   requestTimeoutMs?: number
@@ -31,23 +37,40 @@ export interface ExtApiConnectorOptions {
 
 export function createExtApiConnector(opts: ExtApiConnectorOptions): ActionConnector {
   const baseUrl = opts.baseUrl.trim().replace(/\/$/, '')
-  const token = opts.token.trim()
   const fetchImpl = opts.fetchImpl ?? fetch
   const requestTimeoutMs = opts.requestTimeoutMs ?? 5_000
+  const tokens: TokenProvider = opts.clientId !== undefined && opts.clientSecret !== undefined
+    ? createTokenProvider({
+        tokenUrl: opts.tokenUrl ?? `${baseUrl}/oauth/token`,
+        clientId: opts.clientId,
+        clientSecret: opts.clientSecret,
+        fetchImpl,
+      })
+    : staticTokenProvider((opts.token ?? '').trim())
 
   async function request(path: string, init: RequestInit): Promise<{ res: Response; body: Record<string, unknown> }> {
-    let res: Response
-    try {
-      res = await fetchImpl(`${baseUrl}${path}`, {
-        ...init,
-        signal: AbortSignal.timeout(requestTimeoutMs),
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
-      })
-    } catch (e) {
-      throw new Error(`外部 API 请求失败（效应不明，须对账）：${e instanceof Error ? e.message : String(e)}`)
+    const send = async (): Promise<{ res: Response; body: Record<string, unknown> }> => {
+      const token = await tokens.getToken()
+      let res: Response
+      try {
+        res = await fetchImpl(`${baseUrl}${path}`, {
+          ...init,
+          signal: AbortSignal.timeout(requestTimeoutMs),
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+        })
+      } catch (e) {
+        throw new Error(`外部 API 请求失败（效应不明，须对账）：${e instanceof Error ? e.message : String(e)}`)
+      }
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      return { res, body }
     }
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
-    return { res, body }
+    let out = await send()
+    // 401 TOKEN_EXPIRED：令牌生命周期事件——失效重签后按幂等键安全重试一次
+    if (out.res.status === 401 && errCode(out.body) === 'TOKEN_EXPIRED') {
+      tokens.invalidate()
+      out = await send()
+    }
+    return out
   }
 
   function errCode(body: Record<string, unknown>): string {

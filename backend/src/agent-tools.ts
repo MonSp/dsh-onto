@@ -3435,10 +3435,20 @@ export function apply(ctx: Context): void {
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '记录业务复核决定')
+          // 边界归一：模型可能把 JSON 数组参数传成字符串（type:'json'）——解析后按数组校验
+          const rawIds = typeof args.candidateIds === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(args.candidateIds) as unknown
+                } catch {
+                  return args.candidateIds
+                }
+              })()
+            : args.candidateIds
           if (
-            !Array.isArray(args.candidateIds)
-            || args.candidateIds.length === 0
-            || !args.candidateIds.every((c) => typeof c === 'string')
+            !Array.isArray(rawIds)
+            || rawIds.length === 0
+            || !rawIds.every((c) => typeof c === 'string')
           ) {
             throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空字符串数组')
           }
@@ -3448,7 +3458,7 @@ export function apply(ctx: Context): void {
           const content = actionDigest({
             action: 'record_review_decision',
             runId: args.runId,
-            candidateIds: args.candidateIds,
+            candidateIds: rawIds,
             snapshotDigest: args.snapshotDigest,
             ruleFingerprint: args.ruleFingerprint,
             decision: args.decision,
@@ -3458,11 +3468,11 @@ export function apply(ctx: Context): void {
             toolName: 'record_review_decision',
             action: `业务复核决定 ${args.decision}（运行 ${args.runId}）`,
             digest: content,
-            summary: `候选 ${args.candidateIds.join('、')}——决定 ${args.decision}`,
+            summary: `候选 ${(rawIds as string[]).join('、')}——决定 ${args.decision}`,
           })
           const dec = actionStoreFor(ws.root).createDecision({
             runId: args.runId,
-            candidateIds: args.candidateIds as string[],
+            candidateIds: rawIds as string[],
             snapshotDigest: args.snapshotDigest,
             ruleFingerprint: args.ruleFingerprint,
             // 复核人身份绑定宿主批准回执（可信面），不收模型自称
