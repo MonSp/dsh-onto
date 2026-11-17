@@ -110,6 +110,7 @@ import {
   connectorNature,
   currentConnectorIdentity,
   executeBehaviorAction,
+  reconcileActionRecord,
   validateActionIntent,
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
@@ -3586,6 +3587,78 @@ export function apply(ctx: Context): void {
             candidateId: proposal.candidateId,
             behaviorId: proposal.behaviorId,
             objectRef: proposal.objectRef,
+            humanReviewRequired: true,
+          })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：人工对账——unknown/在途记录按外部回执处置
+  ctx.tools.register(
+    defineTool({
+      name: 'reconcile_action',
+      description:
+        '人工对账（D 包）：对效应待核实（unknown）或 dispatched 在途的动作台账，按外部回执处置——'
+        + '外部确认成功（带回执）→ 恢复成功；外部确认未执行 → 按无效应失败留痕；无确定回执保持 unknown。'
+        + '不自动重跑、不产生二次外部效应。humanApproved 是意图声明（非放行凭证）：仅当用户明确要求对账时传 true；'
+        + '实际放行以系统批准卡为准。',
+      parameters: {
+        actionId: {
+          type: 'string',
+          required: true,
+          description: '动作台账展示 ID（act-…，治理链/动作台账里可见）',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确要求人工对账时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            actionId: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            externalRef: { type: 'string' },
+            note: { type: 'string' },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { actionId: string; status: string; externalRef?: string; note?: string }
+          return textBlock(
+            `对账 ${v.actionId} → ${v.status}\n`
+              + `外部回执: ${v.externalRef ?? '—'}\n`
+              + (v.note !== undefined ? `${v.note}\n` : '')
+              + 'humanReviewRequired=true（对账结论仍需人工确认；不自动重跑）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (args: { actionId: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '人工对账')
+          const store = actionStoreFor(ws.root)
+          const record = store.listActions().find((a) => a.actionId === args.actionId)
+          if (record === undefined) {
+            throw new AgentToolError('INVALID_ARGS', `动作台账 ${args.actionId} 不存在`)
+          }
+          await approve(exec, {
+            toolName: 'reconcile_action',
+            action: `人工对账 ${args.actionId}（${record.status}）`,
+            digest: actionDigest({ action: 'reconcile_action', businessKey: record.businessKey, status: record.status }),
+            summary: `对象 ${record.objectRef} · 行为 ${record.behaviorId}${record.externalRef ? ` · 回执 ${record.externalRef}` : ''}`,
+          })
+          const res = await reconcileActionRecord(ws.root, record.businessKey)
+          return toolOut({
+            actionId: res.record.actionId,
+            status: res.record.status,
+            ...(res.record.externalRef !== undefined ? { externalRef: res.record.externalRef } : {}),
+            ...(res.note !== undefined ? { note: res.note } : {}),
             humanReviewRequired: true,
           })
         },

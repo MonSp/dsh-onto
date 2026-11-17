@@ -14,6 +14,9 @@ import {
   OntoWorkspace,
 } from './services.js'
 import { registerTicketSimConnector } from './action-connector-ticketsim.js'
+import { registerExtApiConnector } from './action-connector-ext.js'
+import { createExtDataConnector } from './data-source-ext.js'
+import { dataSources } from './data-sources.js'
 
 export * from './services.js'
 export * from './agent-hooks.js'
@@ -37,5 +40,15 @@ export function apply(ctx: Context): void {
   if (typeof ticketSimUrl === 'string' && ticketSimUrl !== '') {
     registerTicketSimConnector({ baseUrl: ticketSimUrl })
     console.log('[dsh-onto] ticket-sim connector registered (kind=simulated):', ticketSimUrl)
+  }
+  // M3/F2 外部业务 API：显式配置 DSH_EXT_API_URL + DSH_EXT_API_TOKEN 才注册
+  //（演练 kind=simulated；真实验收经 DSH_EXT_API_KIND=formal 走正式动作开关）。
+  const extApiUrl = process.env.DSH_EXT_API_URL
+  const extApiToken = process.env.DSH_EXT_API_TOKEN
+  if (typeof extApiUrl === 'string' && extApiUrl !== '' && typeof extApiToken === 'string' && extApiToken !== '') {
+    const extKind = process.env.DSH_EXT_API_KIND === 'formal' ? 'formal' : 'simulated'
+    registerExtApiConnector({ baseUrl: extApiUrl, token: extApiToken, identity: { id: 'ext-api', env: 'test', kind: extKind } })
+    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, token: extApiToken }))
+    console.log('[dsh-onto] ext-api connector + data source registered (kind=' + extKind + '):', extApiUrl)
   }
 }

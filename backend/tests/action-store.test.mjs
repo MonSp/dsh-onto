@@ -16,6 +16,7 @@ import {
   digestAction,
   executeBehaviorAction,
   loadActionRecord,
+  reconcileActionRecord,
   registerActionConnector,
 } from '../dist/action-executor.js'
 import {
@@ -452,5 +453,68 @@ test('S6 ticket-sim 端到端：提案执行/幂等回读/提案消费/意图指
     closeActionStore(root)
     rmSync(root, { recursive: true, force: true })
     child.kill()
+  }
+})
+
+test('S7 人工对账：unknown 按外部回执处置（无效应→failed / 带回执→succeeded），终态不重复对账', async () => {
+  const root = mkRoot()
+  const identity = { id: 'recon', env: 'test', kind: 'simulated' }
+  let queryOutcome = { state: 'not-executed' }
+  registerActionConnector({
+    async execute() {
+      throw new Error('对账不得二次执行')
+    },
+    async compensate() {},
+    async queryResult() {
+      return queryOutcome
+    },
+  }, identity)
+  const store = actionStoreFor(root)
+  try {
+    const base = {
+      actionId: 'act-recon-1',
+      businessKey: 'bk-recon-1',
+      approvalContext: 'ctx',
+      connector: identity,
+      behaviorId: 'BHV-1',
+      objectRef: 'OBJ-A:1',
+      payload: { amount: 1 },
+      status: 'executing',
+      phase: 'dispatched',
+      approvalDigest: 'ap',
+      approvedAt: 't',
+      executedAt: 't',
+      intentDigest: digestAction({ behaviorId: 'BHV-1', objectRef: 'OBJ-A:1', payload: { amount: 1 } }),
+    }
+    store.claim(base)
+    store.settle('bk-recon-1', 1, { status: 'unknown', error: '中断——效应不明' })
+
+    // 外部确认未执行 → 无效应失败留痕（不自动重跑）
+    const r1 = await reconcileActionRecord(root, 'bk-recon-1')
+    assert.equal(r1.record.status, 'failed')
+    assert.match(r1.note ?? '', /外部确认无效应/)
+    // 终态不再对账
+    const r2 = await reconcileActionRecord(root, 'bk-recon-1')
+    assert.match(r2.note ?? '', /终态/)
+
+    // 带回执 → 恢复成功（同单号）
+    queryOutcome = { state: 'succeeded', externalRef: 'ext-recon-1' }
+    store.claim({ ...base, actionId: 'act-recon-2', businessKey: 'bk-recon-2' })
+    store.settle('bk-recon-2', 1, { status: 'unknown', error: '中断——效应不明' })
+    const r3 = await reconcileActionRecord(root, 'bk-recon-2')
+    assert.equal(r3.record.status, 'succeeded')
+    assert.equal(r3.record.externalRef, 'ext-recon-1')
+
+    // 无确定回执 → 保持 unknown
+    queryOutcome = { state: 'unknown' }
+    store.claim({ ...base, actionId: 'act-recon-3', businessKey: 'bk-recon-3' })
+    store.settle('bk-recon-3', 1, { status: 'unknown', error: '中断——效应不明' })
+    const r4 = await reconcileActionRecord(root, 'bk-recon-3')
+    assert.equal(r4.record.status, 'unknown')
+    assert.match(r4.note ?? '', /效应待核实/)
+  } finally {
+    registerActionConnector(null)
+    closeActionStore(root)
+    rmSync(root, { recursive: true, force: true })
   }
 })

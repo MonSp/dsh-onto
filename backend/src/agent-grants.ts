@@ -55,6 +55,8 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   // D 包治理链：复核决定 → 动作提案（提案绑定 decisionId；执行仍过批准卡）
   'record_review_decision',
   'create_action_proposal',
+  // D 包人工对账：unknown/在途记录按外部回执处置（不自动重跑）
+  'reconcile_action',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

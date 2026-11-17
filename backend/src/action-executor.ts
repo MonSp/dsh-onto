@@ -679,6 +679,28 @@ async function recoverInFlight(root: string, record: ActionRecord, conn: ActionC
 }
 
 /**
+ * 人工对账（M2/D）：对 `unknown`（或 dispatched 在途）记录按外部回执处置——
+ * succeeded 带回执 → 恢复成功；not-executed → 外部确认无效应按失败留痕；无确定回执保持 unknown。
+ * 仅人工触发（工具面 humanApproved + 批准卡）；不自动重跑、不自动调用。
+ */
+export async function reconcileActionRecord(
+  root: string,
+  businessKey: string,
+  conn?: ActionConnector,
+): Promise<ExecuteActionResult> {
+  const record = loadActionRecord(root, businessKey)
+  if (record === null) {
+    throw new AgentToolError('ACTION_LEDGER_CORRUPT', `动作台账 ${businessKey.slice(0, 12)} 不存在——fail-closed`)
+  }
+  const reconcilable =
+    record.status === 'unknown' || (record.status === 'executing' && record.phase === 'dispatched')
+  if (!reconcilable) {
+    return { record, replayed: true, note: `台账已终态（${record.status}）——无需对账` }
+  }
+  return recoverInFlight(root, record, conn ?? pinConnector())
+}
+
+/**
  * 执行闭环（R1/R6）：
  * 旧台账 fail-closed → 既有记录核对（重放/上下文冲突/在途恢复）→ 原子占位（互斥）
  * → 系统批准卡 → 持久已批意图 → 连接器执行（固定实例 + 完整幂等键）
