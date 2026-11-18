@@ -35,18 +35,24 @@
 - **规则引擎** —— 先排除后加权打分，每一分都回指规则 ID · core
 - **场景运行** —— pipeline 派发、三层审计、运行历史 A/B 对比、审计导出 · `dsh-onto run` / `runs *` · Web
 - **可信业务执行** —— 三状态数据面、六元组鉴权、决定→提案台账、外部回执与对账（无回执 ⇒ `unknown`）、
-  ticket-sim 与测试适配器 · `record_review_decision` / `create_action_proposal` /
-  `execute_behavior_action` / `reconcile_action`
+  ticket-sim 与测试适配器 · 实现在 **`@dsh-onto/runtime`** · `record_review_decision` /
+  `create_action_proposal` / `execute_behavior_action` / `reconcile_action`
 - **经验循环** —— 运行留痕 → 召回提示 → 人工回填 → 技能模板升级 · `dsh-onto exp *` · Web
 - **专家 preset** —— 对话前选 AML / TAX / MED；`expert_agent` 派专家子 agent · hero 芯片 · 主对话
 - **第二域零改引擎** —— AML + MED + TAX 只换包内容 · `packages/`
 
 ## 目录
 
+依赖方向：**`core` ← `runtime` ← `backend`（装配外壳）** · workbench 只经 remote 服务对接 backend。
+
 ```
 dsh-onto/
   core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，236 项 node --test 验收测试）
-  backend/    @dsh-onto/backend — dsh bundle：onto* wire 服务（唯一后端落点，289 项测试）
+  runtime/    @dsh-onto/runtime — 公共运行与治理库：数据连接器、身份权限、运行留痕、
+              复核/批准、动作台账与对账（无 dsh 自动装配；backend 与后续业务插件
+              依赖它，禁止反向依赖）
+  backend/    @dsh-onto/backend — dsh bundle：开发面 wire（建模/知识/签发）+
+              对 @dsh-onto/runtime 的装配外壳（onto* 落点，289 项测试）
   workbench/  @dsh-onto/workbench — dsh bundle：Web UI 六 tab + 右栏常驻本体图谱
   mock-services/ ticket-sim —— 独立工单模拟服务（SQLite 自身持久化、跨进程幂等、
               故障注入、对账补偿；回执恒为 simulated）
@@ -67,7 +73,8 @@ dsh-onto/
 ```powershell
 # 1. 创建 dsh-onto profile 并安装 @dsh-onto/backend + @dsh-onto/workbench，播种示例包
 dsh-onto\scripts\setup-profile.ps1
-# 2. 核对组合配置（硬断言两个 @dsh-onto/* bundle 都在）
+# 2. 核对组合配置（硬断言 @dsh-onto/backend + @dsh-onto/workbench 仍在；
+#    runtime 以 backend 的库依赖交付，不是独立 bundle）
 dsh-onto\scripts\dump-config.ps1
 # 3. 启动 Web UI（浏览器访问打印的 dsh web URL）→ 侧栏「dsh-onto」
 dsh-onto\scripts\dev-web.ps1
