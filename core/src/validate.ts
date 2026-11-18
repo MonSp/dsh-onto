@@ -171,6 +171,84 @@ export function validatePackage(
     for (const rel of b.relations ?? []) {
       if (!resolved(rel)) err('REF_UNCLOSED', `BHV ${b.id}`, `relations 引用未闭合: ${rel}`)
     }
+    /* M1-C 动作契约（方案 §6）：受限可校验表达，不嵌任意代码 */
+    const ac = b.actionContract
+    if (ac !== undefined) {
+      const where = `BHV ${b.id} actionContract`
+      if (!Array.isArray(ac.fields) || ac.fields.length === 0) {
+        err('ACTION_CONTRACT_INVALID', where, 'fields 须为非空数组（载荷字段白名单）')
+      } else {
+        const seen = new Set<string>()
+        for (const f of ac.fields) {
+          if (typeof f.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(f.name)) {
+            err('ACTION_CONTRACT_INVALID', where, `字段名非法: ${String(f.name)}`)
+            continue
+          }
+          if (seen.has(f.name)) err('ACTION_CONTRACT_INVALID', where, `字段重复: ${f.name}`)
+          seen.add(f.name)
+          if (!['string', 'int', 'float', 'bool', 'date', 'ref'].includes(f.type)) {
+            err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} 类型非法: ${String(f.type)}`)
+          }
+          if (typeof f.required !== 'boolean') {
+            err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} required 须为布尔: ${String(f.required)}`)
+          }
+          if (f.type === 'ref') {
+            if (!Array.isArray(f.refTypes) || f.refTypes.length === 0) {
+              err('ACTION_CONTRACT_INVALID', where, `ref 字段 ${f.name} 须声明非空 refTypes（允许的对象类型）`)
+            }
+            for (const rt of f.refTypes ?? []) {
+              if (!resolved(rt)) err('REF_UNCLOSED', where, `字段 ${f.name} refTypes 引用未闭合: ${rt}`)
+            }
+          }
+          if (f.range !== undefined) {
+            if (f.type !== 'int' && f.type !== 'float') {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} 仅 int/float 可有 range`)
+            }
+            const { min, max } = f.range
+            if ((min !== undefined && (typeof min !== 'number' || !Number.isFinite(min)))
+              || (max !== undefined && (typeof max !== 'number' || !Number.isFinite(max)))) {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} range 须为有限数值`)
+            } else if (typeof min === 'number' && typeof max === 'number' && min > max) {
+              err('ACTION_CONTRACT_INVALID', where, `字段 ${f.name} range min(${min}) > max(${max})`)
+            }
+          }
+        }
+      }
+      for (const rel of ac.requires?.relations ?? []) {
+        if (!resolved(rel)) err('REF_UNCLOSED', where, `requires.relations 引用未闭合: ${rel}`)
+      }
+      const badCond = (c: unknown): boolean => {
+        if (typeof c !== 'object' || c === null) return true
+        const r = c as { attr?: unknown; op?: unknown; value?: unknown }
+        return (
+          typeof r.attr !== 'string' || r.attr === ''
+          || !['=', '!=', '>', '<', '>=', '<='].includes(r.op as string)
+          || (typeof r.value !== 'string' && typeof r.value !== 'number')
+        )
+      }
+      for (const c of [...(ac.requires?.states ?? []), ...(ac.precondition ?? [])]) {
+        // 受限合取项：attr op 常量——不接受任意表达式/函数/嵌套结构
+        if (badCond(c)) err('ACTION_CONTRACT_INVALID', where, `条件须为受限形式 attr op 常量: ${JSON.stringify(c)}`)
+      }
+      if (!Array.isArray(ac.requiredRoles) || ac.requiredRoles.length === 0) {
+        err('ACTION_CONTRACT_INVALID', where, 'requiredRoles 须为非空数组（所需业务角色）')
+      } else if (ac.requiredRoles.some((r) => typeof r !== 'string' || r === '')) {
+        err('ACTION_CONTRACT_INVALID', where, 'requiredRoles 元素须为非空字符串')
+      }
+      if (
+        typeof ac.connector?.capability !== 'string' || ac.connector.capability === ''
+        || typeof ac.connector?.contractVersion !== 'string' || ac.connector.contractVersion === ''
+      ) {
+        err('ACTION_CONTRACT_INVALID', where, 'connector 须声明 capability 与 contractVersion')
+      }
+      const sb = ac.scenarioBinding
+      if (typeof sb?.scenarioId !== 'string' || !pkg.scenarios.some((s) => s.id === sb.scenarioId)) {
+        err('REF_UNCLOSED', where, `scenarioBinding.scenarioId 引用未闭合: ${String(sb?.scenarioId)}`)
+      }
+      if (!['business-review', 'approval', 'both'].includes(sb?.decisionKind as string)) {
+        err('ACTION_CONTRACT_INVALID', where, `decisionKind 非法: ${String(sb?.decisionKind)}`)
+      }
+    }
   }
   for (const s of pkg.skillTemplates) {
     for (const ruleId of Object.keys(s.weights)) {

@@ -540,7 +540,7 @@ export class KnowledgeStore {
   reviewCandidate(
     id: string,
     action: 'approve' | 'reject' | 'merge',
-    opts: { mergeIntoName?: string; reviewedBy?: string } = {},
+    opts: { mergeIntoName?: string; reviewedBy?: string; approvalDigest?: string } = {},
   ): DraftCandidate {
     const queue = this.loadQueue()
     const c = queue.find((x) => x.id === id)
@@ -582,6 +582,8 @@ export class KnowledgeStore {
     }
     // 人审留痕（I1/I5）：谁在哪个面执行了审定动作，入队列可审计回看。
     if (opts.reviewedBy !== undefined) c.reviewedBy = String(opts.reviewedBy)
+    // 批准凭证摘要（可信人审 T2.1）：绑定批准时的内容指纹，物化/导出可回查。
+    if (opts.approvalDigest !== undefined) c.approvalDigest = String(opts.approvalDigest)
     c.reviewedAt = new Date().toISOString()
     this.saveQueue(queue)
     return c

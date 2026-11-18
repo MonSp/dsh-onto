@@ -8,7 +8,7 @@
  * - run_scenario 工具结果恒含 ruleId 回指、humanReviewRequired=true 与禁语扫描。
  * @module @dsh-onto/backend/agent-tools
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -46,6 +46,7 @@ import {
   writeQualityReport,
   type DraftCandidate,
   type DraftItem,
+  type DataBasisInput,
   type ExpandResult,
   type ExperienceNote,
   type ExperienceOutcome,
@@ -55,6 +56,7 @@ import {
   type OntologyPackage,
   type RunArchive,
   type RunDiff,
+  type RunRecord,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SkeletonRecord,
@@ -70,6 +72,7 @@ import {
   configurePhraseStore,
   enforceOutputPolicy,
   isRecord,
+  recalledAnswerPhrases,
   registerServerDir,
   rememberPhrases,
   renderBatchText,
@@ -87,14 +90,121 @@ import {
 } from './agent-policy.js'
 import {
   assertDatasetGranted,
+  checkGrant,
   grantGuardDecision,
   pickContracts,
   readToolContracts,
 } from './agent-grants.js'
+import {
+  actionDigest,
+  digestDraftBatch,
+  requestHostApproval,
+  type ApprovalAsk,
+  type ApprovalGrant,
+  type ApprovalLike,
+  type ToolExecCtx,
+} from './agent-approval.js'
+import { createAnswerGuard } from './agent-answer-guard.js'
+import { registerSkillInvalidator } from './agent-hooks.js'
+import { createPresetResolver, toolSandboxDecision } from './agent-sandbox.js'
+import {
+  connectorNature,
+  currentConnectorIdentity,
+  executeBehaviorAction,
+  reconcileActionRecord,
+  validateActionIntent,
+} from './action-executor.js'
+import { actionStoreFor } from './action-store.js'
+import { businessPolicy, parseTargetRef, requireBizAuth, type ExistenceChecks } from './business-policy.js'
 import { resolveDataDir } from './services.js'
+import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills.js'
 import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
+
+/**
+ * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
+ * 与 RunRecord 台账可核对，换规则后旧决定不得照常套用（ruleFingerprint 二选一口径之一）。
+ */
+export function ruleBasisDigest(rec: RunRecord): string {
+  return actionDigest({
+    action: 'review-rule-basis',
+    package: `${rec.package.name}@${rec.package.version}`,
+    ruleHitLog: [...rec.result.ruleHitLog]
+      .map((h) => ({ ruleId: h.ruleId, score: h.score }))
+      .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
+  })
+}
+
+/* ───────────────────────── M1-C 六元组接线（requireBizAuth） ───────────────────────── */
+
+/**
+ * 数据面授权收口（M1-C）：取数逐对象 read、候选之外的关系/行为读取逐引用 related-read。
+ * ExistenceChecks = 包对象表（pkg.objects）+ 数据面实例（dataset.objects）。
+ * analysisMode 透传：formal 读面无身份即拒（正式模式保持关闭），explore 读面无身份放行（未核验降级轴）。
+ */
+function gateDatasetAccess(
+  pkg: OntologyPackage,
+  dataset: RuntimeDataset,
+  analysisMode: 'formal' | 'explore',
+): void {
+  const types = new Set(pkg.objects.map((o) => o.id))
+  const byId = new Map(dataset.objects.map((o) => [o.id, o]))
+  const plane = new Set(dataset.objects.map((o) => `${o.type}:${o.id}`))
+  const checks: ExistenceChecks = {
+    typeExists: (t) => types.has(t),
+    instanceExists: (t, i) => plane.has(`${t}:${i}`),
+  }
+  for (const o of dataset.objects) {
+    requireBizAuth('read', { type: o.type, instance: o.id }, checks, { analysisMode })
+  }
+  for (const r of dataset.relations) {
+    for (const end of [r.from, r.to]) {
+      const o = byId.get(end)
+      // 端点不在数据面 → type 空串落类型存在性检查拒绝（fail-closed，不放行悬空引用）
+      requireBizAuth('related-read', { type: o?.type ?? '', instance: String(end) }, checks, { analysisMode })
+    }
+  }
+  for (const b of dataset.behaviors ?? []) {
+    for (const ref of [b.anchorRef, b.objectRef]) {
+      const s = String(ref)
+      const i = s.indexOf(':')
+      // ref 两形态：TYPE:instance 完整引用 / 裸实例 id（按数据面对象解析类型；解析不到 → 拒）
+      if (i > 0) {
+        requireBizAuth('related-read', { type: s.slice(0, i), instance: s.slice(i + 1) }, checks, { analysisMode })
+      } else {
+        const o = byId.get(s)
+        requireBizAuth('related-read', { type: o?.type ?? '', instance: s }, checks, { analysisMode })
+      }
+    }
+  }
+}
+
+/** 数据面实例面（act 目标的 ExistenceChecks.instanceExists 证据）：运行台账候选对象Ref 并集。 */
+function runPlaneInstances(root: string): Set<string> {
+  const refs = new Set<string>()
+  for (const rec of listRunRecords(root)) {
+    for (const c of rec.result.candidates ?? []) {
+      if (typeof c.objectRef === 'string' && c.objectRef !== '') refs.add(c.objectRef)
+    }
+  }
+  return refs
+}
+
+/**
+ * act 面 ExistenceChecks（包对象表 + 数据面实例）：类型 = 包内 O1 对象类型（无包时以数据面类型佐证）；
+ * 实例 = 运行台账候选对象Ref 并集（动作目标须是分析面可见实例）。对账面以动作台账记录本体补充为
+ * 存在性证据（执行时已过锚点/收权校验），仍过身份/角色/dataScope。
+ */
+function actChecks(pkgObjects: ReadonlySet<string> | null, plane: ReadonlySet<string>, selfRef?: string) {
+  return {
+    typeExists: (t: string) =>
+      (pkgObjects?.has(t) ?? false)
+      || [...plane].some((r) => r.startsWith(`${t}:`))
+      || (selfRef !== undefined && selfRef.startsWith(`${t}:`)),
+    instanceExists: (t: string, i: string) => plane.has(`${t}:${i}`) || selfRef === `${t}:${i}`,
+  }
+}
 
 /* ───────────────────────── 数据集双通道（S2.3） ───────────────────────── */
 
@@ -222,9 +332,10 @@ export function loadDatasetFromArgs(
     } catch {
       throw new AgentToolError('INVALID_ARGS', `dataset 文件不是合法 JSON: ${raw}`)
     }
-    return validateDatasetShape(parsed)
+    // 信任面（可信取数 T1.2）：载入即打来源标记——文件=工作区供数，内联=Agent 供数。
+    return { ...validateDatasetShape(parsed), provenance: 'file' }
   }
-  return validateDatasetShape(args.dataset)
+  return { ...validateDatasetShape(args.dataset), provenance: 'inline' }
 }
 
 /* ───────────────────────── 只读查询投影 ───────────────────────── */
@@ -802,14 +913,15 @@ export interface ProjectFeaturesArgs {
   datasetPath?: string
   dataset?: unknown
   recipes?: unknown
-  overwrite?: unknown
 }
 
 export interface ProjectFeaturesResult {
   dataset: RuntimeDataset
   projected: Array<{ candidateId: string; keys: string[] }>
   derived: string[]
-  stats: { candidates: number; projectedWrites: number; derivedRecipes: number }
+  /** 事实覆盖留痕（可信取数 T1.1）：调用方预置特征被对象事实/配方覆盖的冲突对。 */
+  overrides: Array<{ candidateId: string; key: string; caller: number | string; fact: number | string }>
+  stats: { candidates: number; projectedWrites: number; derivedRecipes: number; overriddenFeatures: number }
 }
 
 /** recipes 结构校验（A-4：配方是数据不是代码——kind/source 白名单，缺字段即拒）。 */
@@ -866,9 +978,6 @@ export function executeProjectFeatures(
   if (typeof args.name !== 'string' || args.name === '' || typeof args.version !== 'string' || args.version === '') {
     throw new AgentToolError('INVALID_ARGS', 'name/version 必须为非空字符串')
   }
-  if (args.overwrite !== undefined && args.overwrite !== null && typeof args.overwrite !== 'boolean') {
-    throw new AgentToolError('INVALID_ARGS', 'overwrite 须为布尔')
-  }
   const recipes = validateRecipes(args.recipes)
   const dataset = loadDatasetFromArgs(args)
   const pkg = loadToolPackage(deps.ws, args.name, args.version)
@@ -879,17 +988,20 @@ export function executeProjectFeatures(
   const ready = recipes.map((r) =>
     r.kind === 'since' && (r.now === undefined || r.now === null) ? { ...r, now: nowIso } : r,
   )
-  const overwrite = args.overwrite === true
-  const proj = projectFeatures(pkg, dataset, dataset.candidates, { overwrite })
+  // 事实优先（可信取数 T1.1）：对象 attrs/配方派生值覆盖调用方预置特征，冲突留痕。
+  const proj = projectFeatures(pkg, dataset, dataset.candidates)
   const der = deriveFeatures(proj.candidates, dataset, ready)
+  const overrides = [...proj.overrides, ...der.overrides]
   return {
     dataset: { ...dataset, candidates: der.candidates },
     projected: proj.projected,
     derived: der.derived,
+    overrides,
     stats: {
       candidates: der.candidates.length,
       projectedWrites: proj.projected.reduce((n, p) => n + p.keys.length, 0),
       derivedRecipes: der.derived.length,
+      overriddenFeatures: overrides.length,
     },
   }
 }
@@ -926,24 +1038,34 @@ export function renderExpandText(v: ExpandResult, phrases: readonly string[] = [
 }
 
 /**
- * `project_features` 渲染（A-5 摘要级）：计数 + 投影键并集 + 派生配方名。
+ * `project_features` 渲染（A-5 摘要级）：计数 + 投影键并集 + 派生配方名 + 事实覆盖计数。
  * 零 attrs 值正文；自由段（键名/配方名）片段重遮 + 拼接后整段兜底。
  */
 export function renderProjectText(
-  v: { projected: Array<{ candidateId: string; keys: string[] }>; derived: string[]; stats: { candidates: number; projectedWrites: number; derivedRecipes: number } },
+  v: {
+    projected: Array<{ candidateId: string; keys: string[] }>
+    derived: string[]
+    overrides?: Array<{ candidateId: string; key: string }>
+    stats: { candidates: number; projectedWrites: number; derivedRecipes: number; overriddenFeatures?: number }
+  },
   phrases: readonly string[] = [],
 ): string {
   const list = phrases.filter((p) => p !== '')
   const face = (s: string): string => (list.some((p) => s.includes(p)) ? '【禁语已脱敏】' : s)
   const keyUnion = [...new Set(v.projected.flatMap((p) => p.keys))]
   const gapCount = v.projected.filter((p) => p.keys.length === 0).length
+  const overrideCount = v.stats.overriddenFeatures ?? v.overrides?.length ?? 0
   const lines: string[] = []
   lines.push(
     `特征投影/派生 候选=${v.stats.candidates} 投影写入=${v.stats.projectedWrites}`
-      + ` 派生配方=${v.stats.derivedRecipes} 投影缺口候选=${gapCount}`,
+      + ` 派生配方=${v.stats.derivedRecipes} 投影缺口候选=${gapCount} 事实覆盖=${overrideCount}`,
   )
   lines.push(`投影键: ${keyUnion.map(face).join(', ') || '—'}`)
   lines.push(`派生: ${v.derived.map(face).join(', ') || '—'}`)
+  if (overrideCount > 0) {
+    const keys = [...new Set((v.overrides ?? []).map((o) => face(o.key)))]
+    lines.push(`事实覆盖键（调用方预置值已按对象事实覆盖）: ${keys.join(', ') || '—'}`)
+  }
   lines.push('特征就绪后用 run_scenario 打分')
   return retreatRenderText(lines.join('\n'), list)
 }
@@ -1645,24 +1767,96 @@ export function apply(ctx: Context): void {
   // 短语清单持久后端（S2.1）：跨进程 recall 回读 RunRecord.redlines。
   configurePhraseStore((runId) => loadRunRedlines(ws.root, runId))
 
+  // 最终回答守卫（可信回答 T3）：llm/stream 出口闸——最终回答与工具出口同等口径
+  // （禁语遮蔽 / 关键数字核正 / 无运行支撑降级）。红线清单 = 记忆并集 ∪ 工作区全场景红线，
+  // 包变更经 skill 失效钩子清缓存重建。
+  let answerRedlineCache: string[] | null = null
+  const answerPhrases = (): string[] => {
+    if (answerRedlineCache === null) {
+      answerRedlineCache = [...new Set([...recalledAnswerPhrases(), ...workspaceRedlines(ws)])]
+    }
+    return answerRedlineCache
+  }
+  registerSkillInvalidator(() => {
+    answerRedlineCache = null
+  })
+  // R2：最终回答的权威事实优先取服务端运行记录（结构化），渲染文本正则只是兜底。
+  const answerRunFacts = (runId: string) => {
+    try {
+      const rec = loadRunRecord(ws.root, runId)
+      return {
+        runId: rec.runId,
+        scenarioId: rec.scenarioId,
+        scores: new Map(rec.result.candidates.map((c) => [c.candidateId, c.riskScore])),
+        thresholds: [rec.result.reviewGate.threshold],
+        evidenceScores: rec.result.candidates.flatMap((c) => c.evidenceChains.map((e) => e.score)),
+        // M1-E 规则引用绑定：本轮真实命中规则（候选 hitRuleIds ∪ ruleHitLog）
+        hitRuleIds: new Set([
+          ...rec.result.candidates.flatMap((c) => c.hitRuleIds),
+          ...rec.result.ruleHitLog.map((l) => l.ruleId),
+        ]),
+      }
+    } catch {
+      return undefined // 运行记录缺失/损坏 → 回退渲染文本正则（不放行无据声明的职责不变）
+    }
+  }
+  // M1-E：核验说明持久化（workspace answer-verification/，不只留在流处理局部变量）
+  const persistAnswerNotes = (notes: readonly string[]): void => {
+    const dir = join(ws.root, 'answer-verification')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+    writeFileSync(file, `${JSON.stringify({ savedAt: new Date().toISOString(), notes: [...notes] }, null, 2)}\n`, 'utf8')
+  }
+  ctx.on('llm/stream', createAnswerGuard({
+    phrases: answerPhrases,
+    loadRunFacts: answerRunFacts,
+    persistNotes: persistAnswerNotes,
+  }))
+
   const load = (pkgName: string, version: string): OntologyPackage =>
     loadToolPackage(ws, pkgName, version)
 
   // 红线惰性取值：仅错误/guard 拒绝时 loadPackage，成功路径零开销。
   const redlines = (args: unknown): string[] => redlinesForArgs(ws, args)
 
-  ctx.tools.guard((execution) => {
-    const denial = grantGuardDecision(execution.name, execution.arguments, (n, v) =>
-      readToolContracts(ws.versionDir(n, v)),
+  // 人审闸（可信人审 T2.1）：宿主 ApprovalService 实况批准卡——仅 'allowed-once' 放行，
+  // 审批问答成对落会话审计事件；审批面缺席 fail-closed（humanApproved 布尔不再是凭证）。
+  // 服务经 ctx.root.get 可选读取（不进 inject：缺审批面时读到 undefined 由闸 fail-closed，
+  // 而不是把整个工具面卡在等待注入——同 services.ts profileContext 先例）。
+  const approve = (exec: ToolExecCtx | undefined, ask: ApprovalAsk): Promise<ApprovalGrant> =>
+    requestHostApproval(
+      { approval: ctx.root.get('approval') as ApprovalLike | undefined },
+      exec,
+      ask,
     )
-    if (denial === undefined) return undefined
-    // 拒绝语若回显了入参中的红线短语：保留 `CODE:` 机器码前缀，语义段整段退避
-    //（guard 出口是字符串信封，码嵌在串里，不能像 AgentToolError 那样靠 .code 字段保码）。
-    const retreated = retreatPhraseEcho(denial, redlines(execution.arguments))
+
+  // 拒绝语退避：回显了入参红线短语时保留 `CODE:` 机器码前缀，语义段整段脱敏
+  //（guard 出口是字符串信封，码嵌在串里，不能像 AgentToolError 那样靠 .code 字段保码）。
+  const retreatDenial = (denial: string, args: unknown): string => {
+    const retreated = retreatPhraseEcho(denial, redlines(args))
     if (retreated === denial) return denial
     const colon = denial.indexOf(':')
     const code = colon > 0 ? denial.slice(0, colon + 1) : ''
     return `${code} 错误消息含禁语，已整段脱敏`
+  }
+  // 会话 preset 解析（T4.2 沙箱作用域 + R3 身份可靠性 + M0-A receiver）：agentPresets 可选服务迟到读取；
+  // 解析成功即按会话缓存——preset 服务异常/临时缺席不得把已知受控专家退化为标准会话。
+  // 服务对象整只交给解析器：宿主 presetForSession 是依赖 this 的原型方法，
+  // 裸取方法后调用丢 receiver 会把受控专家误判为无 preset（M0-A 反例1）。
+  const presetIdOf = createPresetResolver(() => {
+    return ctx.root.get('agentPresets') as
+      | { presetForSession?: (session: unknown) => string | null }
+      | undefined
+  })
+  ctx.tools.guard((execution) => {
+    // T4.2 全工具沙箱：本体专家会话的通用写入/执行类工具一律拒绝（对象收权之前收口）
+    const sandboxDenial = toolSandboxDecision(execution.name, presetIdOf(execution.agent))
+    if (sandboxDenial !== undefined) return retreatDenial(sandboxDenial, execution.arguments)
+    const denial = grantGuardDecision(execution.name, execution.arguments, (n, v) =>
+      readToolContracts(ws.versionDir(n, v)),
+    )
+    if (denial === undefined) return undefined
+    return retreatDenial(denial, execution.arguments)
   })
 
   ctx.tools.register(
@@ -1749,6 +1943,8 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute((args: { limit?: number }) => {
+        // M1-C 六元组：运行历史（history）——身份/角色面（target=null 不查实例面）
+        requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
         const limitRaw = args.limit
         const limit =
           typeof limitRaw === 'number' && Number.isFinite(limitRaw) && limitRaw >= 1
@@ -1976,6 +2172,22 @@ export function apply(ctx: Context): void {
           description: '可选种子实体 ID（非空 ≤32）：场景声明 prep.expand 时用于扩图圈定范围；'
             + '场景未声明 prep.expand 而传入 → INVALID_ARGS。开展场景时从会话提取种子后单次传入即可',
         },
+        sourceId: {
+          type: 'string',
+          description: '正式取数通道（M1-B）：服务端登记数据源 id——由服务端连接器取数并生成来源快照；'
+            + '与 dataset/datasetPath 互斥。未登记源拒绝（deny-by-default），不接受自称 provenance=connector',
+        },
+        query: {
+          type: 'json',
+          description: '正式取数查询条件（objectTypes/timeWindow/instanceIds）；sourceId 通道的查询面',
+        },
+        analysisMode: {
+          type: 'string',
+          enum: ['formal', 'explore'],
+          description: '计算策略（缺省 explore）：formal=正式可信分析（缺源/超时效/取数不完整/必需特征缺依据 → '
+            + 'dataStatus=insufficient 不可处置，待补数）；explore=探索分析（条件性分数，逐候选降级）。'
+            + 'formal 仅是计算策略——模拟来源即使通过也不能调用真实业务动作',
+        },
       },
       output: {
         schema: {
@@ -1993,18 +2205,69 @@ export function apply(ctx: Context): void {
             audit: { type: 'json', required: true },
           },
         },
-        render: (_args, value) => textBlock(renderRunText(value as unknown as ScenarioRunResult)),
+        render: (args, value) => {
+          const a = args as { name?: string; version?: string; analysisMode?: string }
+          return textBlock(
+            renderRunText(value as unknown as ScenarioRunResult, undefined, {
+              ...(typeof a.name === 'string' && typeof a.version === 'string'
+                ? { package: { name: a.name, version: a.version } }
+                : {}),
+              ...(typeof a.analysisMode === 'string' ? { analysisMode: a.analysisMode } : {}),
+            }),
+          )
+        },
       },
       execute: toolExecute(
-        (args: {
-          name: string
-          version: string
-          scenarioId: string
-          datasetPath?: string
-          dataset?: unknown
-          seedIds?: unknown
-        }) => {
-          const dataset = loadDatasetFromArgs(args)
+        async (
+          args: {
+            name: string
+            version: string
+            scenarioId: string
+            datasetPath?: string
+            dataset?: unknown
+            seedIds?: unknown
+            sourceId?: string
+            query?: unknown
+            analysisMode?: string
+          },
+        ) => {
+          // 入口策略（M1-B，Agent/wire/CLI 同一语义）：三通道互斥——
+          // sourceId=正式取数（服务端连接器 + 来源快照）；datasetPath/dataset=探索通道（标注未核实）。
+          const hasSource = typeof args.sourceId === 'string' && args.sourceId !== ''
+          const hasPath = typeof args.datasetPath === 'string' && args.datasetPath.length > 0
+          const hasInline = args.dataset !== undefined && args.dataset !== null
+          if (hasSource && (hasPath || hasInline)) {
+            throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset/datasetPath（探索通道）互斥，只能提供一个')
+          }
+          if (!hasSource && !hasPath && !hasInline) {
+            throw new AgentToolError('INVALID_ARGS', '数据输入三选一：sourceId（正式取数）/ datasetPath / dataset')
+          }
+          const analysisMode = args.analysisMode === 'formal' ? 'formal' : 'explore'
+          let dataset: RuntimeDataset
+          let dataBasis: DataBasisInput | undefined
+          if (hasSource) {
+            // 正式通道：provenance 与 dataBasis 只由服务端产出（伪造来源拒绝面在 core 判定）
+            const query = args.query === undefined || args.query === null ? {} : args.query
+            if (!isRecord(query)) {
+              throw new AgentToolError('INVALID_ARGS', 'query 必须是 JSON 对象（objectTypes/timeWindow/instanceIds）')
+            }
+            const fetched = await dataSources.fetch({
+              sourceId: args.sourceId as string,
+              query: {
+                ...(Array.isArray(query.objectTypes) ? { objectTypes: query.objectTypes as string[] } : {}),
+                ...(isRecord(query.timeWindow)
+                  ? { timeWindow: { from: String(query.timeWindow.from ?? ''), to: String(query.timeWindow.to ?? '') } }
+                  : {}),
+                ...(Array.isArray(query.instanceIds) ? { instanceIds: query.instanceIds as string[] } : {}),
+              },
+              tenant: 'default',
+              root: ws.root,
+            })
+            dataset = fetched.dataset
+            dataBasis = fetched.dataBasis
+          } else {
+            dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
+          }
           const seedIds = validateRunSeedIds(args.seedIds)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
@@ -2016,13 +2279,14 @@ export function apply(ctx: Context): void {
             )
           }
           const contracts = readToolContracts(versionDir)
+          // M1-C 六元组：取数（read）+ 候选外关系/行为读取（related-read）在收权/执行之前收口
+          gateDatasetAccess(pkg, dataset, analysisMode)
           assertDatasetGranted(dataset, contracts)
-          const result = runScenario(
-            versionDir,
-            args.scenarioId,
-            dataset,
-            seedIds !== undefined ? { seedIds } : undefined,
-          )
+          const result = runScenario(versionDir, args.scenarioId, dataset, {
+            ...(seedIds !== undefined ? { seedIds } : {}),
+            analysisMode,
+            ...(dataBasis !== undefined ? { dataBasis } : {}),
+          })
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
           const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
@@ -2082,6 +2346,8 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: { runIdA: string; runIdB: string }) => {
+          // M1-C 六元组：运行历史（history）——身份/角色面（target=null 不查实例面，authorize 同口径）
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
           const a = loadRunRecord(ws.root, args.runIdA)
           const b = loadRunRecord(ws.root, args.runIdB)
           const diff = compareRunRecords(a, b)
@@ -2149,6 +2415,8 @@ export function apply(ctx: Context): void {
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const contracts = readToolContracts(versionDir)
+          // M1-C 六元组：批量取数同口径（read + related-read；批量面仅 explore）
+          gateDatasetAccess(pkg, dataset, 'explore')
           assertDatasetGranted(dataset, contracts)
           const ids = resolveBatchIds(args.scenarioIds, pkg)
           const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids, seedIds })
@@ -2204,6 +2472,21 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: ExpandEntityArgs) => {
+          // M1-C 六元组：扩图（expand）——种子逐实例授权（包对象表 + 数据面实例；explore 读面口径）
+          const dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
+          const pkg = load(args.name, args.version)
+          const types = new Set(pkg.objects.map((o) => o.id))
+          const byId = new Map(dataset.objects.map((o) => [o.id, o]))
+          const plane = new Set(dataset.objects.map((o) => `${o.type}:${o.id}`))
+          for (const seed of ((args.seedIds ?? []) as unknown as string[])) {
+            const o = byId.get(String(seed))
+            requireBizAuth(
+              'expand',
+              { type: o?.type ?? '', instance: String(seed) },
+              { typeExists: (t) => types.has(t), instanceExists: (t, i) => plane.has(`${t}:${i}`) },
+              { analysisMode: 'explore' },
+            )
+          }
           const result = executeExpandEntity(args, { ws })
           return toolOut(enforceOutputPolicy(result, redlines(args)))
         },
@@ -2220,7 +2503,8 @@ export function apply(ctx: Context): void {
         '按包 featureSources 把对象 attrs 投影进候选 features，并按 recipes 派生 since/count/ratio 特征'
         + '（数据准备，不打分；ad-hoc 探索用此链路——正式开展场景请用 run_scenario(seedIds) 单次调用，'
         + '由场景 prep 声明驱动）。'
-        + '投影不覆盖已存在特征（overwrite=true 才覆盖）；派生配方以计算值写入（配方即显式意图）。'
+        + '事实优先：对象 attrs/派生配方值覆盖调用方同名预置特征（冲突记入 overrides 留痕）；'
+        + '派生配方以计算值写入（配方即显式意图）。'
         + 'since 的 now 缺省取当前时刻，显式传 now 可保证回放逐字节一致。'
         + '投影后 COND_FEATURE_UNDECLARED 与排除特征缺口自然收敛。',
       parameters: {
@@ -2232,7 +2516,6 @@ export function apply(ctx: Context): void {
             '派生配方列表（≤32）：{name, kind: since|count|ratio, …}；since 带 attr+now，'
             + 'count 带 source: behaviors|relations 与可选 filter，ratio 带 num/den/minDen。缺省不派生',
         },
-        overwrite: { type: 'boolean', description: '投影是否覆盖已存在特征（默认 false：显式特征优先）' },
         datasetPath: {
           type: 'string',
           description: 'RuntimeDataset JSON 文件路径（与 dataset 二选一；仅限平台进程工作目录内）',
@@ -2247,6 +2530,7 @@ export function apply(ctx: Context): void {
             dataset: { type: 'json', required: true },
             projected: { type: 'array', required: true },
             derived: { type: 'array', required: true },
+            overrides: { type: 'array', required: true },
             stats: { type: 'json', required: true },
           },
         },
@@ -2293,6 +2577,8 @@ export function apply(ctx: Context): void {
       },
       execute: toolExecute(
         (args: { runId: string }) => {
+          // M1-C 六元组：导出（export）——身份/角色面（target=null 不查实例面）
+          requireBizAuth('export', null, { typeExists: () => true, instanceExists: () => true })
           // 固定导出目录（S2.4）：不接受调用方路径，无路径面可攻击。
           const exported = exportRunArchive(ws.root, args.runId)
           const summary = exportSummaryOf(exported)
@@ -2400,7 +2686,8 @@ export function apply(ctx: Context): void {
       name: 'annotate_experience',
       description:
         '标注/回填一条经验记录（ExperienceNote 的 outcome、误迁移、reviewFocus）。'
-        + 'humanApproved 是人审契约：仅当用户明确指示标注时传 true，agent 不得自行标注；'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确指示标注时传 true，agent 不得自行标注；'
+        + '实际放行以系统批准卡为准（可信人审 T2.1）。'
         + '误迁移只由人判（misTransfer.by 须为非空人工身份）。'
         + 'note 不存在时按 RunRecord 新建（须带 outcome）；已存在则回填。'
         + '新建与回填标 success 均查审计闸（除非 counterexample）。'
@@ -2450,7 +2737,7 @@ export function apply(ctx: Context): void {
         render: (args, value) => textBlock(renderAnnotateText(value as never, redlinesForRuns(ws, args))),
       },
       execute: toolExecute(
-        (raw: {
+        async (raw: {
           runId: string
           humanApproved: boolean
           outcome?: ExperienceOutcome
@@ -2459,7 +2746,23 @@ export function apply(ctx: Context): void {
           reviewFocus?: string[]
           counterexample?: boolean
           reusedFromRunId?: string
-        }) => {
+        }, exec) => {
+          // 人审闸（T2.1）：标注经验是人审写动作，系统批准卡实况放行。
+          await approve(exec, {
+            toolName: 'annotate_experience',
+            action: `标注经验 ${raw.runId}`,
+            digest: actionDigest({
+              action: 'annotate_experience',
+              runId: raw.runId,
+              outcome: raw.outcome ?? null,
+              outcomeReason: raw.outcomeReason ?? null,
+              misTransfer: raw.misTransfer ?? null,
+              reviewFocus: raw.reviewFocus ?? null,
+              counterexample: raw.counterexample ?? null,
+              reusedFromRunId: raw.reusedFromRunId ?? null,
+            }),
+            summary: `运行 ${raw.runId} 的经验标注（outcome=${raw.outcome ?? '—'}）`,
+          })
           const args: Parameters<typeof annotateExperienceForTool>[1] = {
             runId: raw.runId,
             humanApproved: raw.humanApproved,
@@ -2489,7 +2792,8 @@ export function apply(ctx: Context): void {
         '经验抽象巩固（E2-1）：把包内成功/反例经验按结构签名聚簇，产出 SkillTemplate/RedLine/ExclusionRule'
         + '草案入知识库人审队列——只入队、永不直写包；物化必须走 apply_draft（humanApproved 人审）。'
         + '用于「总结成功经验 / 沉淀方法论 / 反复出现的做法」类请求：不要再写工作区方法论文档代替本工具。'
-        + 'humanApproved 是人审契约：仅当用户明确要求总结/沉淀经验时传 true，agent 不得自行总结。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求总结/沉淀经验时传 true，agent 不得自行总结。'
+        + '实际放行以系统批准卡为准（可信人审 T2.1）。'
         + 'packageId 可省略：省略即扫描全库有经验的非 ISSUED 包（「最近这些成功经验」类请求不必先追问包名，'
         + '也不要为此翻目录找包——直接不传 packageId）。'
         + '反例/误迁移经验不参聚成功簇（反例只落红线或排除草案）；簇员不足回执说明、不硬凑。'
@@ -2533,7 +2837,18 @@ export function apply(ctx: Context): void {
           ),
       },
       execute: toolExecute(
-        (args: { packageId?: string; minCluster?: number; humanApproved: boolean }) => {
+        async (args: { packageId?: string; minCluster?: number; humanApproved: boolean }, exec) => {
+          // 人审闸（T2.1）：经验抽象只入队，但入队即占人审队列——同族过系统批准卡。
+          await approve(exec, {
+            toolName: 'abstract_experience',
+            action: '总结经验',
+            digest: actionDigest({
+              action: 'abstract_experience',
+              packageId: args.packageId ?? null,
+              minCluster: args.minCluster ?? null,
+            }),
+            summary: `经验抽象（包 ${args.packageId ?? '全库'}）`,
+          })
           // 抽象只读 O 层源与 experiences/，不依赖派生门禁（与 draft_elements 同口径）。
           const result = abstractExperienceForTool(ws, knowledge, {
             packageId: args.packageId,
@@ -2757,8 +3072,11 @@ export function apply(ctx: Context): void {
       description:
         '人审动作：批准一条或多条草案并作为同一批物化进包（唯一写包路径——经 knowledge 物化通道：'
         + 'ISSUED 拒绝、骨架门 I6、结论性表述拦截）。同批多条请一次传入 candidateIds——权重归一是批'
-        + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。humanApproved 是人审契约：'
-        + '仅当用户在会话中明确批准后才传 true，agent 不得自行批准（留痕 reviewedBy=agent-tool）。'
+        + '语义（显式权重为准、未动规则吸收残差），逐条物化会互相打架。'
+        + '放行凭证是系统批准卡（可信人审 T2.1）：调用时向用户弹出实况批准卡（含批次内容摘要），'
+        + '仅用户点允许才物化，拒绝/超时/无审批面一律取消（fail-closed）；'
+        + '批准后草案内容若漂移，凭证作废须重新批准（APPROVAL_STALE）。'
+        + 'humanApproved 是意图声明：仅当用户在会话中明确批准后才传 true，agent 不得自行批准。'
         + '「明确批准」须指代本批草案清单本身（用户主动批准/同意这批草案，或批准卡通过）；'
         + '恢复/推进类台词（按提案落盘/继续弄）、包形态与业务范围选择、骨架确认均不构成批准，'
         + '不得引用其作为 humanApproved 依据——未见明确批准先问一句再传。'
@@ -2774,8 +3092,8 @@ export function apply(ctx: Context): void {
           type: 'boolean',
           required: true,
           description:
-            '人审契约：仅当用户明确批准本批草案时传 true；恢复/推进类台词、包形态选择、'
-            + '骨架确认均不构成批准，agent 不得自行批准',
+            '意图声明（非放行凭证）：仅当用户明确批准本批草案时传 true；实际放行以系统批准卡为准。'
+            + '恢复/推进类台词、包形态选择、骨架确认均不构成批准，agent 不得自行批准',
         },
       },
       output: {
@@ -2818,10 +3136,38 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute(
-        (args: { candidateIds: string[]; name: string; version: string; humanApproved: boolean }) => {
+        async (args: { candidateIds: string[]; name: string; version: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '批准')
           if (!Array.isArray(args.candidateIds) || args.candidateIds.length === 0) {
             throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空数组')
+          }
+          // 人审闸（T2.1）：批次指纹绑定草案内容 → 系统批准卡实况放行；
+          // 批准回执后复核指纹——批准与物化之间草案漂移 → 凭证作废（APPROVAL_STALE）。
+          const batchRows = (): Parameters<typeof digestDraftBatch>[2] =>
+            args.candidateIds.map((id) => {
+              const c = knowledge.getCandidate(id)
+              return {
+                id: c.id,
+                layer: c.layer,
+                targetKind: c.targetKind,
+                ...(c.targetId !== undefined ? { targetId: c.targetId } : {}),
+                ...(c.op !== undefined ? { op: c.op } : {}),
+                name: c.name,
+                payload: c.payload,
+              }
+            })
+          const digest = digestDraftBatch(args.name, args.version, batchRows())
+          await approve(exec, {
+            toolName: 'apply_draft',
+            action: `批准物化 ${args.candidateIds.length} 条草案`,
+            digest,
+            summary: `包 ${args.name}@${args.version}，草案 ${args.candidateIds.join(', ')}`,
+          })
+          if (digestDraftBatch(args.name, args.version, batchRows()) !== digest) {
+            throw new AgentToolError(
+              'APPROVAL_STALE',
+              '批准后草案内容已变化（批次指纹不匹配），本次人审凭证作废——请重新出示草案清单并重新批准',
+            )
           }
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
@@ -2857,7 +3203,8 @@ export function apply(ctx: Context): void {
           for (const id of args.candidateIds) {
             const c = knowledge.getCandidate(id)
             if (c.status === 'pending') {
-              knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'agent-tool' })
+              // 留痕批准凭证摘要（T2.1）：批的就是这份内容指纹，导出/回查可对账。
+              knowledge.reviewCandidate(id, 'approve', { reviewedBy: 'host-gate', approvalDigest: digest })
             }
           }
           const res = knowledge.materialize(dir, args.candidateIds)
@@ -2903,7 +3250,8 @@ export function apply(ctx: Context): void {
       description:
         '人审动作：驳回一条待审草案（状态置 rejected，留痕可回看；不写包）。'
         + '允许 pending 或已 approved 未物化（恢复「已批未写」卡死）；merged 拒绝。'
-        + 'humanApproved 同 apply_draft 人审契约：仅当用户明确指示驳回时传 true。',
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确指示驳回时传 true；'
+        + '实际放行以系统批准卡为准（可信人审 T2.1，对草案内容指纹绑定）。',
       parameters: {
         candidateId: { type: 'string', required: true, description: '草案 ID（dc-…）' },
         name: { type: 'string', required: true, description: '包名' },
@@ -2929,8 +3277,21 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute(
-        (args: { candidateId: string; name: string; version: string; humanApproved: boolean }) => {
+        async (args: { candidateId: string; name: string; version: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '驳回')
+          // 人审闸（T2.1）：驳回同族——系统批准卡实况放行（对草案内容指纹绑定）。
+          const before0 = knowledge.getCandidate(args.candidateId)
+          await approve(exec, {
+            toolName: 'reject_draft',
+            action: `驳回草案 ${args.candidateId}`,
+            digest: actionDigest({
+              action: 'reject_draft',
+              id: before0.id,
+              name: before0.name,
+              payload: before0.payload,
+            }),
+            summary: `草案 ${args.candidateId}（${before0.targetKind} ${before0.name}）`,
+          })
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
           if (pkg.meta.status === 'ISSUED') {
@@ -2943,8 +3304,561 @@ export function apply(ctx: Context): void {
               `package mismatch: 草案属于 ${before.packageId}，目标包为 ${args.name}`,
             )
           }
-          const c = knowledge.reviewCandidate(args.candidateId, 'reject', { reviewedBy: 'agent-tool' })
+          const c = knowledge.reviewCandidate(args.candidateId, 'reject', { reviewedBy: 'host-gate' })
           return toolOut({ candidateId: c.id, status: c.status })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // 业务动作执行器（可信执行 T4.1）：O2 行为定义 → 受治理动作（本体闭合/收权 + 批准卡 + 幂等台账 + 失败补偿）
+  ctx.tools.register(
+    defineTool({
+      name: 'execute_behavior_action',
+      description:
+        '业务动作执行器（T4.1 + R1/R6）：执行包内声明的 O2 行为动作（报送/冻结/开工单…）——'
+        + '动作必须是本体治理的行为（behaviorId 包内闭合、锚点类型一致、载荷过显式 schema），锚点对象过收权清单；'
+        + '每次执行经系统批准卡（摘要绑定包版本/行为契约/对象/载荷/连接器目标），失败按效应面补偿（saga 反向动作）并落台账。'
+        + '幂等：业务幂等键 = 业务操作标识（operationId，缺省=同载荷即同操作）+ 连接器身份与环境——'
+        + '同键重放回读台账（免二次批准）；演练与真实环境隔离；重复同载荷业务动作请给新的 operationId。'
+        + '台账损坏/旧格式/上下文变化 fail-closed（人工对账），执行中断进效应待核实态、不自动重跑。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求执行该动作时传 true。'
+        + '分析场景不自动触发业务动作——动作有真实副作用，必须显式调用本工具并过批准卡。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        behaviorId: { type: 'string', required: true, description: 'O2 行为 ID（BHV-…，包内声明）' },
+        objectRef: { type: 'string', required: true, description: '动作锚点对象实例（TYPE:instance 完整引用，过收权清单，deny-by-default）' },
+        payload: { type: 'json', required: true, description: '动作载荷（JSON 对象，进幂等摘要与台账；内嵌对象引用须已收权）' },
+        operationId: {
+          type: 'string',
+          description: '业务操作标识（R6）：缺省=同载荷即同操作（重放回读）；重复同载荷业务动作时传新的标识',
+        },
+        proposalId: {
+          type: 'string',
+          description:
+            '动作提案 ID（PROP-…，D 包治理链）：传入时执行器重新加载验证提案（复核决定/候选/载荷指纹）并'
+            + '消费提案（单次）；仅提供 runId 不足以证明动作获准。受治理流程（正式/模拟连接器）应经提案执行',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求执行该动作时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            actionId: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            replayed: { type: 'boolean', required: true },
+            behaviorId: { type: 'string', required: true },
+            objectRef: { type: 'string', required: true },
+            externalRef: { type: 'string' },
+            replayNote: { type: 'string' },
+            connectorKind: { type: 'string', required: true },
+            simulated: { type: 'boolean', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            actionId: string
+            status: string
+            replayed: boolean
+            behaviorId: string
+            objectRef: string
+            externalRef?: string
+            replayNote?: string
+            connectorKind: string
+            simulated: boolean
+          }
+          const nature = v.simulated
+            ? `演练/模拟执行（${v.connectorKind}，非真实业务成功）`
+            : `正式业务动作（${v.connectorKind}，经批准卡放行）`
+          return textBlock(
+            `动作 ${v.actionId} · ${v.status}${v.replayed ? '（幂等重放）' : ''} · 行为 ${v.behaviorId} · 对象 ${v.objectRef}\n`
+              + `执行性质: ${nature}\n`
+              + `连接器回执: ${v.externalRef ?? '—'}${v.simulated ? '（模拟单号，不得当作真实业务受理凭证）' : ''}\n`
+              + (v.replayNote !== undefined ? `${v.replayNote}\n` : '')
+              + 'humanReviewRequired=true（业务动作经系统批准卡放行；台账落 workspace actions/ 可回查）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            name: string
+            version: string
+            behaviorId: string
+            objectRef: string
+            payload: unknown
+            operationId?: string
+            proposalId?: string
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '执行业务动作')
+          if (!isRecord(args.payload)) {
+            throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
+          }
+          const intent = {
+            behaviorId: args.behaviorId,
+            objectRef: args.objectRef,
+            payload: args.payload,
+          }
+          // 本体闭合（R4）：行为必须包内声明、锚点类型一致、载荷显式 schema + 引用收权
+          //——全部通过后才弹批准卡（loadToolPackage 过派生门禁，与场景执行同闸）
+          const pkg = loadToolPackage(ws, args.name, args.version)
+          validateActionIntent(pkg.behaviors, intent, {
+            isGranted: (ref) =>
+              checkGrant(readToolContracts(ws.versionDir(args.name, args.version)), ref) === undefined,
+          })
+          const behavior = pkg.behaviors.find((b) => b.id === args.behaviorId)
+          if (behavior === undefined) {
+            throw new AgentToolError('INVALID_ARGS', `行为 ${args.behaviorId} 未在包内声明（O2 闭合）`)
+          }
+          // M1-C 六元组：动作面（act）——权限判定在批准卡之前（批准卡不授予权限），
+          // 目标过包对象表 + 数据面实例（运行台账候选）三查/角色/dataScope
+          requireBizAuth(
+            'act',
+            parseTargetRef(args.objectRef),
+            actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(ws.root)),
+          )
+          // R1/R6：占位互斥 → 批准卡（绑定包/契约/对象/载荷/连接器上下文）→ 连接器执行
+          const res = await executeBehaviorAction({
+            root: ws.root,
+            intent,
+            pkg: { name: pkg.meta.name, version: pkg.meta.version },
+            behavior: {
+              id: behavior.id,
+              anchor: behavior.anchor,
+              name: behavior.name,
+              relations: behavior.relations,
+              states: behavior.states,
+            },
+            ...(args.operationId !== undefined ? { operationId: args.operationId } : {}),
+            ...(args.proposalId !== undefined ? { proposalId: args.proposalId } : {}),
+            requestGrant: async (contextDigest) =>
+              await approve(exec, {
+                toolName: 'execute_behavior_action',
+                action: `执行业务动作 ${args.behaviorId}`,
+                digest: contextDigest,
+                summary: `对象 ${args.objectRef}（包 ${args.name}@${args.version}）`,
+              }),
+          })
+          const record = res.record
+          // M0-A：演练/模拟性质显式上墙（不得显示成真实业务成功）
+          const nature = connectorNature(record.connector)
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                actionId: record.actionId,
+                status: record.status,
+                replayed: res.replayed,
+                behaviorId: record.behaviorId,
+                objectRef: record.objectRef,
+                ...(record.externalRef !== undefined ? { externalRef: record.externalRef } : {}),
+                ...(res.note !== undefined ? { replayNote: res.note } : {}),
+                connectorKind: nature.kind,
+                simulated: nature.simulated,
+                humanReviewRequired: true,
+              },
+              phrasesOfPkg(pkg),
+            ),
+          )
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：业务复核决定（两次人工事件之一）——人对分析与证据作出业务决定
+  ctx.tools.register(
+    defineTool({
+      name: 'record_review_decision',
+      description:
+        '业务复核决定（D 包）：人对该次分析与证据作出业务决定，生成 ReviewDecision——绑定 runId、'
+        + '获准候选集合、数据快照摘要、本体/规则指纹与决定理由。approved 的决定才允许对集合内候选创建'
+        + '动作提案（create_action_proposal）；执行批准（execute_behavior_action 的系统批准卡）是另一次'
+        + '人工事件，两者不可互相替代，humanReviewRequired 恒真也不替代任何一次。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确给出该复核决定时传 true；实际放行以系统批准卡为准。',
+      parameters: {
+        runId: { type: 'string', required: true, description: '被复核的运行 ID（run-…）' },
+        candidateIds: {
+          type: 'json',
+          required: true,
+          description: '本次决定覆盖的候选集合（JSON 字符串数组，如 ["CAND-001"]；approved 时即获准提案集合）',
+        },
+        snapshotDigest: {
+          type: 'string',
+          required: true,
+          description: '数据快照摘要（绑定数据面）：须与 RunRecord 台账核对——填运行的 datasetDigest（完整或 ≥8 位前缀）',
+        },
+        ruleFingerprint: {
+          type: 'string',
+          required: true,
+          description: '本体/规则指纹（绑定规则面）：须与 RunRecord 台账核对——填 包名@版本 或运行规则基指纹',
+        },
+        decision: {
+          type: 'string',
+          required: true,
+          description: '业务决定：approved（允许对集合内候选提案动作）/ rejected',
+        },
+        reason: { type: 'string', description: '复核理由（可选，进留痕）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确给出该复核决定时传 true；澄清/推进类台词不构成复核决定',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            decisionId: { type: 'string', required: true },
+            runId: { type: 'string', required: true },
+            decision: { type: 'string', required: true },
+            candidateIds: { type: 'json', required: true },
+            reviewer: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            decisionId: string
+            runId: string
+            decision: string
+            candidateIds: string[]
+            reviewer: string
+          }
+          return textBlock(
+            `业务复核决定 ${v.decisionId} · ${v.decision} · 运行 ${v.runId}\n`
+              + `覆盖候选: ${v.candidateIds.join('、')}\n`
+              + `复核人绑定: ${v.reviewer}（经系统批准卡，不收模型自称）\n`
+              + 'humanReviewRequired=true（复核决定 ≠ 执行批准；动作执行仍须单独过系统批准卡）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            runId: string
+            candidateIds: unknown
+            snapshotDigest: string
+            ruleFingerprint: string
+            decision: string
+            reason?: string
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '记录业务复核决定')
+          // 边界归一：模型可能把 JSON 数组参数传成字符串（type:'json'）——解析后按数组校验
+          const rawIds = typeof args.candidateIds === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(args.candidateIds) as unknown
+                } catch {
+                  return args.candidateIds
+                }
+              })()
+            : args.candidateIds
+          if (
+            !Array.isArray(rawIds)
+            || rawIds.length === 0
+            || !rawIds.every((c) => typeof c === 'string')
+          ) {
+            throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空字符串数组')
+          }
+          if (args.decision !== 'approved' && args.decision !== 'rejected') {
+            throw new AgentToolError('INVALID_ARGS', 'decision 必须是 approved / rejected')
+          }
+          // 与 RunRecord 台账核对（D 包防伪造）：自报不核对 = 不存在的 run 也能立决定、
+          // 换数据/换规则后旧决定照常套用——runId 必须真实存在，snapshotDigest/ruleFingerprint
+          // 必须与运行台账一致（不匹配拒绝，不落决定）。
+          const runRec = (() => {
+            try {
+              return loadRunRecord(ws.root, args.runId)
+            } catch {
+              throw new AgentToolError(
+                'REVIEW_RUN_NOT_FOUND',
+                `运行 ${args.runId} 不存在于 RunRecord 台账——复核决定须绑定真实运行，不得对自报 run 立决定`,
+              )
+            }
+          })()
+          const snapshotOk =
+            args.snapshotDigest === runRec.datasetDigest
+            || (runRec.inputDigest !== undefined && args.snapshotDigest === runRec.inputDigest)
+            || (args.snapshotDigest.length >= 8
+              && (runRec.datasetDigest.startsWith(args.snapshotDigest)
+                || (runRec.inputDigest ?? '').startsWith(args.snapshotDigest)))
+          if (!snapshotOk) {
+            throw new AgentToolError(
+              'REVIEW_SNAPSHOT_MISMATCH',
+              `snapshotDigest 与运行 ${args.runId} 的数据快照不符（datasetDigest ${runRec.datasetDigest.slice(0, 12)}…）——`
+                + '换数据不可沿用自报摘要立决定',
+            )
+          }
+          const ruleOk =
+            args.ruleFingerprint === `${runRec.package.name}@${runRec.package.version}`
+            || args.ruleFingerprint === ruleBasisDigest(runRec)
+          if (!ruleOk) {
+            throw new AgentToolError(
+              'REVIEW_RULE_MISMATCH',
+              `ruleFingerprint 与运行 ${args.runId} 的规则面不符（期望 ${runRec.package.name}@${runRec.package.version} 或运行规则基指纹）——`
+                + '换规则不可沿用自报指纹立决定',
+            )
+          }
+          // 复核人 = 宿主用户 id（可信身份提供者；不收模型自称、不拿批准摘要冒充用户 id）
+          const reviewerId = businessPolicy.resolveIdentity()?.userId
+          if (typeof reviewerId !== 'string' || reviewerId === '') {
+            throw new AgentToolError(
+              'REVIEWER_UNCONFIRMED',
+              '复核人身份不可确认（可信宿主/业务认证服务缺席）——复核决定须绑定宿主用户 id（fail-closed），'
+                + '不以批准摘要/模型自称冒充复核人',
+            )
+          }
+          const content = actionDigest({
+            action: 'record_review_decision',
+            runId: args.runId,
+            candidateIds: rawIds,
+            snapshotDigest: args.snapshotDigest,
+            ruleFingerprint: args.ruleFingerprint,
+            decision: args.decision,
+            reason: args.reason ?? '',
+          })
+          const grant = await approve(exec, {
+            toolName: 'record_review_decision',
+            action: `业务复核决定 ${args.decision}（运行 ${args.runId}）`,
+            digest: content,
+            summary: `候选 ${(rawIds as string[]).join('、')}——决定 ${args.decision}`,
+          })
+          const dec = actionStoreFor(ws.root).createDecision({
+            runId: args.runId,
+            candidateIds: rawIds as string[],
+            snapshotDigest: args.snapshotDigest,
+            ruleFingerprint: args.ruleFingerprint,
+            // 复核人 = 宿主用户 id（BusinessIdentity.userId，宿主/部署断言）——与 action-store ReviewDecision
+            // 口径一致；不收模型自称、不拿批准摘要 12 位冒充用户 id
+            reviewer: `host:${reviewerId}`,
+            decision: args.decision as 'approved' | 'rejected',
+            ...(args.reason !== undefined ? { reason: args.reason } : {}),
+          })
+          return toolOut({
+            decisionId: dec.decisionId,
+            runId: dec.runId,
+            decision: dec.decision,
+            candidateIds: dec.candidateIds,
+            reviewer: dec.reviewer,
+            humanReviewRequired: true,
+          })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：动作提案——绑定复核决定的受治理动作（服务端 operationId，单次消费）
+  ctx.tools.register(
+    defineTool({
+      name: 'create_action_proposal',
+      description:
+        '动作提案（D 包）：对已获准复核决定内的候选提出受治理动作提案——绑定 decisionId/runId/候选/行为/对象/'
+        + '规范化载荷/连接器目标，服务端分配 operationId（提案单次消费；重复业务动作须显式新提案并重新批准）。'
+        + '提案不是执行批准：执行仍过系统批准卡（execute_behavior_action 提 proposalId）。'
+        + '复核决定缺失/未获准/候选越界一律拒绝——Agent 只能对允许的候选提出动作。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求对该候选提出动作时传 true。',
+      parameters: {
+        decisionId: { type: 'string', required: true, description: '复核决定 ID（DEC-…，须 approved）' },
+        runId: { type: 'string', required: true, description: '运行 ID（须与复核决定绑定的运行一致）' },
+        candidateId: { type: 'string', required: true, description: '候选 ID（须在决定获准集合内）' },
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '版本号' },
+        behaviorId: { type: 'string', required: true, description: 'O2 行为 ID（BHV-…，包内声明）' },
+        objectRef: { type: 'string', required: true, description: '动作锚点对象实例（TYPE:instance，过收权清单）' },
+        payload: { type: 'json', required: true, description: '动作载荷（进意图指纹；执行时须与提案一致）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确要求对该候选提出动作时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            proposalId: { type: 'string', required: true },
+            decisionId: { type: 'string', required: true },
+            operationId: { type: 'string', required: true },
+            runId: { type: 'string', required: true },
+            candidateId: { type: 'string', required: true },
+            behaviorId: { type: 'string', required: true },
+            objectRef: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as {
+            proposalId: string
+            decisionId: string
+            operationId: string
+            runId: string
+            candidateId: string
+            behaviorId: string
+            objectRef: string
+          }
+          return textBlock(
+            `动作提案 ${v.proposalId} · 操作 ${v.operationId}（服务端分配，单次消费）\n`
+              + `复核决定 ${v.decisionId} · 运行 ${v.runId} · 候选 ${v.candidateId}\n`
+              + `行为 ${v.behaviorId} · 对象 ${v.objectRef}\n`
+              + 'humanReviewRequired=true（提案 ≠ 执行批准：执行请提 proposalId 并过系统批准卡）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            decisionId: string
+            runId: string
+            candidateId: string
+            name: string
+            version: string
+            behaviorId: string
+            objectRef: string
+            payload: unknown
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '提出动作提案')
+          if (!isRecord(args.payload)) {
+            throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
+          }
+          const intent = { behaviorId: args.behaviorId, objectRef: args.objectRef, payload: args.payload }
+          const pkg = loadToolPackage(ws, args.name, args.version)
+          validateActionIntent(pkg.behaviors, intent, {
+            isGranted: (ref) =>
+              checkGrant(readToolContracts(ws.versionDir(args.name, args.version)), ref) === undefined,
+          })
+          // M1-C 六元组：动作面（act）——提案目标过包对象表 + 数据面实例（权限判定在人审/批准之前）
+          requireBizAuth(
+            'act',
+            parseTargetRef(args.objectRef),
+            actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(ws.root)),
+          )
+          const connIdentity = currentConnectorIdentity()
+          const proposal = actionStoreFor(ws.root).createProposal({
+            decisionId: args.decisionId,
+            runId: args.runId,
+            candidateId: args.candidateId,
+            behaviorId: args.behaviorId,
+            objectRef: args.objectRef,
+            payload: args.payload,
+            intentDigest: actionDigest({ action: 'execute_behavior_action', behaviorId: args.behaviorId, objectRef: args.objectRef, payload: args.payload }),
+            connectorId: connIdentity.id,
+            connectorEnv: connIdentity.env,
+            // 提案即绑定连接器性质（错性质不可套用）：simulated 提案不得经 formal 连接器执行
+            connectorKind: connIdentity.kind ?? 'dryrun',
+          })
+          return toolOut({
+            proposalId: proposal.proposalId,
+            decisionId: proposal.decisionId,
+            operationId: proposal.operationId,
+            runId: proposal.runId,
+            candidateId: proposal.candidateId,
+            behaviorId: proposal.behaviorId,
+            objectRef: proposal.objectRef,
+            humanReviewRequired: true,
+          })
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }),
+  )
+
+  // D 包：人工对账——unknown/在途记录按外部回执处置
+  ctx.tools.register(
+    defineTool({
+      name: 'reconcile_action',
+      description:
+        '人工对账（D 包）：对效应待核实（unknown）或 dispatched 在途的动作台账，按外部回执处置——'
+        + '外部确认成功（带回执）→ 恢复成功；外部确认未执行 → 按无效应失败留痕；无确定回执保持 unknown。'
+        + '不自动重跑、不产生二次外部效应。humanApproved 是意图声明（非放行凭证）：仅当用户明确要求对账时传 true；'
+        + '实际放行以系统批准卡为准。',
+      parameters: {
+        actionId: {
+          type: 'string',
+          required: true,
+          description: '动作台账展示 ID（act-…，治理链/动作台账里可见）',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明：仅当用户明确要求人工对账时传 true',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            actionId: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            externalRef: { type: 'string' },
+            note: { type: 'string' },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { actionId: string; status: string; externalRef?: string; note?: string }
+          return textBlock(
+            `对账 ${v.actionId} → ${v.status}\n`
+              + `外部回执: ${v.externalRef ?? '—'}\n`
+              + (v.note !== undefined ? `${v.note}\n` : '')
+              + 'humanReviewRequired=true（对账结论仍需人工确认；不自动重跑）',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (args: { actionId: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '人工对账')
+          const store = actionStoreFor(ws.root)
+          const record = store.listActions().find((a) => a.actionId === args.actionId)
+          if (record === undefined) {
+            throw new AgentToolError('INVALID_ARGS', `动作台账 ${args.actionId} 不存在`)
+          }
+          // M1-C 六元组：对账（act）——身份/角色/dataScope；实例存在性以数据面 ∪ 台账记录本体为证据
+          //（记录执行时已过锚点/收权校验），仍不得跳过身份面
+          requireBizAuth(
+            'act',
+            parseTargetRef(record.objectRef),
+            actChecks(null, runPlaneInstances(ws.root), record.objectRef),
+          )
+          await approve(exec, {
+            toolName: 'reconcile_action',
+            action: `人工对账 ${args.actionId}（${record.status}）`,
+            digest: actionDigest({ action: 'reconcile_action', businessKey: record.businessKey, status: record.status }),
+            summary: `对象 ${record.objectRef} · 行为 ${record.behaviorId}${record.externalRef ? ` · 回执 ${record.externalRef}` : ''}`,
+          })
+          const res = await reconcileActionRecord(ws.root, record.businessKey)
+          return toolOut({
+            actionId: res.record.actionId,
+            status: res.record.status,
+            ...(res.record.externalRef !== undefined ? { externalRef: res.record.externalRef } : {}),
+            ...(res.note !== undefined ? { note: res.note } : {}),
+            humanReviewRequired: true,
+          })
         },
         [],
         (args) => redlines(args),
@@ -2959,7 +3873,8 @@ export function apply(ctx: Context): void {
       description:
         '对话建包（D3）：创建 DRAFT 空包（name/version/domain），随后 save_skeleton 落骨架、'
         + '对话分片起草。同名同版本拒绝（PACKAGE_EXISTS，不覆盖）；签发 ISSUED 仍仅人工。'
-        + 'humanApproved 人审契约：仅当用户明确要求建包时传 true，agent 不得自行建包。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求建包时传 true，agent 不得自行建包；'
+        + '实际放行以系统批准卡为准（可信人审 T2.1）。'
         + '建包只是开局动作，内容仍走 draft_elements 起草 → 人审 apply_draft 物化。',
       parameters: {
         name: { type: 'string', required: true, description: '包名（kebab-case，如 claims-fraud）' },
@@ -2990,8 +3905,16 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute(
-        (args: { name: string; version: string; domain: string; humanApproved: boolean }) =>
-          toolOut(createPackageForPkg(ws, args)),
+        async (args: { name: string; version: string; domain: string; humanApproved: boolean }, exec) => {
+          // 人审闸（T2.1）：系统批准卡实况放行（humanApproved 只是意图声明，不是凭证）。
+          await approve(exec, {
+            toolName: 'create_package',
+            action: `建包 ${args.name}@${args.version}`,
+            digest: actionDigest({ action: 'create_package', name: args.name, version: args.version, domain: args.domain }),
+            summary: `新建 DRAFT 包（域 ${args.domain}）`,
+          })
+          return toolOut(createPackageForPkg(ws, args))
+        },
         [],
         (args) => redlines(args),
       ),
@@ -3003,9 +3926,10 @@ export function apply(ctx: Context): void {
       name: 'save_skeleton',
       description:
         '骨架落盘（D3，物化门 I6 前置）：保存全量 ID 清单与域码并置「已确认」。'
-        + 'humanApproved 人审契约同 apply_draft：仅当用户在会话中明确确认骨架后才传 true，'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户在会话中明确确认骨架后才传 true，'
         + 'agent 不得自行确认；点头须指代**这份 ID 清单本身**——包形态/业务范围/域码澄清选择、'
         + '恢复/推进类台词均不构成骨架确认；骨架点头也不得代用作后续 apply_draft 的物化批准。'
+        + '实际放行以系统批准卡为准（可信人审 T2.1，对 ID 清单指纹绑定）。'
         + 'ids 须非空、去重且全过 ID 语法；ISSUED 包只读（先 fork）。'
         + '骨架是唯一能改名/新增 ID 的入口，确认前不得物化任何元素。',
       parameters: {
@@ -3037,8 +3961,20 @@ export function apply(ctx: Context): void {
         },
       },
       execute: toolExecute(
-        (args: { packageId: string; domainCode: string; ids: string[]; humanApproved: boolean }) =>
-          toolOut(saveSkeletonForPkg(knowledge, ws, ws.listVersions(), args)),
+        async (args: { packageId: string; domainCode: string; ids: string[]; humanApproved: boolean }, exec) => {
+          await approve(exec, {
+            toolName: 'save_skeleton',
+            action: `确认骨架 ${args.packageId}`,
+            digest: actionDigest({
+              action: 'save_skeleton',
+              packageId: args.packageId,
+              domainCode: args.domainCode,
+              ids: [...(args.ids ?? [])].sort(),
+            }),
+            summary: `${(args.ids ?? []).length} 个 ID 落盘（域 ${args.domainCode}）`,
+          })
+          return toolOut(saveSkeletonForPkg(knowledge, ws, ws.listVersions(), args))
+        },
         [],
         (args) => redlines(args),
       ),

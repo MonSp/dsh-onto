@@ -111,7 +111,8 @@ export function expandEntity(
   const candidates = dataset.candidates.filter((c) => visited.has(c.objectRef))
 
   return {
-    dataset: { objects, relations, behaviors, candidates },
+    // spread 保留 provenance 等元数据（可信取数 T1.2：信任面不因扩图丢失）
+    dataset: { ...dataset, objects, relations, behaviors, candidates },
     seedIds: hitSeeds,
     missingSeedIds,
     truncated,

@@ -34,6 +34,7 @@ import {
   exportRunArchive,
   isInsideDir,
   isSafeRelPath,
+  isSafeRunId,
   listExperienceNotes,
   loadExperienceNote,
   loadPackage,
@@ -47,6 +48,7 @@ import {
   verifyDerived,
   writeQualityReport,
   type KnowledgeSourceRecord,
+  type DataBasisInput,
   type ModelGraph,
   type OntologyPackage,
   type PackageMeta,
@@ -60,6 +62,9 @@ import {
 } from '@dsh-onto/core'
 import { invalidateSkillCatalog } from './agent-hooks.js'
 import { buildGraphForTool } from './model-face.js'
+import { AgentToolError } from './agent-policy.js'
+import { dataSources } from './data-sources.js'
+import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -120,6 +125,17 @@ function guard<T>(fn: () => T): T {
   } catch (e) {
     throw toRemoteError(e)
   }
+}
+
+/**
+ * runId 路径段复核（与 core runstore 同口径；本层独立过一遍，不依赖调用顺序——
+ * 治理链文件名直拼 runId 前必须先验，防路径段注入写出工作区外）。
+ */
+function requireSafeRunId(runId: unknown): string {
+  if (!isSafeRunId(runId)) {
+    throw new AgentToolError('INVALID_ARGS', `runId 非法（须为单段安全路径）: ${String(runId)}`)
+  }
+  return runId
 }
 
 async function guardAsync<T>(fn: () => Promise<T>): Promise<T> {
@@ -628,11 +644,40 @@ export class OntoRuntime extends TypertRemoteService {
     name: string
     version: string
     scenarioId: string
-    dataset: RuntimeDataset
+    dataset?: RuntimeDataset
+    /** M1-B 正式取数通道：服务端登记数据源 id（与 dataset 互斥）。 */
+    sourceId?: string
+    query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
+    /** 计算策略（缺省 explore）：formal=正式可信分析（缺依据 → dataStatus=insufficient）。 */
+    analysisMode?: 'formal' | 'explore'
   }): Promise<{ result: ScenarioRunResult }> {
-    return guard(() => {
+    return guard(async () => {
       const dir = this.ws.versionDir(request.name, request.version)
-      const result = runScenario(dir, request.scenarioId, request.dataset)
+      const hasSource = typeof request.sourceId === 'string' && request.sourceId !== ''
+      if (hasSource === (request.dataset !== undefined && request.dataset !== null)) {
+        throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset（探索通道）必须且只能提供一个')
+      }
+      const analysisMode = request.analysisMode === 'formal' ? 'formal' : 'explore'
+      let dataset: RuntimeDataset
+      let dataBasis: DataBasisInput | undefined
+      if (hasSource) {
+        // 正式通道：provenance/dataBasis 只由服务端连接器产出
+        const fetched = await dataSources.fetch({
+          sourceId: request.sourceId as string,
+          query: request.query ?? {},
+          tenant: 'default',
+          root: this.ws.root,
+        })
+        dataset = fetched.dataset
+        dataBasis = fetched.dataBasis
+      } else {
+        // 数据入口固定来源身份（R5）：wire 入参是外部请求，不得自称 connector 获得可信状态。
+        dataset = { ...(request.dataset as RuntimeDataset), provenance: 'inline' }
+      }
+      const result = runScenario(dir, request.scenarioId, dataset, {
+        analysisMode,
+        ...(dataBasis !== undefined ? { dataBasis } : {}),
+      })
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
       const scenario = loadPackage(dir).scenarios.find((s) => s.id === request.scenarioId)
@@ -648,8 +693,8 @@ export class OntoRuntime extends TypertRemoteService {
         this.ws.root,
         buildRunRecord({
           package: { name: meta.name, version: meta.version },
-          dataset: result.effectiveDataset ?? request.dataset,
-          inputDataset: request.dataset,
+          dataset: result.effectiveDataset ?? dataset,
+          inputDataset: dataset,
           result,
           redlines,
         }),
@@ -705,16 +750,51 @@ export class OntoRuntime extends TypertRemoteService {
     })
   }
 
-  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。 */
+  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。D 包：附治理链条文件。 */
   @Remote('exportAudit')
   async remoteExportExportAudit(request: { runId: string }): Promise<{
     locator: string
     archivedAt: string
+    chainLocator?: string
   }> {
     return guard(() => {
-      const { locator, archive } = exportRunArchive(this.ws.root, request.runId)
-      return { locator, archivedAt: archive.archivedAt }
+      // 本层独立复核 runId（不依赖 exportRunArchive 内部校验的调用顺序）：治理链文件名直拼入参
+      const safeRunId = requireSafeRunId(request.runId)
+      const { locator, archive } = exportRunArchive(this.ws.root, safeRunId)
+      // 治理链串联（F1 步骤 7）：snapshot → run → decision → proposal → approval → externalRef
+      const chain = this.reviewChainOf(safeRunId)
+      const chainLocator = `runs/exports/${safeRunId}-chain.json`
+      const chainPath = join(this.ws.root, 'runs', 'exports', `${safeRunId}-chain.json`)
+      writeFileSync(chainPath, `${JSON.stringify({ runId: safeRunId, ...chain }, null, 2)}\n`, 'utf8')
+      return { locator, archivedAt: archive.archivedAt, chainLocator }
     })
+  }
+
+  /** 治理链（D 包人审面）：复核决定 → 动作提案 → 动作台账（含批准与外部回执）。 */
+  @Remote('reviewChain')
+  async remoteExportReviewChain(request: { runId: string }): Promise<{
+    decisions: ReviewDecision[]
+    proposals: ActionProposal[]
+    actions: StoredActionRecord[]
+  }> {
+    return guard(() => this.reviewChainOf(request.runId))
+  }
+
+  private reviewChainOf(runId: string): {
+    decisions: ReviewDecision[]
+    proposals: ActionProposal[]
+    actions: StoredActionRecord[]
+  } {
+    const store = actionStoreFor(this.ws.root)
+    const decisions = store.listDecisions(runId)
+    const decisionIds = new Set(decisions.map((d) => d.decisionId))
+    const proposals = store.listProposals().filter((p) => decisionIds.has(p.decisionId))
+    const proposalIds = new Set(proposals.map((p) => p.proposalId))
+    const actions = store.listActions().filter(
+      (a) => (a.decisionId !== undefined && decisionIds.has(a.decisionId))
+        || (a.proposalId !== undefined && proposalIds.has(a.proposalId)),
+    )
+    return { decisions, proposals, actions }
   }
 
   /* ── 经验闭环（experience-loop P2）：人审面 wire ── */

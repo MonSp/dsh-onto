@@ -100,6 +100,40 @@ test('数据双通道：datasetPath 读取 examples/aml-run.json 成功', () => 
   assert.ok(Array.isArray(ds.objects) && Array.isArray(ds.relations))
 })
 
+test('T1.2 信任面：载入即打 provenance——datasetPath=file，内联=inline（内联降级待核实）', () => {
+  const fromFile = loadDatasetFromArgs({ datasetPath: AML_RUN }, BASE)
+  assert.equal(fromFile.provenance, 'file')
+  const inline = loadDatasetFromArgs({ dataset: { objects: [], relations: [], candidates: [] } })
+  assert.equal(inline.provenance, 'inline')
+  // 工具边界内联数据 → runScenario 走 dataTrust 降级（候选显式待核实）
+  const ds = loadDatasetFromArgs({ dataset: JSON.parse(readFileSync(AML_RUN, 'utf8')) })
+  const result = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', ds)
+  assert.equal(result.dataTrust?.verified, false)
+  assert.ok(result.candidates.every((c) => c.pendingVerification === true))
+  // 文件供数：无内联降级（工作区数据面）
+  const byFile = runScenario(AML_DIR, 'SCN-AML-FIND-CLUES', fromFile)
+  assert.equal(byFile.dataTrust?.provenance, 'file')
+  assert.ok(byFile.candidates.some((c) => c.pendingVerification !== true))
+})
+
+test('R5-6 数据入口固定来源身份：外部请求不得自称 connector 获得可信状态', () => {
+  // 工具入口：dataset JSON 自带 provenance=connector → 载入即覆盖为 file/inline
+  const sneaky = { ...JSON.parse(readFileSync(AML_RUN, 'utf8')), provenance: 'connector' }
+  const tmp = mkdtempSync(join(tmpdir(), 'onto-ds-'))
+  try {
+    writeFileSync(join(tmp, 'sneaky.json'), JSON.stringify(sneaky), 'utf8')
+    const fromFile = loadDatasetFromArgs({ datasetPath: join(tmp, 'sneaky.json') }, { baseDir: tmp })
+    assert.equal(fromFile.provenance, 'file', '文件通道身份由入口固定')
+    const inline = loadDatasetFromArgs({ dataset: sneaky })
+    assert.equal(inline.provenance, 'inline', '内联通道身份由入口固定')
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+  // wire 入口：runScenario 请求体同口径（源断言——wire 是外部请求面）
+  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  assert.ok(svc.includes("provenance: 'inline'"), 'wire 载入须固定来源身份，不得透传调用方自报 provenance')
+})
+
 test('数据双通道：坏路径与坏 JSON 均拒绝', () => {
   expectCode(() => loadDatasetFromArgs({ datasetPath: 'Z:\\not\\exist\\nope.json' }), 'INVALID_ARGS')
   const tmp = mkdtempSync(join(tmpdir(), 'onto-ds-'))

@@ -36,6 +36,9 @@ export function RunPanel(props: {
   const [selB, setSelB] = useState('')
   const [diff, setDiff] = useState<Record<string, unknown> | null>(null)
   const [exportInfo, setExportInfo] = useState('')
+  // D 包治理链（M2/D）：decision → proposal → action → externalRef
+  const [chain, setChain] = useState<Record<string, unknown> | null>(null)
+  const [chainRunId, setChainRunId] = useState('')
   const api = apis.remote['ontoRuntime']
 
   const loadRuns = () => {
@@ -181,7 +184,7 @@ export function RunPanel(props: {
             'table',
             { className: 'ow-table' },
             h('thead', null, h('tr', null,
-              h('th', null, 'ID'), h('th', null, t('riskScore')), h('th', null, t('hits')),
+              h('th', null, t('chainCandidateId')), h('th', null, t('riskScore')), h('th', null, t('hits')),
               h('th', null, t('evidenceChains')), h('th', null, t('pending')), h('th', null, t('narrative'))),
             ),
             h(
@@ -302,10 +305,10 @@ export function RunPanel(props: {
                         setBusy('export')
                         setError('')
                         try {
-                          const out = unwrap<{ locator: string }>(
+                          const out = unwrap<{ locator: string; chainLocator?: string }>(
                             await api!.exportAudit({ runId: r.runId }),
                           )
-                          setExportInfo(out.locator)
+                          setExportInfo(out.chainLocator ? `${out.locator} + ${out.chainLocator}` : out.locator)
                         } catch (e) {
                           setError(errText(e))
                         } finally {
@@ -314,6 +317,29 @@ export function RunPanel(props: {
                       })(),
                   },
                   t('exportAuditBtn'),
+                ), h(
+                  'button',
+                  {
+                    className: 'ow-btn ghost',
+                    disabled: !!busy,
+                    onClick: () =>
+                      void (async () => {
+                        setBusy('chain')
+                        setError('')
+                        try {
+                          const out = unwrap<Record<string, unknown>>(
+                            await api!.reviewChain({ runId: r.runId }),
+                          )
+                          setChain(out)
+                          setChainRunId(r.runId)
+                        } catch (e) {
+                          setError(errText(e))
+                        } finally {
+                          setBusy('')
+                        }
+                      })(),
+                  },
+                  t('reviewChainBtn'),
                 )),
               ),
             ),
@@ -324,7 +350,100 @@ export function RunPanel(props: {
       ? h('p', { className: 'ow-note ow-mono' }, `${t('locator')}: ${exportInfo}`)
       : null,
     ...diffView(),
+    ...chainView(),
   )
+
+  /** D 包治理链视图：复核决定 → 动作提案 → 动作台账（含批准摘要与外部回执）。 */
+  function chainView(): ReactNode[] {
+    if (!chain) return []
+    const c = chain as unknown as {
+      decisions: Array<{
+        decisionId: string
+        candidateIds: string[]
+        reviewer: string
+        decision: string
+        reason?: string
+        snapshotDigest: string
+        ruleFingerprint: string
+      }>
+      proposals: Array<{
+        proposalId: string
+        decisionId: string
+        candidateId: string
+        behaviorId: string
+        objectRef: string
+        operationId: string
+        status: string
+      }>
+      actions: Array<{
+        actionId: string
+        decisionId?: string
+        proposalId?: string
+        behaviorId: string
+        objectRef: string
+        status: string
+        approvalDigest: string
+        externalRef?: string
+      }>
+    }
+    const empty = c.decisions.length === 0 && c.proposals.length === 0 && c.actions.length === 0
+    return [
+      h('h4', { className: 'ow-h2' }, t('reviewChainTitle')),
+      h('p', { className: 'ow-note ow-mono' }, chainRunId),
+      empty ? h('p', { className: 'ow-note' }, t('chainEmpty')) : null,
+      c.decisions.length > 0
+        ? h('table', { className: 'ow-table' },
+            h('thead', null, h('tr', null,
+              h('th', null, t('chainDecision')), h('th', null, t('chainDecisionId')), h('th', null, t('chainReason')),
+              h('th', null, t('chainCandidates')), h('th', null, t('chainReviewer')), h('th', null, t('chainSnapshot')))),
+            h('tbody', null, ...c.decisions.map((d) =>
+              h('tr', { key: d.decisionId },
+                h('td', null, h(Tag, { text: d.decision, tone: d.decision === 'approved' ? 'ok' : 'err' })),
+                h('td', { className: 'ow-mono' }, d.decisionId),
+                h('td', null, d.reason ?? '—'),
+                h('td', { className: 'ow-mono' }, d.candidateIds.join(', ')),
+                h('td', { className: 'ow-mono' }, d.reviewer),
+                h('td', { className: 'ow-mono' }, `${d.snapshotDigest.slice(0, 8)} / ${d.ruleFingerprint.slice(0, 8)}`),
+              ))))
+        : null,
+      c.proposals.length > 0
+        ? h('table', { className: 'ow-table' },
+            h('thead', null, h('tr', null,
+              h('th', null, t('chainProposal')), h('th', null, t('chainDecisionId')), h('th', null, t('chainCandidateId')),
+              h('th', null, t('chainOperation')), h('th', null, t('chainBehObject')), h('th', null, t('chainStatus')))),
+            h('tbody', null, ...c.proposals.map((p) =>
+              h('tr', { key: p.proposalId },
+                h('td', { className: 'ow-mono' }, p.proposalId),
+                h('td', { className: 'ow-mono' }, p.decisionId),
+                h('td', { className: 'ow-mono' }, p.candidateId),
+                h('td', { className: 'ow-mono' }, p.operationId),
+                h('td', { className: 'ow-mono' }, `${p.behaviorId} → ${p.objectRef}`),
+                h('td', null, h(Tag, {
+                  text: p.status,
+                  tone: p.status === 'consumed' ? 'ok' : p.status === 'pending' ? 'warn' : undefined,
+                })),
+              ))))
+        : null,
+      c.actions.length > 0
+        ? h('table', { className: 'ow-table' },
+            h('thead', null, h('tr', null,
+              h('th', null, t('chainAction')), h('th', null, t('chainProposalId')), h('th', null, t('chainStatus')),
+              h('th', null, t('chainBehObject')), h('th', null, t('chainExternalRef')), h('th', null, t('chainApproval')))),
+            h('tbody', null, ...c.actions.map((a) =>
+              h('tr', { key: a.actionId },
+                h('td', { className: 'ow-mono' }, a.actionId),
+                h('td', { className: 'ow-mono' }, a.proposalId ?? '—'),
+                h('td', null, h(Tag, {
+                  text: a.status,
+                  tone: a.status === 'succeeded' ? 'ok' : a.status === 'executing' ? 'warn' : 'err',
+                })),
+                h('td', { className: 'ow-mono' }, `${a.behaviorId} → ${a.objectRef}`),
+                h('td', { className: 'ow-mono' }, a.externalRef ?? '—'),
+                h('td', { className: 'ow-mono' }, a.approvalDigest ? a.approvalDigest.slice(0, 12) : '—'),
+              ))))
+        : null,
+    ].filter(Boolean) as ReactNode[]
+  }
 
   function diffView(): ReactNode[] {
     if (!diff) return []
@@ -365,7 +484,7 @@ export function RunPanel(props: {
         'table',
         { className: 'ow-table' },
         h('thead', null, h('tr', null,
-          h('th', null, 'ID'), h('th', null, t('scoreAB')), h('th', null, t('hits')), h('th', null, t('pending')))),
+          h('th', null, t('chainCandidateId')), h('th', null, t('scoreAB')), h('th', null, t('hits')), h('th', null, t('pending')))),
         h(
           'tbody',
           null,

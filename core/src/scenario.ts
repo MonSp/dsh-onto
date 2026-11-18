@@ -15,11 +15,12 @@
 import { randomUUID } from 'node:crypto'
 import { collectStrings, runAudit } from './audit.js'
 import { readManifest } from './derive.js'
-import { deriveFeatures, projectFeatures } from './features.js'
+import { deriveFeatures, inferFeatureSources, projectFeatures } from './features.js'
 import { verifyDerived } from './loadgate.js'
 import {
   applyExclusions,
   fillTemplate,
+  referencedFeatures,
   riskLevelOf,
   type RuleEngineConfig,
   type RuleEvalResult,
@@ -29,6 +30,10 @@ import { loadPackage } from './store.js'
 import { expandEntity, MAX_EXPAND_HOPS } from './subgraph.js'
 import type {
   CandidateResult,
+  ContractStatus,
+  DataBasisInput,
+  DataStatus,
+  FeatureSourceRecord,
   O3ScenarioCard,
   OntologyPackage,
   RuntimeBehaviorInstance,
@@ -52,6 +57,19 @@ export interface ScenarioRunOptions {
   seedIds?: string[]
   /** 可测注入位（与 ruleHitLog 同源）；缺省 = new Date()。 */
   now?: () => Date
+  /**
+   * R5 特征执行模式：
+   * - `explore`（缺省，探索分析）：保留条件性计算（不改打分公式），但无依据特征逐候选降级、
+   *   不得显示复算通过；
+   * - `formal`（正式可信分析）：无依据特征不参与计算（跳过，由规则引擎按缺失特征待核实）。
+   */
+  analysisMode?: 'formal' | 'explore'
+  /**
+   * 取数上下文（M1-B）：服务端连接器取数时随数据集传入（含快照核验结论）；
+   * 缺省 = 来源未声明。调用方自称 provenance=connector 而无 basis → 不按可信来源算
+   * （伪造来源拒绝，不得 verified）。
+   */
+  dataBasis?: DataBasisInput
 }
 
 /**
@@ -141,61 +159,101 @@ export function runScenario(
   let effective: RuntimeDataset = dataset
   let prepSummary: ScenarioPrepSummary | undefined
   let prepApplied = false
+  let featureSources: FeatureSourceRecord[] = []
+  let featureGovApplied = false
+  const prepSourceRecords: FeatureSourceRecord[] = []
+
+  /** R5 特征来源治理：记录逐键来源状态；正式模式剔除无依据特征（prep 开/关同口径）。 */
+  const applyFeatureGovernance = (): void => {
+    if (featureGovApplied) return
+    featureGovApplied = true
+    // 推断为底、prep 投影/派生记录为权威（覆盖同键）
+    const byKey = new Map<string, FeatureSourceRecord>()
+    for (const r of inferFeatureSources(pkg, effective, effective.candidates)) {
+      byKey.set(`${r.candidateId}|${r.key}`, r)
+    }
+    for (const r of prepSourceRecords) byKey.set(`${r.candidateId}|${r.key}`, r)
+    featureSources = [...byKey.values()]
+    if (opts.analysisMode === 'formal') {
+      // 正式可信分析：无依据特征不参与计算（跳过）
+      const unverified = new Set(
+        featureSources.filter((r) => r.source === 'unverified-caller').map((r) => `${r.candidateId}|${r.key}`),
+      )
+      let stripped = false
+      const nextCandidates = effective.candidates.map((c) => {
+        const feats = Object.fromEntries(
+          Object.entries(c.features).filter(([k]) => !unverified.has(`${c.candidateId}|${k}`)),
+        )
+        if (Object.keys(feats).length === Object.keys(c.features).length) return c
+        stripped = true
+        return { ...c, features: feats }
+      })
+      if (stripped) effective = { ...effective, candidates: nextCandidates }
+    }
+  }
+
   const applyPrep = (): void => {
     if (prepApplied) return
     prepApplied = true
     const prep = scenario.prep
     const wantExpand = seedIds !== undefined && prep?.expand !== undefined
     const wantFeatures = prep?.features === true
-    if (!wantExpand && !wantFeatures) return
+    if (wantExpand || wantFeatures) {
+      let next = effective
+      const summary: ScenarioPrepSummary = {}
 
-    let next = effective
-    const summary: ScenarioPrepSummary = {}
+      if (wantExpand && seedIds !== undefined && prep?.expand) {
+        const expandOpts = {
+          ...(prep.expand.hops !== undefined ? { hops: prep.expand.hops } : {}),
+          ...(prep.expand.direction !== undefined ? { direction: prep.expand.direction } : {}),
+          ...(prep.expand.relationTypes !== undefined ? { relationTypes: prep.expand.relationTypes } : {}),
+        }
+        const expanded = expandEntity(next, seedIds, expandOpts)
+        if (expanded.seedIds.length === 0) {
+          throw new ScenarioRunError('INVALID_ARGS', '全部种子缺失，无法扩图')
+        }
+        next = expanded.dataset
+        summary.expanded = {
+          seeds: expanded.seedIds,
+          hops: Math.min(
+            Math.max(0, Math.floor(prep.expand.hops ?? 1)),
+            MAX_EXPAND_HOPS,
+          ),
+          objects: expanded.stats.objects,
+          truncated: expanded.truncated,
+        }
+      }
 
-    if (wantExpand && seedIds !== undefined && prep?.expand) {
-      const expandOpts = {
-        ...(prep.expand.hops !== undefined ? { hops: prep.expand.hops } : {}),
-        ...(prep.expand.direction !== undefined ? { direction: prep.expand.direction } : {}),
-        ...(prep.expand.relationTypes !== undefined ? { relationTypes: prep.expand.relationTypes } : {}),
+      if (wantFeatures) {
+        const proj = projectFeatures(pkg, next, next.candidates)
+        let candidates = proj.candidates
+        summary.projectedWrites = proj.projected.reduce((n, p) => n + p.keys.length, 0)
+        const overrides = [...proj.overrides]
+        prepSourceRecords.push(...proj.sources)
+        const recipes = pkg.featureRecipes
+        if (recipes !== undefined && recipes.length > 0 && Array.isArray(recipes)) {
+          // A-10/缺陷4：包级配方禁 now；执行层注入本轮 sinceBasis（与 startedAt 同源，可回放）。
+          const ready = recipes.map((r) =>
+            r.kind === 'since' && (r.now === undefined || r.now === null)
+              ? { ...r, now: sinceBasis }
+              : r,
+          )
+          const der = deriveFeatures(candidates, next, ready, proj.sources)
+          candidates = der.candidates
+          summary.derived = der.derived
+          summary.sinceBasis = sinceBasis
+          overrides.push(...der.overrides)
+          prepSourceRecords.push(...der.sources)
+        }
+        if (overrides.length > 0) summary.featureOverrides = overrides
+        next = { ...next, candidates }
       }
-      const expanded = expandEntity(next, seedIds, expandOpts)
-      if (expanded.seedIds.length === 0) {
-        throw new ScenarioRunError('INVALID_ARGS', '全部种子缺失，无法扩图')
-      }
-      next = expanded.dataset
-      summary.expanded = {
-        seeds: expanded.seedIds,
-        hops: Math.min(
-          Math.max(0, Math.floor(prep.expand.hops ?? 1)),
-          MAX_EXPAND_HOPS,
-        ),
-        objects: expanded.stats.objects,
-        truncated: expanded.truncated,
-      }
+
+      effective = next
+      prepSummary = summary
     }
-
-    if (wantFeatures) {
-      const proj = projectFeatures(pkg, next, next.candidates)
-      let candidates = proj.candidates
-      summary.projectedWrites = proj.projected.reduce((n, p) => n + p.keys.length, 0)
-      const recipes = pkg.featureRecipes
-      if (recipes !== undefined && recipes.length > 0 && Array.isArray(recipes)) {
-        // A-10/缺陷4：包级配方禁 now；执行层注入本轮 sinceBasis（与 startedAt 同源，可回放）。
-        const ready = recipes.map((r) =>
-          r.kind === 'since' && (r.now === undefined || r.now === null)
-            ? { ...r, now: sinceBasis }
-            : r,
-        )
-        const der = deriveFeatures(candidates, next, ready)
-        candidates = der.candidates
-        summary.derived = der.derived
-        summary.sinceBasis = sinceBasis
-      }
-      next = { ...next, candidates }
-    }
-
-    effective = next
-    prepSummary = summary
+    // R5：来源记录 + 模式治理恒走（prep 开/关同一降级口径）
+    applyFeatureGovernance()
   }
 
   /* pipeline 状态（使用 effective 数据集） */
@@ -211,7 +269,16 @@ export function runScenario(
   }
 
   /* ── 最小步派发（§9.1）：prep 保证先于任何排除/评分（评审缺陷2） ── */
-  for (const step of scenario.pipeline) {
+  // 人审屏障（T2.2）：HUMAN_REVIEW 是硬停点——自动执行越过人审点的步骤不跑，
+  // 落 reviewBarrier 留痕待人工放行后再恢复（恢复通道另行交付；现包 HUMAN_REVIEW 均为末步，零回归）。
+  let reviewBarrier: { stepId: string; skipped: string[] } | undefined
+  for (const [stepIdx, step] of scenario.pipeline.entries()) {
+    if (reviewBarrier !== undefined) {
+      // AUDIT_CHECK 是输出装配时恒执行的核验（非动作），不计 skipped——
+      // 「其后步骤不自动执行」只记真正未执行的步骤
+      if (step.stepType !== 'AUDIT_CHECK') reviewBarrier.skipped.push(step.stepId)
+      continue
+    }
     // 打分/排除段入口：prep 未应用则先做（无 DATA_INGEST / 顺序异常均兜住）
     if (step.stepType === 'RULE_EVALUATE' && !prepApplied) {
       applyPrep()
@@ -259,7 +326,10 @@ export function runScenario(
         break
       }
       case 'HUMAN_REVIEW': {
-        // 人工门禁字段在装配时统一附加
+        // 人工门禁字段在装配时统一附加；屏障语义（T2.2）：此后步骤不自动执行（skipped 由循环续记）。
+        if (stepIdx + 1 < scenario.pipeline.length) {
+          reviewBarrier = { stepId: step.stepId, skipped: [] }
+        }
         break
       }
       default:
@@ -275,6 +345,13 @@ export function runScenario(
   }
 
   if (!scoringDone || scored === null) {
+    // 人审屏障拦住打分段（T2.2）：这不是缺步，是「停在人审点等放行」——显式区分。
+    if (reviewBarrier !== undefined) {
+      throw new ScenarioRunError(
+        'HUMAN_REVIEW_PENDING',
+        `场景 ${scenarioId} 停在人审屏障 ${reviewBarrier.stepId}：其后 ${reviewBarrier.skipped.length} 个步骤（含打分）未自动执行——待人工放行后再恢复`,
+      )
+    }
     throw new ScenarioRunError(
       'PIPELINE_INCOMPLETE',
       `场景 ${scenarioId} 的 pipeline 缺少打分段 RULE_EVALUATE`,
@@ -282,8 +359,9 @@ export function runScenario(
   }
 
   /* ── 装配候选结果（含 SKILL_RUN 叙述：只用模板，禁认定） ───────────── */
+  const skippedSteps = new Set(reviewBarrier?.skipped ?? [])
   const skillRefs = scenario.pipeline
-    .filter((s) => s.stepType === 'SKILL_RUN')
+    .filter((s) => s.stepType === 'SKILL_RUN' && !skippedSteps.has(s.stepId))
     .flatMap((s) => s.skillRefs ?? [])
   const skills = pkg.skillTemplates.filter((s) => skillRefs.includes(s.id))
 
@@ -324,6 +402,41 @@ export function runScenario(
     c.pendingVerification = true
   }
 
+  // 事实覆盖留痕（可信取数 T1.1）：调用方预置特征被对象事实/配方覆盖 → 显式降级提示
+  for (const ov of prepSummary?.featureOverrides ?? []) {
+    const c = candidates.find((x) => x.candidateId === ov.candidateId)
+    if (!c) continue
+    c.pendingChecks.push({
+      note: `特征 ${ov.key} 的调用方预置值与对象事实冲突，已按事实覆盖（预置值不参与打分）`,
+    })
+    c.pendingVerification = true
+  }
+
+  // 内联数据降级提示（可信取数 T1.2）：未经可信取数核验 → 候选显式待核实（不改分）。
+  if (dataset.provenance === 'inline') {
+    for (const c of candidates) {
+      c.pendingChecks.push({
+        note: '数据为调用方内联提交，未经可信取数核验——分数仅在该数据集内自洽',
+      })
+      c.pendingVerification = true
+    }
+  }
+
+  // R5：无依据特征逐候选降级——声明契约在而事实缺的预置值不得伪装为可复算事实；
+  // 正式模式下被剔除的值同样上墙（来源未声明的旧输入面只留痕，不逐候选降级）。
+  for (const rec of featureSources) {
+    if (rec.source !== 'unverified-caller') continue
+    if (!rec.declared && opts.analysisMode !== 'formal') continue
+    const c = candidates.find((x) => x.candidateId === rec.candidateId)
+    if (!c) continue
+    c.pendingChecks.push({
+      note:
+        `特征 ${rec.key} 无事实依据（${rec.detail}）——不得视为可复算事实`
+        + (opts.analysisMode === 'formal' ? '（正式可信分析：已剔除，不参与评分）' : ''),
+    })
+    c.pendingVerification = true
+  }
+
   /* ── 输出契约 mustInclude 检查 + 人工复核字段 ─────────────────────── */
   const requireReviewFor = candidates
     .filter((c) => c.riskScore >= scenario.reviewGate.threshold)
@@ -338,6 +451,22 @@ export function runScenario(
       }
     }
   }
+
+  // 数据信任提示（可信取数 T1.2）：provenance 未声明 = 来源未声明，不触发信任检查。
+  const provenance = dataset.provenance
+  const dataTrust =
+    provenance === undefined
+      ? undefined
+      : {
+          provenance,
+          verified: provenance === 'connector',
+          note:
+            provenance === 'connector'
+              ? '可信取数接口'
+              : provenance === 'file'
+                ? '工作区数据文件（未经源系统对账）'
+                : '内联数据未经可信取数核验——结论仅在该数据集内自洽',
+        }
 
   const result: ScenarioRunResult = {
     scenarioId,
@@ -355,8 +484,10 @@ export function runScenario(
     ruleHitLog: scored.ruleHitLog,
     audit: { checks: [], forbiddenPhraseHits: [], passed: true },
     ...(prepSummary !== undefined ? { prep: prepSummary } : {}),
+    ...(reviewBarrier !== undefined ? { reviewBarrier } : {}),
+    ...(dataTrust !== undefined ? { dataTrust } : {}),
   }
-  if (prepSummary !== undefined) {
+  if (prepSummary !== undefined || effective !== dataset) {
     // 非枚举：不进 JSON/模型面/RunRecord.result，仅 buildRunRecord 读 effective 双 digest。
     Object.defineProperty(result, 'effectiveDataset', {
       value: effective,
@@ -368,9 +499,82 @@ export function runScenario(
 
   const mustIncludeSatisfied = checkMustInclude(scenario, result)
 
+  /* ── M1-B dataStatus（先于禁语扫描：待补数备注须进扫描面） ───────── */
+  // R5：核验对象 = 本轮实际参与评分/排除的特征（scenario 收窄后的规则引用面）
+  const usedFeatureKeys = new Set<string>()
+  for (const r of [...config.scoring, ...config.exclusion]) {
+    const expr = 'expression' in r ? r.expression : r.condition
+    try {
+      for (const f of referencedFeatures(expr)) {
+        if (f !== 'tag') usedFeatureKeys.add(f)
+      }
+    } catch {
+      /* 语法错误由 validate 拦；运行侧跳过扫描 */
+    }
+  }
+  // 可信来源 = 服务端取数上下文（dataBasis 仅由服务端连接器产线构造）；
+  // inline/file 显式标签的通道不得被 basis 升级；自称 provenance=connector 无 basis → 不算可信（伪造来源拒绝）。
+  // 对账锚点齐全（snapshotId/sourceId 非空）才算可信来源——dataBasis: {} 不得升级信任（评审 P3）；
+  // complete/fresh 显式核验（=== true），缺省 = 未核验（fail-closed，不得缺省为真）。
+  const basis = opts.dataBasis
+  const sourceVerified =
+    basis !== undefined
+    && typeof basis.snapshotId === 'string' && basis.snapshotId !== ''
+    && typeof basis.sourceId === 'string' && basis.sourceId !== ''
+    && provenance !== 'inline' && provenance !== 'file'
+  const complete = basis?.complete === true
+  const fresh = basis?.fresh === true
+  // 必需特征依据全过：本轮实际参与评分/排除的特征逐候选均有可复算来源——
+  // 整体缺失（无键、无来源记录）同样是缺依据，不得按 verified/低风险处置（评审 P2）
+  const unverifiedUsed = featureSources.filter(
+    (rec) => rec.source === 'unverified-caller' && usedFeatureKeys.has(rec.key),
+  )
+  const featureGapKeys = new Set<string>(unverifiedUsed.map((r) => r.key))
+  const provByKey = new Map(featureSources.map((r) => [`${r.candidateId}|${r.key}`, r]))
+  for (const c of effective.candidates) {
+    for (const key of usedFeatureKeys) {
+      if (!provByKey.has(`${c.candidateId}|${key}`)) featureGapKeys.add(key)
+    }
+  }
+  const featuresOk = featureGapKeys.size === 0
+  const formal = opts.analysisMode === 'formal'
+  let dataStatus: DataStatus
+  if (formal) {
+    // 正式模式：缺源/超时效/取数不完整/必需特征缺依据 → 不可完成/待补数（不得按低风险处置）
+    dataStatus = sourceVerified && complete && fresh && featuresOk ? 'verified' : 'insufficient'
+  } else if (!sourceVerified) {
+    dataStatus = 'unverified'
+  } else if (complete && fresh && featuresOk) {
+    dataStatus = 'verified'
+  } else {
+    dataStatus = 'conditional'
+  }
+  result.dataStatus = dataStatus
+  // formal 依据不足：结果态为待补数——逐候选显式上墙，分数不得被解读为低风险结论
+  if (dataStatus === 'insufficient') {
+    const gaps: string[] = []
+    if (!sourceVerified) gaps.push('缺可信来源')
+    if (!complete) gaps.push('取数不完整')
+    if (!fresh) gaps.push('数据超时效')
+    if (!featuresOk) gaps.push(`必需特征缺依据（${[...featureGapKeys].join('、')}）`)
+    for (const c of result.candidates) {
+      c.pendingChecks.push({
+        note: `正式分析依据不足（${gaps.join('；')}）——结果不可处置，待补数后重跑`,
+      })
+      c.pendingVerification = true
+    }
+  }
+
   /* ── AUDIT_CHECK：三层闭合闸门（§9.3） ────────────────────────────── */
+  // 扫描面含 prep（featureOverrides 带调用方字符串）；待补数备注已先上墙再扫描
   const outputStrings = collectStrings(
-    { candidates: result.candidates, excluded: result.excluded, reviewGate: result.reviewGate, ingestProblems },
+    {
+      candidates: result.candidates,
+      excluded: result.excluded,
+      reviewGate: result.reviewGate,
+      ingestProblems,
+      prep: result.prep,
+    },
   )
   const audit = runAudit({
     pkg,
@@ -380,14 +584,20 @@ export function runScenario(
     ruleHitLog: result.ruleHitLog,
     outputStrings,
     mustIncludeSatisfied,
+    featureProvenance: featureSources,
+    usedFeatures: [...usedFeatureKeys],
   })
   result.audit = { checks: audit.checks, forbiddenPhraseHits: audit.forbiddenPhraseHits, passed: audit.passed }
 
-  /* 不闭合 → 降级为「待核实点」（§9.3） */
+  /* ── M1-B 三状态：contractStatus（不与 audit.passed 混用） ── */
+  const contractStatus: ContractStatus = audit.passed ? 'conformant' : 'non-conformant'
+  result.contractStatus = contractStatus
+
+  /* 不闭合 → 降级为「待核实点」（§9.3；非阻断提示项不降级） */
   if (!audit.passed) {
     for (const c of result.candidates) {
       for (const check of audit.checks) {
-        if (!check.closed) {
+        if (!check.closed && check.blocking !== false) {
           c.pendingChecks.push({ note: `审计未闭合 ${check.check}: ${check.detail}` })
           c.pendingVerification = true
         }

@@ -76,6 +76,54 @@ export interface O2BehaviorType {
   states?: string[]
   trigger?: string
   description?: string
+  /**
+   * 动作契约（M1-C；方案 §6）：行为转正式动作时的受校验契约扩展。
+   * 不在本体包中嵌入任意代码——条件为受限可校验表达；真实实例状态由连接器核验。
+   */
+  actionContract?: ActionContract
+}
+
+/** 动作载荷字段契约（白名单/必填/类型/范围；ref 字段限定允许对象类型）。 */
+export interface ActionFieldSpec {
+  name: string
+  type: 'string' | 'int' | 'float' | 'bool' | 'date' | 'ref'
+  required: boolean
+  /** 数值范围（int/float）。 */
+  range?: { min?: number; max?: number }
+  /** ref 字段：允许的对象类型（OBJ-*；其余拒绝）。 */
+  refTypes?: string[]
+}
+
+/**
+ * 动作契约（M1-C，方案 §6）：载荷字段白名单、对象角色与关系要求、允许的前置状态
+ * 及所需权限、支持的连接器能力与契约版本、场景是否允许提出该动作及要求哪类人工决定。
+ * 条件为受限合取表达（attr op 常量），不嵌任意代码；派生进 tool-contracts 沿 DERIVED_DRIFT 链。
+ */
+export interface ActionContract {
+  /** 载荷字段白名单（不在表内字段 → 拒绝）。 */
+  fields: ActionFieldSpec[]
+  /** 对象角色与关系要求（锚点对象须处于的关系/状态）。 */
+  requires?: {
+    /** 须存在的关系类型 id（REL-*）。 */
+    relations?: string[]
+    /** 须满足的状态属性条件（受限合取：attr op 常量）。 */
+    states?: ActionCondition[]
+  }
+  /** 允许的前置状态（对象状态机；受限合取）。 */
+  precondition?: ActionCondition[]
+  /** 所需业务角色（对照 BusinessIdentity.roles；缺省沿操作级角色策略）。 */
+  requiredRoles: string[]
+  /** 支持的连接器能力与契约版本。 */
+  connector: { capability: string; contractVersion: string }
+  /** 场景绑定：是否允许提出该动作 + 要求哪类人工决定。 */
+  scenarioBinding: { scenarioId: string; decisionKind: 'business-review' | 'approval' | 'both' }
+}
+
+/** 受限条件（合取项）：`<attr> <op> <常量>`——可校验，不嵌任意代码。 */
+export interface ActionCondition {
+  attr: string
+  op: '=' | '!=' | '>' | '<' | '>=' | '<='
+  value: string | number
 }
 
 export interface O2ScoreRule {
@@ -222,6 +270,49 @@ export interface ScenarioPrepSummary {
    * 双 digest 只能发现数据变化，此字段还原「按哪个时刻算 since」的计算条件。
    */
   sinceBasis?: string
+  /**
+   * 事实覆盖留痕（可信取数 T1.1）：调用方预置特征被对象事实/配方派生值覆盖的冲突对。
+   * 仅人审面对账；模型面经 pendingChecks 另行降级提示。
+   */
+  featureOverrides?: FeatureOverride[]
+}
+
+/**
+ * 事实覆盖记录（可信取数 T1.1）：调用方预置特征与对象事实/配方派生值冲突时，
+ * 事实值写入 features，冲突对留痕供人审对账与审计溯源。
+ */
+export interface FeatureOverride {
+  candidateId: string
+  key: string
+  caller: number | string
+  fact: number | string
+}
+
+/**
+ * 特征来源状态（R5 无事实特征显式降级）：参与评分/排除的特征逐条记录来源，
+ * 声明来源缺失的预置值不得伪装为可复算事实。
+ */
+export type FeatureSourceKind =
+  /** 对象投影（featureSources → 对象 attrs，本轮可复算）。 */
+  | 'object-fact'
+  /** 合法配方派生（since/count/ratio，记录实际输入与计算条件）。 */
+  | 'derived'
+  /** 可信连接器供数（provenance=connector 的对象投影/派生）。 */
+  | 'connector'
+  /** 未核实调用方值（声明源缺失 / 配方缺输入 / 来源未声明——不可复算）。 */
+  | 'unverified-caller'
+
+export interface FeatureSourceRecord {
+  candidateId: string
+  key: string
+  source: FeatureSourceKind
+  /**
+   * 有声明契约（featureSources 或 featureRecipes）——契约在而事实缺 = 伪装面，
+   * 须逐候选降级；来源未声明（旧输入面）只留痕。
+   */
+  declared: boolean
+  /** 详情：投影目标 / 配方与实际输入 / 缺失原因（审计与人审对账用）。 */
+  detail: string
 }
 
 /** 确定性特征配方（PR#18 features.ts；scenario-prep S2.2 包级复用同一类型）。 */
@@ -402,6 +493,11 @@ export interface RuntimeDataset {
   relations: RuntimeRelationInstance[]
   behaviors?: RuntimeBehaviorInstance[]
   candidates: RuntimeCandidate[]
+  /**
+   * 数据来源信任面（可信取数 T1.2）：inline=Agent 内联提交（未核验）；
+   * file=工作区数据文件；connector=可信取数接口。缺省 = 来源未声明（不触发信任检查）。
+   */
+  provenance?: 'inline' | 'file' | 'connector'
 }
 
 export interface EvidenceChainEntry {
@@ -441,6 +537,8 @@ export interface AuditCheckEntry {
   closed: boolean
   detail: string
   ts: string
+  /** 默认 true（参与 passed 与待核实降级）；false=提示项（如 DATA_TRUST），只留痕不阻断。 */
+  blocking?: boolean
 }
 
 export interface ForbiddenPhraseHit {
@@ -471,10 +569,100 @@ export interface ScenarioRunResult {
   /** 执行层 prep 摘要（scenario-prep S2.4；人审对账，无准备时缺省）。 */
   prep?: ScenarioPrepSummary
   /**
+   * 人审屏障（T2.2）：pipeline 里 HUMAN_REVIEW 之后的步骤未自动执行（待人工放行恢复）。
+   * 现有包 HUMAN_REVIEW 均为末步 → 缺省无此字段（零回归）。
+   */
+  reviewBarrier?: { stepId: string; skipped: string[] }
+  /**
+   * 数据信任提示（可信取数 T1.2）：数据集声明 provenance 时回填。
+   * verified 仅当 provenance='connector'；inline 数据经审计 DATA_TRUST 不闭合降级。
+   */
+  dataTrust?: { provenance: string; verified: boolean; note: string }
+  /**
    * 有 prep 时回填的 effective 数据集（buildRunRecord 双 digest 用）。
    * enumerable:false——不进 JSON.stringify / 模型面 / RunRecord.result。
    */
   effectiveDataset?: RuntimeDataset
+  /** 契约状态（M1-B）：规则与输出结构是否符合契约。缺省 = 非正式通道不判定。 */
+  contractStatus?: ContractStatus
+  /** 数据状态（M1-B）：来源/时效/完整性/特征依据。formal 缺依据 → 'insufficient'（不可处置）。 */
+  dataStatus?: DataStatus
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 可信数据与三状态（M1-B；接口基线 docs/design/bc-shared-interfaces.md）
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** 受保护存储 locator：完整快照落受控存储，结构只留可回查引用 + 摘要。 */
+export interface SnapshotLocator {
+  /** 受控存储内的快照键（如 snapshots/<id>.json）。 */
+  key: string
+  /** 快照内容 sha256（canonical JSON），防换内容保 locator。 */
+  sha256: string
+}
+
+/**
+ * 可信取数快照（方案 §5）：服务端连接器取数的来源证据。
+ * 只证明「通过已登记来源获得」，不自动证明数据正确或业务完整——
+ * 正式分析另查时效、完整性、必需特征与场景关系覆盖。
+ */
+export interface DataSnapshot {
+  /** 服务端分配快照 ID（snap-<uuid8>）。 */
+  snapshotId: string
+  /** 服务端登记的 sourceId（apiSources 条目 id）；Agent 不得自称 provenance=connector。 */
+  sourceId: string
+  /** 连接器实现版本（部署配置登记）。 */
+  connectorVersion: string
+  /** 业务租户（身份面）；取数范围受 BusinessIdentity.dataScope 约束（C 包）。 */
+  tenant: string
+  /** 查询摘要：查询条件 canonical JSON 的 sha256（不存敏感参数本体）。 */
+  queryDigest: string
+  /** 取数时刻（ISO）。 */
+  fetchedAt: string
+  /** 业务时间范围（数据覆盖窗，时效判定用）。 */
+  businessWindow: { from: string; to: string }
+  /** 完整性：连接器报告分页/截断状态。complete=false → formal 不可得可处置结果。 */
+  completeness: { complete: boolean; paged?: boolean; truncatedReason?: string }
+  /** 快照 locator（受保护存储；Agent 上下文只出现 locator+摘要，不内联原始数据）。 */
+  locator: SnapshotLocator
+  /** 来源性质：simulated=本地/测试闭环（F1 记录须显式标注）；business-source=业务来源。 */
+  nature: 'simulated' | 'business-source'
+}
+
+/** 规则与输出结构是否符合契约（O1/O2/O3 闭合 + 输出契约）。 */
+export type ContractStatus = 'conformant' | 'non-conformant'
+
+/**
+ * 数据状态（方案 §5「三种结果不要混为一谈」）：
+ * verified=连接器来源且时效/完整性/必需特征全过；conditional=探索通道或部分依据缺失
+ * （条件性分数）；insufficient=formal 且缺源/超时效/不完整——不可完成/待补数，
+ * 不得把「缺特征后 0 分」展示为低风险；unverified=内联/文件/未声明来源。
+ */
+export type DataStatus = 'verified' | 'conditional' | 'insufficient' | 'unverified'
+
+/**
+ * 人工复核状态（方案 §7；实体由 D 包 ReviewDecision 落，B 包先占位字段位）。
+ * 与 humanReviewRequired 恒真声明分离——恒真字段不替代真实复核状态。
+ */
+export type ReviewStatus = 'pending' | 'approved' | 'rejected'
+
+/**
+ * 取数上下文（M1-B）：服务端连接器取数时随数据集传入，runScenario 据此统一判定
+ * dataStatus——Agent、wire、CLI 同一入口策略（调用方要求 formal ≠ 已满足可信条件）。
+ * 缺省 = 来源未声明。nature/complete/fresh 由服务端连接器与快照核验给出，
+ * 不接受调用方自称（伪造来源 → 无 basis → 不得 verified）。
+ */
+export interface DataBasisInput {
+  /** 来源性质（快照 nature）。 */
+  nature?: 'simulated' | 'business-source'
+  /** 取数完整性（连接器报告：分页/截断）。 */
+  complete?: boolean
+  /** 时效判定（服务端按业务时间窗判定）。 */
+  fresh?: boolean
+  /** 快照 ID（对账锚点）。 */
+  snapshotId?: string
+  /** 服务端登记 sourceId。 */
+  sourceId?: string
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -541,12 +729,14 @@ export interface DraftCandidate extends DraftItem {
   provenance?: DraftProvenance
   /** 物化后写入的元素 ID（canvas 由元素回查 provenance）；属性类为 'OBJ.attr' 属性引用形态。 */
   appliedAs?: string
-  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'agent-tool' 会话代执行）与时间。 */
+  /** 人审留痕：动作执行面（'workbench' 人工直操 / 'host-gate' 系统批准卡 / 'agent-tool' 会话代执行）与时间。 */
   reviewedBy?: string
   reviewedAt?: string
   /** approved→rejected 时保留原批准人/时间（单字段 reviewedBy 会被驳回覆盖，审计链不断）。 */
   approvedBy?: string
   approvedAt?: string
+  /** 批准凭证摘要（可信人审 T2.1）：批准时的动作载荷指纹，绑定「批的就是这份内容」。 */
+  approvalDigest?: string
   createdAt: string
 }
 
