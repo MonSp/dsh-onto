@@ -66,8 +66,8 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
   export · `dsh-onto run` / `runs *` · Web
 - **Trusted business execution** — three-state data status, six-tuple authorization,
   decision→proposal ledger, external receipts + reconciliation (no receipt ⇒ `unknown`),
-  ticket-sim & test adapters · `record_review_decision` / `create_action_proposal` /
-  `execute_behavior_action` / `reconcile_action`
+  ticket-sim & test adapters · lives in **`@dsh-onto/runtime`** · `record_review_decision` /
+  `create_action_proposal` / `execute_behavior_action` / `reconcile_action`
 - **Experience loop** — run records → recall hints → human annotation → SkillTemplate
   upgrades · `dsh-onto exp *` · Web
 - **Expert presets** — AML / TAX / MED picked before chat; `expert_agent` dispatches expert
@@ -77,10 +77,18 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 
 ## Repository layout
 
+Dependency direction: **`core` ← `runtime` ← `backend` (assembly)** · workbench talks to
+backend over remote services only.
+
 ```
 dsh-onto/
   core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 236 node --test acceptance tests)
-  backend/    @dsh-onto/backend — dsh bundle: onto* wire services (single backend landing point; 289 tests)
+  runtime/    @dsh-onto/runtime — shared run & governance library: data connectors,
+              identity/authorization, run records, review/approval, action ledger,
+              reconciliation (no auto dsh assembly; backend and future business
+              plugins depend on it — never the reverse)
+  backend/    @dsh-onto/backend — dsh bundle: development wires (model/knowledge/issue)
+              + assembly shell over @dsh-onto/runtime (onto* landing point; 289 tests)
   workbench/  @dsh-onto/workbench — dsh bundle: Web UI (six tabs + persistent right-rail ontology graph)
   mock-services/ ticket-sim — standalone ticket simulation service (self-persisting SQLite,
               idempotent across processes, fault injection, reconciliation; receipts always `simulated`)
@@ -104,7 +112,8 @@ dsh-onto/
 ```powershell
 # 1. Create the `dsh-onto` profile, install both bundles, seed the example packages
 dsh-onto\scripts\setup-profile.ps1
-# 2. Assert the composed profile contains both @dsh-onto/* bundles
+# 2. Assert the composed profile still contains @dsh-onto/backend + @dsh-onto/workbench
+#    (runtime ships as a library dependency of backend, not a separate bundle)
 dsh-onto\scripts\dump-config.ps1
 # 3. Launch the Web UI (open the printed dsh web URL) → sidebar entry "dsh-onto"
 dsh-onto\scripts\dev-web.ps1

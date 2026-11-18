@@ -29,7 +29,8 @@
     "@deepseek-ai/dsh-skill": "link:../../deepseek-harness/packages/skill/skill",
     "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",
     "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol",
-    "@dsh-onto/core": "link:../core"
+    "@dsh-onto/core": "link:../core",
+    "@dsh-onto/runtime": "link:../runtime"
   },
   "devDependencies": {
     "@types/node": "^24",

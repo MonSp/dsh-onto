@@ -26,6 +26,9 @@ importers:
       '@dsh-onto/core':
         specifier: link:../core
         version: link:../core
+      '@dsh-onto/runtime':
+        specifier: link:../runtime
+        version: link:../runtime
     devDependencies:
       '@types/node':
         specifier: ^24

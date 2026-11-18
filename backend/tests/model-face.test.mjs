@@ -546,7 +546,7 @@ test('P1 修复源断言：wire save/writeSource 自动重派生 + create_packag
   assert.ok(at.includes('预检整批'), 'apply_draft 须整批预检后再 approve')
   assert.ok(at.includes("c.status === 'pending'"), 'apply_draft 仅对 pending 走 review')
 
-  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  const grants = readFileSync(join(REPO, 'runtime', 'src', 'agent-grants.ts'), 'utf8')
   assert.ok(grants.includes("'list_runs'"), 'list_runs 须入 ONTOOL_NAMES')
   assert.ok(grants.includes("'list_drafts'"), 'list_drafts 须入 ONTOOL_NAMES')
   assert.ok(grants.includes("'write_quality_report'"), 'write_quality_report 须入 ONTOOL_NAMES')

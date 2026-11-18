@@ -1764,7 +1764,7 @@ test('E2-1 源断言：abstract_experience 注册 + ONTOOL_NAMES + 描述引导�
   assert.ok(slice.includes('abstractExperienceForTool'), 'execute 须走纯函数')
   assert.ok(slice.includes('humanApproved'), 'humanApproved 契约在场')
   assert.ok(slice.includes('总结成功经验') || slice.includes('方法论'), '描述须引导方法论链路（D7）')
-  const grants = readFileSync(join(REPO, 'backend', 'src', 'agent-grants.ts'), 'utf8')
+  const grants = readFileSync(join(REPO, 'runtime', 'src', 'agent-grants.ts'), 'utf8')
   assert.ok(grants.includes("'abstract_experience'"), 'ONTOOL_NAMES 须登记')
 })
 
@@ -2313,7 +2313,7 @@ test('E2-2 源断言：recall/hint 接 reviseTopHitAdvice（双路+人工闸）�
   const aeSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
   assert.ok(aeSrc.includes('await reviseTopHitAdvice') || aeSrc.includes('reviseTopHitAdvice('), 'hint 须接 reviseTopHitAdvice')
   assert.ok(/await experienceHintOf\(/.test(aeSrc), 'hint 调用点须 await（async 接线）')
-  const policySrc = readFileSync(join(REPO, 'backend', 'src', 'agent-policy.ts'), 'utf8')
+  const policySrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-policy.ts'), 'utf8')
   assert.ok(policySrc.includes('requiresHumanReview'), '闸门须用 requiresHumanReview')
   assert.ok(policySrc.includes('reviseDiff'), '须接 reviseDiff 双路')
   const rulesSrc = readFileSync(join(REPO, 'core', 'src', 'rules.ts'), 'utf8')
