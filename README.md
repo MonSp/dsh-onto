@@ -131,35 +131,6 @@ node dist\cli.js knowledge parse --source <id> --llm deepseek --root ..\workspac
 node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-CLUES --data ..\examples\aml-run.json
 ```
 
-## Testing
-
-- `core/tests/`: **236 tests** (`node --test tests/*.test.mjs`) — validator, knowledge
-  parsing, forbidden phrases, ISSUED read-only + fork, derived-drift, scenario output
-  contract, experience signatures, issue gate, and the trusted-data face (fail-closed data
-  status, feature-source governance, action contracts in the derive chain).
-- `backend/tests/`: **289 tests** (`pnpm run test`) — agent tool contracts, the action
-  ledger (cross-process claim mutex, kill-restart recovery, one-shot proposals), answer
-  guard, authorization wiring, and the attack-surface invariant table (behavioral).
-- `mock-services/ticket-sim/ticket-sim.test.mjs`: **12 tests** — real subprocess + real HTTP:
-  cross-process idempotency, SIGKILL restart persistence, fault injection, reconciliation.
-- Post-change ladder: build + `node --check` → `scripts/dump-config.ps1` →
-  `scripts/dev-web.ps1` + browser smoke.
-
-## Boundaries (stated honestly)
-
-- Knowledge parsing defaults to a deterministic lexical heuristic; the DeepSeek API path
-  needs `DEEPSEEK_API_KEY` (e.g. in `~/.dsh/.env`).
-- Conversational modeling is the primary entry; the canvas is a *status + review* surface
-  (dashed = pending draft) — **not free-form drag-and-drop modeling** (explicitly out of scope).
-- Runtime verdicts are out of scope by design: the platform screens candidates and
-  assembles evidence; humans decide.
-- A session's preset **cannot be hot-switched** (the Host refuses after the first turn;
-  the header label is read-only); changing expert identity = hero pick in a new session,
-  or dispatching `expert_agent`.
-- Skill isolation per preset is not done yet (our skill provider is a singleton service;
-  scoping it into preset realms hits that boundary — Phase 2); focus currently comes from
-  the persona constraints + the tool surface.
-
 ## License
 
 [MIT](LICENSE)

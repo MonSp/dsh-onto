@@ -93,25 +93,6 @@ node dist\cli.js knowledge parse --source <id> --llm deepseek --root ..\workspac
 node dist\cli.js exp recall --dir ..\packages\aml\1.0.0 --scenario SCN-AML-FIND-CLUES --data ..\examples\aml-run.json
 ```
 
-## 验收
-
-- `core/tests/`：**236 项**（`node --test tests/*.test.mjs`）——校验、知识解析、禁语、ISSUED 只读 +
-  fork、派生漂移、场景输出契约、经验签名、签发门禁，以及可信数据面（dataStatus fail-closed、
-  特征来源治理、动作契约进派生链）。
-- `backend/tests/`：**289 项**（`pnpm run test`）——agent 工具契约、动作台账（跨进程互斥占位、
-  kill-restart 恢复、提案单次消费）、回答守卫、鉴权接线、attack-surface 不变量表（行为断言）。
-- `mock-services/ticket-sim/ticket-sim.test.mjs`：**12 项**——真子进程 + 真 HTTP：跨进程幂等、
-  SIGKILL 重启持久化、故障注入、对账。
-- 改动后验证阶梯：build + `node --check` → `scripts/dump-config.ps1` → `scripts/dev-web.ps1` + 浏览器冒烟。
-
-## 边界（如实声明）
-
-- 知识库 LLM 解析默认走词面启发（确定性）；DeepSeek API 路径需 `DEEPSEEK_API_KEY`（如 `~/.dsh/.env`）。
-- 对话式建模是主入口；画布是「状态 + 人审」面（虚线 = 待审草案），**非自由拖拽建模**（非目标）。
-- 平台只做线索筛查与证据组装；认定与处置在人工（设计如此，不是待补功能）。
-- 会话 preset **不可热切**（首回合后 Host 拒绝切换，头部标签只读）；换专家身份 = 新会话 hero 选择，或 `expert_agent` 派子 agent。
-- 技能按 preset 作用域隔离未做（技能提供方为单例服务，进隔离域有单例边界，Phase 2）；当前靠 persona 约束 + 工具面聚焦。
-
 ## 许可证
 
 [MIT](LICENSE)
