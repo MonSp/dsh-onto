@@ -11,14 +11,16 @@ for (const m of [
   'remoteExportListScenarios',
   'remoteExportRunScenario',
   'remoteExportListRuns',
+  'remoteExportListReviewQueue',
   'remoteExportShowRun',
   'remoteExportCompareRuns',
   'remoteExportExportAudit',
   'remoteExportReviewChain',
+  'remoteExportRecordReviewDecision',
   'remoteExportListExperiences',
   'remoteExportShowExperience',
   'remoteExportReviewExperience',
 ]) {
   assert.equal(typeof proto[m], 'function', m)
 }
-console.log('OntoRuntime remote methods OK:', 10)
+console.log('OntoRuntime remote methods OK:', 12)

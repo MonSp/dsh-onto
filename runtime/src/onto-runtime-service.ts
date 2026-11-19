@@ -38,15 +38,19 @@ import { ReleaseError } from './release.js'
 import {
   assertBusinessDataset, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
 } from './business-policy.js'
+import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
+
+/** wire 错误 details：origCode 保留业务机器码（REVIEW_* / INVALID_ARGS…），便于 UI 展示。 */
+type OntoErrorDetails = { origCode?: string }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
-    'onto/not-found': Record<string, never>
-    'onto/bad-request': Record<string, never>
-    'onto/conflict': Record<string, never>
-    'onto/readonly': Record<string, never>
-    'onto/drift': Record<string, never>
-    'onto/issue-gate': Record<string, never>
+    'onto/not-found': OntoErrorDetails
+    'onto/bad-request': OntoErrorDetails
+    'onto/conflict': OntoErrorDetails
+    'onto/readonly': OntoErrorDetails
+    'onto/drift': OntoErrorDetails
+    'onto/issue-gate': OntoErrorDetails
   }
 }
 
@@ -79,8 +83,8 @@ export function resolveDataDir(ctx: Context): string {
   return join(base, 'dsh-onto')
 }
 
-function ontoError(code: keyof RemoteErrorDetailsMap, message: string): RemoteError {
-  return new RemoteError(code, message, {})
+function ontoError(code: keyof RemoteErrorDetailsMap, message: string, origCode?: string): RemoteError {
+  return new RemoteError(code, message, origCode !== undefined ? { origCode } : {})
 }
 
 function toRemoteError(e: unknown): RemoteError {
@@ -89,13 +93,13 @@ function toRemoteError(e: unknown): RemoteError {
   const code =
     typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : ''
   if (code === 'PACKAGE_READONLY' || code === 'PACKAGE_ISSUE_REQUIRES_HUMAN') {
-    return ontoError('onto/readonly', message)
+    return ontoError('onto/readonly', message, code || undefined)
   }
-  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message)
-  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message)
-  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message)
-  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message)
-  return ontoError('onto/bad-request', message)
+  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message, code || undefined)
+  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message, code || undefined)
+  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message, code || undefined)
+  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message, code || undefined)
+  return ontoError('onto/bad-request', message, code || undefined)
 }
 
 function guard<T>(fn: () => T): T {
@@ -267,7 +271,11 @@ export class OntoRuntime extends RuntimeRemoteService {
     return identity ? assertBusinessRun(identity, run) : run
   }
 
-  /** 运行历史（run-insight S2.5）：时间倒序摘要。wire 人审面。 */
+  /**
+   * 运行历史（run-insight S2.5）——纯 RunRecord 摘要，**不依赖 action-store**。
+   * workbench 运行列表等只读消费方与复核待办解耦：台账损坏不得打挂历史页。
+   * 复核状态走 {@link remoteExportListReviewQueue}。
+   */
   @Remote('listRuns')
   async remoteExportListRuns(): Promise<{
     runs: Array<{
@@ -293,6 +301,86 @@ export class OntoRuntime extends RuntimeRemoteService {
         savedAt: r.savedAt,
       })),
     }))
+  }
+
+  /**
+   * 复核待办联合（aml-review-workbench S2.1）：RunRecord × ReviewDecision。
+   * pending = 无决定；有决定取最新。action-store 缺失/损坏 **fail-loud**——
+   * 不静默把全部 run 标成 pending（待办口径不可假阴性）。仅复核面消费本端点。
+   */
+  @Remote('listReviewQueue')
+  async remoteExportListReviewQueue(): Promise<{
+    runs: Array<{
+      runId: string
+      scenarioId: string
+      package: { name: string; version: string }
+      datasetDigest: string
+      datasetSummary: RunRecord['datasetSummary']
+      auditPassed: boolean
+      startedAt: string
+      savedAt: string
+      reviewStatus: 'pending' | 'approved' | 'rejected'
+      latestDecision?: {
+        decisionId: string
+        decision: 'approved' | 'rejected'
+        createdAt: string
+        reason?: string
+        candidateIds: string[]
+      }
+    }>
+  }> {
+    return guard(() => {
+      const store = actionStoreFor(this.ws.root)
+      // 一次拉全表再分组，避免 per-run N+1
+      const byRun = new Map<string, ReviewDecision[]>()
+      for (const d of store.listDecisions()) {
+        const list = byRun.get(d.runId)
+        if (list === undefined) byRun.set(d.runId, [d])
+        else list.push(d)
+      }
+      const rows = this.visibleRuns().map((r) => {
+        const decisions = byRun.get(r.runId) ?? []
+        const latest = decisions.length === 0
+          ? undefined
+          : [...decisions].sort((a, b) =>
+              a.createdAt < b.createdAt ? 1
+              : a.createdAt > b.createdAt ? -1
+              : a.decisionId < b.decisionId ? 1
+              : a.decisionId > b.decisionId ? -1
+              : 0)[0]
+        return {
+          runId: r.runId,
+          scenarioId: r.scenarioId,
+          package: r.package,
+          datasetDigest: r.datasetDigest.slice(0, 12),
+          datasetSummary: r.datasetSummary,
+          auditPassed: r.result.audit.passed === true,
+          startedAt: r.startedAt,
+          savedAt: r.savedAt,
+          reviewStatus: (latest?.decision ?? 'pending') as 'pending' | 'approved' | 'rejected',
+          ...(latest
+            ? {
+                latestDecision: {
+                  decisionId: latest.decisionId,
+                  decision: latest.decision,
+                  createdAt: latest.createdAt,
+                  ...(latest.reason !== undefined ? { reason: latest.reason } : {}),
+                  candidateIds: latest.candidateIds,
+                },
+              }
+            : {}),
+        }
+      })
+      // pending 在前，其后 savedAt 时间倒序（S2.1）。
+      rows.sort((a, b) => {
+        const ap = a.reviewStatus === 'pending' ? 0 : 1
+        const bp = b.reviewStatus === 'pending' ? 0 : 1
+        if (ap !== bp) return ap - bp
+        if (a.savedAt !== b.savedAt) return a.savedAt < b.savedAt ? 1 : -1
+        return a.runId < b.runId ? 1 : a.runId > b.runId ? -1 : 0
+      })
+      return { runs: rows }
+    })
   }
 
   /** 单轮运行全量（人审面：完整短语与证据链，供复核定位）。 */
@@ -345,6 +433,59 @@ export class OntoRuntime extends RuntimeRemoteService {
     return guard(() => {
       if (this.strict) this.readRun(request.runId)
       return this.reviewChainOf(request.runId)
+    })
+  }
+
+  /**
+   * 业务复核决定 UI 直写（aml-review-workbench S2.3）：与 record_review_decision 工具
+   * 同一套公共校验；候选须在结果集内（比工具面更严）。
+   *
+   * 身份顺序（防探测）：先 requireReviewerHostId fail-closed，再做 run/摘要校验——
+   * 无身份调用方不得靠 REVIEW_RUN_NOT_FOUND 等错误码探知台账存在性。
+   * 不走批准卡——UI 本人点击即人审事件；执行批准/提案/对账仍只在工具面批准卡。
+   */
+  @Remote('recordReviewDecision')
+  async remoteExportRecordReviewDecision(request: {
+    runId: string
+    candidateIds: string[]
+    snapshotDigest: string
+    ruleFingerprint: string
+    decision: 'approved' | 'rejected'
+    reason?: string
+  }): Promise<{
+    decisionId: string
+    runId: string
+    decision: 'approved' | 'rejected'
+    candidateIds: string[]
+    reviewer: string
+    createdAt: string
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      const reviewer = requireReviewerHostId()
+      const validated = validateReviewDecision(
+        this.ws.root,
+        {
+          runId: request.runId,
+          candidateIds: request.candidateIds,
+          snapshotDigest: request.snapshotDigest,
+          ruleFingerprint: request.ruleFingerprint,
+          decision: request.decision,
+          ...(request.reason !== undefined ? { reason: request.reason } : {}),
+        },
+        { requireCandidateSubset: true },
+      )
+      if (this.strict) assertBusinessRun(requireBusinessIdentity('history'), validated.runRec)
+      const dec = persistReviewDecision(this.ws.root, validated, reviewer)
+      return {
+        decisionId: dec.decisionId,
+        runId: dec.runId,
+        decision: dec.decision,
+        candidateIds: dec.candidateIds,
+        reviewer: dec.reviewer,
+        createdAt: dec.createdAt,
+        humanReviewRequired: true as const,
+      }
     })
   }
 
