@@ -128,6 +128,7 @@ import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
+  persistReviewDecision,
   requireReviewerHostId,
   validateReviewDecision,
 } from './review-decision.js'
@@ -3608,6 +3609,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '记录业务复核决定')
+          // 身份先于台账校验：无身份不得靠 REVIEW_* 探测 run 存在性（与 UI wire 同序）
+          const reviewer = requireReviewerHostId()
           // 公共校验（review-decision）：run/snapshot/rule/候选归一——与 UI wire 同一套口径
           const validated = validateReviewDecision(ws.root, {
             runId: args.runId,
@@ -3618,8 +3621,6 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             ...(args.reason !== undefined ? { reason: args.reason } : {}),
           })
           if (strict) assertBusinessRun(requireBusinessIdentity('history'), validated.runRec)
-          // 复核人 = 宿主用户 id（可信身份提供者；不收模型自称、不拿批准摘要冒充用户 id）
-          const reviewer = requireReviewerHostId()
           const content = actionDigest({
             action: 'record_review_decision',
             runId: args.runId,
@@ -3635,17 +3636,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             digest: content,
             summary: `候选 ${validated.candidateIds.join('、')}——决定 ${args.decision}`,
           })
-          const dec = actionStoreFor(ws.root).createDecision({
-            runId: validated.runRec.runId,
-            candidateIds: validated.candidateIds,
-            snapshotDigest: validated.snapshotDigest,
-            ruleFingerprint: validated.ruleFingerprint,
-            // 复核人 = 宿主用户 id（BusinessIdentity.userId，宿主/部署断言）——与 action-store ReviewDecision
-            // 口径一致；不收模型自称、不拿批准摘要 12 位冒充用户 id
-            reviewer,
-            decision: validated.decision,
-            ...(validated.reason !== undefined ? { reason: validated.reason } : {}),
-          })
+          // 复核人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称、不拿批准摘要冒充
+          const dec = persistReviewDecision(ws.root, validated, reviewer)
           return toolOut({
             decisionId: dec.decisionId,
             runId: dec.runId,

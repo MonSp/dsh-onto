@@ -1,14 +1,15 @@
 /**
- * aml-review-workbench S2.1 — listRuns 复核待办联合口径。
+ * aml-review-workbench S2.1 — listReviewQueue 复核待办联合口径。
  * pending = 无 ReviewDecision；有决定取最新；store 缺失 fail-loud 不假 pending。
+ * listRuns 与台账解耦：workbench 历史页不依赖 action-store。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { OntoRuntime, actionStoreFor, closeActionStore, businessPolicy } from '../dist/index.js'
+import { OntoRuntime, actionStoreFor, closeActionStore } from '../dist/index.js'
 import { buildRunRecord, saveRunRecord } from '@dsh-onto/core'
 
 function seedRun(wsRoot, runId, savedAt) {
@@ -70,7 +71,7 @@ function fixture() {
   }
 }
 
-test('listRuns：无决定=pending；最新决定覆盖状态；pending 排前', async () => {
+test('listReviewQueue：无决定=pending；最新决定覆盖状态；pending 排前', async () => {
   const f = fixture()
   try {
     seedRun(f.wsRoot, 'run-pending', '2026-11-19T00:00:00.000Z')
@@ -108,7 +109,7 @@ test('listRuns：无决定=pending；最新决定覆盖状态；pending 排前',
       reason: 'second-approve',
     })
 
-    const { runs } = await f.service.remoteExportListRuns()
+    const { runs } = await f.service.remoteExportListReviewQueue()
     const byId = Object.fromEntries(runs.map((r) => [r.runId, r]))
 
     assert.equal(byId['run-pending'].reviewStatus, 'pending')
@@ -132,11 +133,11 @@ test('listRuns：无决定=pending；最新决定覆盖状态；pending 排前',
   }
 })
 
-test('listRuns：既有字段形状不回归（runId/scenario/package/digest/audit/savedAt）', async () => {
+test('listReviewQueue：既有字段形状不回归（runId/scenario/package/digest/audit/savedAt）', async () => {
   const f = fixture()
   try {
     seedRun(f.wsRoot, 'run-shape', '2026-11-19T03:00:00.000Z')
-    const { runs } = await f.service.remoteExportListRuns()
+    const { runs } = await f.service.remoteExportListReviewQueue()
     const row = runs.find((r) => r.runId === 'run-shape')
     assert.ok(row)
     assert.equal(row.scenarioId, 'SCN-AML-FIND-CLUES')
@@ -151,12 +152,12 @@ test('listRuns：既有字段形状不回归（runId/scenario/package/digest/aud
   }
 })
 
-test('listRuns：action-store 打不开 → fail-loud，不静默全部标 pending', async () => {
+test('listReviewQueue：action-store 打不开 → fail-loud，不静默全部标 pending', async () => {
   const f = fixture()
   try {
     seedRun(f.wsRoot, 'run-failoud', '2026-11-19T04:00:00.000Z')
     // 先正常读通，确认有 run
-    const ok = await f.service.remoteExportListRuns()
+    const ok = await f.service.remoteExportListReviewQueue()
     assert.equal(ok.runs.length, 1)
 
     // 破坏台账：把 ledger.db 换成目录 → DatabaseSync 打开失败
@@ -166,10 +167,32 @@ test('listRuns：action-store 打不开 → fail-loud，不静默全部标 pendi
     mkdirSync(dbPath, { recursive: true })
 
     await assert.rejects(
-      () => f.service.remoteExportListRuns(),
+      () => f.service.remoteExportListReviewQueue(),
       () => true,
-      'store 损坏时 listRuns 必须抛错（fail-loud）',
+      'store 损坏时 listReviewQueue 必须抛错（fail-loud）',
     )
+  } finally {
+    f.dispose()
+  }
+})
+
+test('listRuns：与 action-store 解耦——台账损坏仍可读运行历史', async () => {
+  const f = fixture()
+  try {
+    seedRun(f.wsRoot, 'run-history-ok', '2026-11-19T05:00:00.000Z')
+    const ok = await f.service.remoteExportListRuns()
+    assert.equal(ok.runs.length, 1)
+    // 历史面不携带 review 字段（复核状态归 listReviewQueue）
+    assert.equal(ok.runs[0].reviewStatus, undefined)
+
+    closeActionStore(f.wsRoot)
+    const dbPath = join(f.wsRoot, 'actions', 'ledger.db')
+    if (existsSync(dbPath) && statSync(dbPath).isFile()) rmSync(dbPath)
+    mkdirSync(dbPath, { recursive: true })
+
+    const after = await f.service.remoteExportListRuns()
+    assert.equal(after.runs.length, 1, '台账损坏不得打挂 listRuns')
+    assert.equal(after.runs[0].runId, 'run-history-ok')
   } finally {
     f.dispose()
   }

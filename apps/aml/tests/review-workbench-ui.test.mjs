@@ -13,11 +13,14 @@ const appSrc = readFileSync(join(REPO, 'apps', 'aml', 'src', 'client', 'app.ts')
 const clientSrc = readFileSync(join(REPO, 'apps', 'aml', 'src', 'client.ts'), 'utf8')
 const localeSrc = readFileSync(join(REPO, 'apps', 'aml', 'src', 'client', 'locale.ts'), 'utf8')
 
-test('列表：reviewStatus 筛选与 pending 排序呈现', () => {
+test('列表：listReviewQueue + reviewStatus 筛选；listRuns 不绑台账', () => {
+  assert.ok(appSrc.includes('listReviewQueue'), '复核待办走 listReviewQueue')
   assert.ok(appSrc.includes("setFilter"), '状态筛选存在')
   assert.ok(appSrc.includes("reviewStatus"), '读取 reviewStatus')
   assert.ok(appSrc.includes("filterPending") || appSrc.includes('pending'), '待复核筛选项')
   assert.ok(localeSrc.includes('待复核'), 'zh 待复核文案')
+  // 复核面不得把纯历史 listRuns 当待办源
+  assert.ok(!appSrc.includes('api.listRuns('), '复核列表不用 listRuns')
 })
 
 test('证据详情：showRun + 证据链/缺数/审计可见', () => {
@@ -32,15 +35,35 @@ test('证据详情：showRun + 证据链/缺数/审计可见', () => {
   assert.ok(!appSrc.includes('runScenario('), '详情区不得触发重跑')
 })
 
-test('复核表单：recordReviewDecision 直写 + 候选多选', () => {
+test('复核表单：recordReviewDecision 直写 + 候选显式勾选 + 批准必填理由', () => {
   assert.ok(clientSrc.includes("desc('ontoRuntime', 'recordReviewDecision'"), '描述符已登记')
+  assert.ok(clientSrc.includes("desc('ontoRuntime', 'listReviewQueue'"), 'listReviewQueue 描述符已登记')
   assert.ok(appSrc.includes('recordReviewDecision'), 'UI 调用 wire')
   assert.ok(appSrc.includes('selectedIds'), '候选多选')
   assert.ok(appSrc.includes("decision === 'approved'"), '批准/拒绝切换')
   assert.ok(appSrc.includes('submitReview'), '提交入口')
+  // M2：打开详情不默认全选
+  assert.ok(
+    /setSelectedIds\(\[\]\)/.test(appSrc),
+    'openRun 重置为空集（不默认全选）',
+  )
+  assert.ok(!/setSelectedIds\(cands\.map/.test(appSrc), '不得 cands.map 全选')
+  // M2：批准须理由
+  assert.ok(appSrc.includes('reasonRequired'), '批准理由门')
+  assert.ok(appSrc.includes('canSubmit'), '提交前统一门禁')
   // 不收自报 reviewer：recordReviewDecision 请求体不含 reviewer（类型字段 reviewer: string 不算）
   const rrdCall = appSrc.slice(appSrc.indexOf('recordReviewDecision('), appSrc.indexOf('recordReviewDecision(') + 500)
   assert.ok(!rrdCall.includes('reviewer'), 'recordReviewDecision 请求体不含 reviewer')
+})
+
+test('打开详情：detail/chain 原子切换，半成功不留旧链', () => {
+  // M3：进入 openRun 先清空，Promise.all 成功后一起写入
+  assert.ok(appSrc.includes('Promise.all'), 'showRun + reviewChain 并行')
+  const openIdx = appSrc.indexOf('const openRun')
+  assert.ok(openIdx >= 0, 'openRun 存在')
+  const openBody = appSrc.slice(openIdx, openIdx + 1200)
+  assert.ok(openBody.includes('setChain(null)'), '先清 chain')
+  assert.ok(openBody.includes('setDetail(null)'), '先清 detail')
 })
 
 test('治理链：待对账展示且无重新执行按钮', () => {
@@ -60,6 +83,7 @@ test('双语 locale 键齐全（zh/en 对称核心键）', () => {
   const keys = [
     'filterPending', 'evidence', 'reviewForm', 'submitReview',
     'pendingReconcile', 'proposalNotApproval', 'noRetry', 'openDetail',
+    'reasonRequired',
   ]
   for (const k of keys) {
     assert.ok(localeSrc.includes(`${k}:`), `locale 缺 ${k}`)

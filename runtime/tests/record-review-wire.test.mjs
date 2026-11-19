@@ -175,20 +175,39 @@ test('recordReviewDecision：无身份 fail-closed REVIEWER_UNCONFIRMED 零写�
   }
 })
 
-test('recordReviewDecision：追加决定后 listRuns 状态翻转为最新', async () => {
+test('recordReviewDecision：追加决定后 listReviewQueue 状态翻转为最新', async () => {
   const f = fixture()
   try {
     const rec = seedRun(f.wsRoot, 'run-flip00001')
     await f.service.remoteExportRecordReviewDecision({ ...baseArgs(rec), decision: 'rejected', reason: 'no' })
-    let { runs } = await f.service.remoteExportListRuns()
+    let { runs } = await f.service.remoteExportListReviewQueue()
     assert.equal(runs.find((r) => r.runId === rec.runId).reviewStatus, 'rejected')
 
     await new Promise((r) => setTimeout(r, 5))
     await f.service.remoteExportRecordReviewDecision({ ...baseArgs(rec), decision: 'approved', reason: 'yes' })
-    runs = (await f.service.remoteExportListRuns()).runs
+    runs = (await f.service.remoteExportListReviewQueue()).runs
     const row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'approved')
     assert.equal(row.latestDecision.reason, 'yes')
+  } finally {
+    f.dispose()
+  }
+})
+
+test('recordReviewDecision：无身份时不得用 REVIEW_* 探测 run 存在性', async () => {
+  const f = fixture()
+  try {
+    const rec = seedRun(f.wsRoot, 'run-probe0001')
+    f.setIdentity(null)
+    // 不存在的 run：仍应先 REVIEWER_UNCONFIRMED，而不是 REVIEW_RUN_NOT_FOUND
+    await expectOrigCode(
+      () => f.service.remoteExportRecordReviewDecision({ ...baseArgs(rec), runId: 'run-ghost' }),
+      'REVIEWER_UNCONFIRMED',
+    )
+    await expectOrigCode(
+      () => f.service.remoteExportRecordReviewDecision({ ...baseArgs(rec), snapshotDigest: 'deadbeef1234' }),
+      'REVIEWER_UNCONFIRMED',
+    )
   } finally {
     f.dispose()
   }

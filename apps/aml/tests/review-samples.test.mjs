@@ -115,7 +115,7 @@ test('S-a 正常命中：pending 列表 → 证据齐全 → approved 落库', a
   const f = fixture()
   try {
     const rec = seed(f.wsRoot, 'run-sa-normal')
-    let { runs } = await f.service.remoteExportListRuns()
+    let { runs } = await f.service.remoteExportListReviewQueue()
     const row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'pending')
     assert.equal(row.latestDecision, undefined)
@@ -132,7 +132,7 @@ test('S-a 正常命中：pending 列表 → 证据齐全 → approved 落库', a
     assert.equal(out.decision, 'approved')
     assert.equal(out.reviewer, 'host:u-sample')
 
-    runs = (await f.service.remoteExportListRuns()).runs
+    runs = (await f.service.remoteExportListReviewQueue()).runs
     const after = runs.find((r) => r.runId === rec.runId)
     assert.equal(after.reviewStatus, 'approved')
     assert.equal(after.latestDecision.reason, '证据充分')
@@ -184,7 +184,7 @@ test('S-b 证据不足：缺数可见 → 可拒绝；不得假装 audit 闭合'
     )
     assert.equal(out.decision, 'rejected')
 
-    const { runs } = await f.service.remoteExportListRuns()
+    const { runs } = await f.service.remoteExportListReviewQueue()
     const row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'rejected')
     assert.match(row.latestDecision.reason, /证据不足/)
@@ -202,7 +202,7 @@ test('S-c 审批拒绝：rejected 上墙 → 追加 approved 翻转为最新', a
     await f.service.remoteExportRecordReviewDecision(
       approveArgs(rec, { decision: 'rejected', reason: '业务口径不符' }),
     )
-    let { runs } = await f.service.remoteExportListRuns()
+    let { runs } = await f.service.remoteExportListReviewQueue()
     let row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'rejected')
     assert.equal(row.latestDecision.decision, 'rejected')
@@ -212,7 +212,7 @@ test('S-c 审批拒绝：rejected 上墙 → 追加 approved 翻转为最新', a
     await f.service.remoteExportRecordReviewDecision(
       approveArgs(rec, { decision: 'approved', reason: '补充材料后通过' }),
     )
-    runs = (await f.service.remoteExportListRuns()).runs
+    runs = (await f.service.remoteExportListReviewQueue()).runs
     row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'approved')
     assert.equal(row.latestDecision.reason, '补充材料后通过')
@@ -286,7 +286,7 @@ test('S-d 受理后超时：unknown 台账 → 治理链待对账；UI 无重新
     assert.equal(chain.actions[0].actionId, action.actionId)
 
     // 列表仍显示复核状态（unknown 动作不改变 reviewStatus 口径）
-    const { runs } = await f.service.remoteExportListRuns()
+    const { runs } = await f.service.remoteExportListReviewQueue()
     const row = runs.find((r) => r.runId === rec.runId)
     assert.equal(row.reviewStatus, 'approved')
 

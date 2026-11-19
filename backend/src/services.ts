@@ -71,22 +71,25 @@ import { AgentToolError } from './agent-policy.js'
 import { dataSources } from './data-sources.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 
+/** 与 runtime 同源的 wire 错误 details（模块 augmentation 必须类型一致）。 */
+type OntoErrorDetails = { origCode?: string }
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
-    'onto/not-found': Record<string, never>
-    'onto/bad-request': Record<string, never>
-    'onto/conflict': Record<string, never>
-    'onto/readonly': Record<string, never>
-    'onto/drift': Record<string, never>
-    'onto/issue-gate': Record<string, never>
+    'onto/not-found': OntoErrorDetails
+    'onto/bad-request': OntoErrorDetails
+    'onto/conflict': OntoErrorDetails
+    'onto/readonly': OntoErrorDetails
+    'onto/drift': OntoErrorDetails
+    'onto/issue-gate': OntoErrorDetails
   }
 }
 
 // resolveDataDir / OntoRuntime live in @dsh-onto/runtime (M2); re-export for backend hosts.
 export { resolveDataDir, OntoRuntime, RuntimeRemoteService }
 
-function ontoError(code: keyof RemoteErrorDetailsMap, message: string): RemoteError {
-  return new RemoteError(code, message, {})
+function ontoError(code: keyof RemoteErrorDetailsMap, message: string, origCode?: string): RemoteError {
+  return new RemoteError(code, message, origCode !== undefined ? { origCode } : {})
 }
 
 function toRemoteError(e: unknown): RemoteError {
@@ -95,13 +98,13 @@ function toRemoteError(e: unknown): RemoteError {
   const code =
     typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : ''
   if (code === 'PACKAGE_READONLY' || code === 'PACKAGE_ISSUE_REQUIRES_HUMAN') {
-    return ontoError('onto/readonly', message)
+    return ontoError('onto/readonly', message, code || undefined)
   }
-  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message)
-  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message)
-  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message)
-  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message)
-  return ontoError('onto/bad-request', message)
+  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message, code || undefined)
+  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message, code || undefined)
+  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message, code || undefined)
+  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message, code || undefined)
+  return ontoError('onto/bad-request', message, code || undefined)
 }
 
 function guard<T>(fn: () => T): T {

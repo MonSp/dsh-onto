@@ -93,6 +93,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),
+      desc('ontoRuntime', 'listReviewQueue', false, 'RLQ', 'Review queue: runs joined with latest ReviewDecision.'),
       desc('ontoRuntime', 'showRun', true, 'RSH', 'Show one run record (human-review face).'),
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records.'),
       desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export one run audit archive.'),

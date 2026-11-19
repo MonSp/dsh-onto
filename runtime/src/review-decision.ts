@@ -3,6 +3,14 @@
  *
  * 绑定 RunRecord 台账：runId 真实、snapshot/rule 指纹对齐、候选合法；
  * 复核人只信 businessPolicy 身份（fail-closed），不收调用方自报。
+ *
+ * 两条人审路径（不可互相替代）：
+ * - **工具面** `record_review_decision`：humanApproved 意图声明 + 系统批准卡 + 本模块校验；
+ * - **UI wire** `recordReviewDecision`：本人点击即人审事件 + 本模块校验（候选子集更严）；
+ *   执行批准 / 提案 / 对账仍只走工具面批准卡。
+ *
+ * 调用顺序约定：先 {@link requireReviewerHostId}，再 {@link validateReviewDecision}——
+ * 无身份不得靠 REVIEW_* 错误码探测 run 存在性/摘要。
  * @module @dsh-onto/runtime/review-decision
  */
 import type { RunRecord } from '@dsh-onto/core'
@@ -10,7 +18,7 @@ import { loadRunRecord } from '@dsh-onto/core'
 import { actionDigest } from './agent-approval.js'
 import { AgentToolError } from './agent-policy.js'
 import { businessPolicy } from './business-policy.js'
-import type { ReviewDecision } from './action-store.js'
+import { actionStoreFor, type ReviewDecision } from './action-store.js'
 
 /**
  * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
@@ -143,14 +151,15 @@ export function requireReviewerHostId(): string {
   return `host:${reviewerId}`
 }
 
-/** 校验通过后落库（createDecision 包装；调用方负责身份与可选批准卡）。 */
+/**
+ * 校验通过后落库（唯一 createDecision 入口；调用方已负责身份，工具面另过批准卡）。
+ */
 export function persistReviewDecision(
   root: string,
   validated: ValidatedReviewDecision,
   reviewer: string,
-  createDecision: (input: Omit<ReviewDecision, 'decisionId' | 'revision' | 'createdAt'>) => ReviewDecision,
 ): ReviewDecision {
-  return createDecision({
+  return actionStoreFor(root).createDecision({
     runId: validated.runRec.runId,
     candidateIds: validated.candidateIds,
     snapshotDigest: validated.snapshotDigest,

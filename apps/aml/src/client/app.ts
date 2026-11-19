@@ -181,7 +181,8 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
       setError('')
       setBusy('runs')
       try {
-        const out = unwrap<{ runs: RunRow[] }>(await api.listRuns())
+        // 复核待办走 listReviewQueue（fail-loud）；listRuns 仅供无台账依赖的历史消费方
+        const out = unwrap<{ runs: RunRow[] }>(await api.listReviewQueue())
         setRuns(out.runs ?? [])
       } catch (e) {
         setError(errText(e))
@@ -205,19 +206,35 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
       setError('')
       setOkMsg('')
       setBusy('detail')
+      // 原子切换：先清空 detail/chain，避免半成功时出现「新 run 证据 + 旧 run 治理链」
+      setDetail(null)
+      setDetailRunId('')
+      setChain(null)
+      setChainRunId('')
+      setSelectedIds([])
+      setSelectedCandidate('')
+      setDecision('approved')
+      setReason('')
       try {
-        const out = unwrap<RunDetail>(await api.showRun({ runId }))
-        setDetail(out)
+        const [detailOut, chainOut] = await Promise.all([
+          Promise.resolve(api.showRun({ runId })).then((v) => unwrap<RunDetail>(v)),
+          Promise.resolve(api.reviewChain({ runId })).then((v) => unwrap<ChainData>(v)),
+        ])
+        setDetail(detailOut)
         setDetailRunId(runId)
-        const cands = out.record?.result?.candidates ?? []
-        setSelectedIds(cands.map((c) => c.candidateId))
+        setChain(chainOut)
+        setChainRunId(runId)
+        const cands = detailOut.record?.result?.candidates ?? []
+        // 不默认全选：批准须显式勾选候选，防一键批量误批
+        setSelectedIds([])
         setSelectedCandidate(cands[0]?.candidateId ?? '')
         setDecision('approved')
         setReason('')
-        const chainOut = unwrap<ChainData>(await api.reviewChain({ runId }))
-        setChain(chainOut)
-        setChainRunId(runId)
       } catch (e) {
+        setDetail(null)
+        setDetailRunId('')
+        setChain(null)
+        setChainRunId('')
         setError(errText(e))
       } finally {
         setBusy('')
@@ -225,8 +242,12 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
     })()
   }
 
+  const reasonRequired = decision === 'approved'
+  const reasonOk = !reasonRequired || reason.trim() !== ''
+  const canSubmit = !busy && selectedIds.length > 0 && reasonOk
+
   const submitReview = () => {
-    if (!detail || selectedIds.length === 0) return
+    if (!detail || !canSubmit) return
     void (async () => {
       setError('')
       setOkMsg('')
@@ -535,7 +556,7 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
     return nodes
   }
 
-  // 候选选择：详情打开时由 openRun 重置 selectedIds；此处仅渲染复选
+  // 候选选择：openRun 重置为空集（不默认全选）；批准须显式勾选 + 理由
   const reviewFormView = (): ReactNode[] => {
     if (!detail) return []
     const cands = detail.record.result.candidates ?? []
@@ -591,7 +612,8 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
         h(
           'div',
           { className: 'amli-cand-row' },
-          h('span', { className: 'amli-note' }, t('reasonLabel')),
+          h('span', { className: 'amli-note' },
+            reasonRequired ? t('reasonRequired') : t('reasonLabel')),
           h('input', {
             type: 'text',
             value: reason,
@@ -607,11 +629,14 @@ function GovernancePanel(props: { t: (k: string) => string; ctx: Ctx }) {
             {
               type: 'button',
               className: 'amli-primary',
-              disabled: !!busy || selectedIds.length === 0,
+              disabled: !canSubmit,
               onClick: () => submitReview(),
             },
             t('submitReview'),
           ),
+          !reasonOk && selectedIds.length > 0
+            ? h('span', { className: 'amli-note' }, t('reasonRequired'))
+            : null,
           okMsg ? h('span', { className: 'amli-ok' }, okMsg) : null,
         ),
       ),
