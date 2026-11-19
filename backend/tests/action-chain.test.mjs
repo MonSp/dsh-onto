@@ -30,6 +30,7 @@ import {
 import { buildRunRecord, derivePackage, saveRunRecord } from '@dsh-onto/core'
 import { actionStoreFor } from '../dist/action-store.js'
 import { businessPolicy } from '../dist/business-policy.js'
+import { currentRuntimeContext, provideRuntimeContext } from '@dsh-onto/runtime'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_SRC = join(REPO, 'packages', 'aml', '1.0.0')
@@ -70,6 +71,8 @@ function setupChain(opts = {}) {
       },
     },
   }
+  // Existing single-host fixtures explicitly use the standalone compatibility scope.
+  provideRuntimeContext(ctx.root, currentRuntimeContext())
   apply(ctx)
   return {
     root,

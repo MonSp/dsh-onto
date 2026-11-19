@@ -477,7 +477,7 @@ test('E1-1：命中路径附 reviewFocus/advice，且打分与不召回逐字段
 })
 
 test('E1-1 源断言：召回只附包络不进引擎，experience 过 value/render 闸', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-experts.ts'), 'utf8')
   const hintIdx = src.indexOf('experienceHintOf(')
   const runIdx = src.indexOf('runScenario(versionDir')
   assert.ok(hintIdx > 0 && runIdx > hintIdx, '执行前召回（hint 在 runScenario 之前）')
@@ -493,7 +493,7 @@ test('E1-1 源断言：召回只附包络不进引擎，experience 过 value/ren
 })
 
 test('P3-2：invoke_expert 经验提示失败降级冷启动，不阻断 runScenario', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-experts.ts'), 'utf8')
   assert.ok(src.includes('P3-2：提示段失败降级冷启动'), '须有 P3-2 降级注释')
   assert.ok(src.includes('try {') && src.includes('experienceHintOf('), 'experienceHintOf 须包在 try 内')
   assert.ok(
@@ -516,7 +516,7 @@ test('P2-2/P3-3 源断言：materialize derive 失败回滚 + SkillTemplate wire
   assert.ok(coreSrc.includes('out.wire'), 'applyDraftToPackage 须回传 wire 接线结果')
   assert.ok(coreSrc.includes('未接线 pipeline.skillRefs'), '多场景未接线须有结构位 reason')
 
-  const atSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const atSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(atSrc.includes('res.notes'), 'apply_draft 须透传 materialize notes')
   assert.ok(atSrc.includes('注意：${n}'), 'apply_draft render 须上墙 notes')
   assert.ok(
@@ -533,7 +533,7 @@ test('P1 修复源断言：wire save/writeSource 自动重派生 + create_packag
   const deriveCount = (svc.match(/derivePackage\(dir\)/g) || []).length
   assert.ok(deriveCount >= 2, `save+writeSource 均须 derive，实际 ${deriveCount}`)
 
-  const at = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const at = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(at.includes('assertHumanApproved(args.humanApproved, \'建包\')'), 'create_package 须 humanApproved')
   assert.ok(at.includes('对话起草前须先 save_skeleton'), 'draft_elements 须骨架先行')
   assert.ok(at.includes('骨架未确认，不得对话起草'), 'draft_elements 须已确认骨架')
@@ -637,7 +637,7 @@ test('L4 空全局索引：render 走 index 分支（不落明细「duties 未�
   assert.ok(!emptyText.includes('场景骨架'), '空索引不得出现骨架降级措辞')
 
   // render 分支：index 键存在（即使 []）→ index 渲染；缺省 → 明细渲染。
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-experts.ts'), 'utf8')
   assert.ok(
     src.includes('v.index !== undefined ? renderExpertIndex(v.index) : renderExperts(v)'),
     'render 须以 index 键存在与否分支，而非 length>0',

@@ -1,4 +1,6 @@
 /** @dsh-onto/runtime — 公共运行与治理库（无自动 dsh 装配）。 */
+export * from './context.js'
+export * from './host-binding.js'
 export * from './agent-policy.js'
 export * from './agent-hooks.js'
 export * from './agent-approval.js'
@@ -13,3 +15,11 @@ export * from './action-connector-ext.js'
 export * from './data-sources.js'
 export * from './data-source-ext.js'
 export * from './ext-token.js'
+export * from './onto-runtime-service.js'
+export * from './model-face.js'
+
+// Plugin modules export colliding `apply`/`name`/`inject` — expose as namespaces.
+// Subpath imports: @dsh-onto/runtime/agent-tools | agent-skills | agent-experts
+export * as agentTools from './agent-tools.js'
+export * as agentSkills from './agent-skills.js'
+export * as agentExperts from './agent-experts.js'

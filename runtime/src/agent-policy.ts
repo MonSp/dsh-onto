@@ -18,6 +18,18 @@ import {
   type TaskSignature,
 } from '@dsh-onto/core'
 import type { ToolExecCtx } from './agent-approval.js'
+import { runtimeState } from './context.js'
+
+const policyStateKey = Symbol('policyState')
+function policyState() {
+  return runtimeState(policyStateKey, () => ({
+    serverDirs: [] as string[],
+    phraseRegistry: new Map<string, string[]>(),
+    phraseRecall: null as PhraseRecall | null,
+    answerPhraseUnion: new Set<string>(),
+    diffLlm: null as DiffLlmPort | null,
+  }))
+}
 
 /* ───────────────────────── 错误面（P2.4） ───────────────────────── */
 
@@ -33,15 +45,15 @@ export class AgentToolError extends Error {
 }
 
 /** 服务端目录清单：错误 message 经此处剥除（含全部 versionDir/dataDir 派生路径）。 */
-const serverDirs: string[] = []
-
 /** 注册服务端目录（apply 时传 dataDir；工具错误不再回显其中任何路径）。 */
 export function registerServerDir(dir: string): void {
+  const { serverDirs } = policyState()
   if (dir !== '' && !serverDirs.includes(dir)) serverDirs.push(dir)
 }
 
 function scrub(message: string, extraRedact: readonly string[]): string {
   let msg = message
+  const { serverDirs } = policyState()
   for (const d of [...serverDirs, ...extraRedact]) {
     if (d === '') continue
     const esc = d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -131,7 +143,6 @@ export function collectPhrases(result: ScenarioRunResult, extra: readonly string
 }
 
 /** execute→render 清单注册表（value 被快照克隆且 phrase 已空化，无法从 value 反推）。 */
-const phraseRegistry = new Map<string, string[]>()
 const PHRASE_REGISTRY_MAX = 256
 
 /**
@@ -140,16 +151,18 @@ const PHRASE_REGISTRY_MAX = 256
  * 清单仅用于遮蔽，永不随渲染文本出模型面。未配置时行为不变（纯函数测试路径）。
  */
 export type PhraseRecall = (runId: string) => readonly string[] | undefined
-let phraseRecall: PhraseRecall | null = null
 
 export function configurePhraseStore(recall: PhraseRecall | null): void {
-  phraseRecall = recall
+  const state = policyState()
+  state.phraseRecall = recall
+  const { phraseRegistry, answerPhraseUnion } = state
   phraseRegistry.clear()
   answerPhraseUnion.clear()
 }
 
 export function rememberPhrases(runId: string, phrases: readonly string[]): void {
   if (typeof runId !== 'string' || runId === '') return
+  const { phraseRegistry, answerPhraseUnion } = policyState()
   if (phraseRegistry.size >= PHRASE_REGISTRY_MAX) {
     const oldest = phraseRegistry.keys().next().value
     if (oldest !== undefined) phraseRegistry.delete(oldest)
@@ -161,13 +174,12 @@ export function rememberPhrases(runId: string, phrases: readonly string[]): void
 }
 
 /** 回答面红线并集（可信回答 T3）：rememberPhrases 累积，供 llm/stream 回答守卫扫描。 */
-const answerPhraseUnion = new Set<string>()
-
 export function recalledAnswerPhrases(): string[] {
-  return [...answerPhraseUnion]
+  return [...policyState().answerPhraseUnion]
 }
 
 export function recallPhrases(runId: string): string[] | undefined {
+  const { phraseRegistry, phraseRecall } = policyState()
   const hit = phraseRegistry.get(runId)
   if (hit !== undefined) return hit
   const loaded = phraseRecall?.(runId)
@@ -177,10 +189,8 @@ export function recallPhrases(runId: string): string[] | undefined {
 /* ───────────────────────── E2-2：top-1 差异修正接生产（reviseDiff 双路 + 转人工闸） ───────────────────────── */
 
 /** 差异修正 LLM 端口（默认 null → heuristic 离线腿；configureDiffLlm 可注入以启用 LLM 腿）。 */
-let diffLlm: DiffLlmPort | null = null
-
 export function configureDiffLlm(port: DiffLlmPort | null): void {
-  diffLlm = port
+  policyState().diffLlm = port
 }
 
 /** recall/invoke top-1 修正回执（结构位：引擎/置信度/人工闸/差异项）。 */
@@ -214,7 +224,7 @@ export async function reviseTopHitAdvice(
     }
   }
   const draft = buildDiffTable(query, source)
-  const rev = await reviseDiff(diffLlm, { query, source, draft })
+  const rev = await reviseDiff(policyState().diffLlm, { query, source, draft })
   const humanGate = requiresHumanReview(rev)
   const mustChange = rev.diff.mustChange.map((m) => m.item)
   const unknown = rev.diff.unknown.map((u) => u.item)

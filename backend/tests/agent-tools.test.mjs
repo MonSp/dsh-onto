@@ -129,8 +129,8 @@ test('R5-6 数据入口固定来源身份：外部请求不得自称 connector �
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
-  // wire 入口：runScenario 请求体同口径（源断言——wire 是外部请求面）
-  const svc = readFileSync(join(REPO, 'backend', 'src', 'services.ts'), 'utf8')
+  // wire 入口：runScenario 请求体同口径（源断言——wire 是外部请求面；M2 起 OntoRuntime 在 runtime）
+  const svc = readFileSync(join(REPO, 'runtime', 'src', 'onto-runtime-service.ts'), 'utf8')
   assert.ok(svc.includes("provenance: 'inline'"), 'wire 载入须固定来源身份，不得透传调用方自报 provenance')
 })
 
@@ -340,7 +340,7 @@ test('recall_experience 渲染（N4/P4-5/E1-2）：字段级对照；冷启动�
 })
 
 test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(src.includes('字段级 signature 新旧对照'), '工具描述须声明字段级对照')
   const coreSrc = readFileSync(join(REPO, 'core', 'src', 'experience.ts'), 'utf8')
   assert.ok(coreSrc.includes('signatureFieldReasons'), 'core 须导出 signatureFieldReasons')
@@ -348,7 +348,7 @@ test('recall_experience 字段级理由经工具投影（P4-5 源断言）', () 
 })
 
 test('E1-2：recall execute 投影 reviewFocus，render 上墙复核提示（源断言）', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const recallIdx = src.indexOf("name: 'recall_experience'")
   const annotateIdx = src.indexOf("name: 'annotate_experience'")
   assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
@@ -562,7 +562,7 @@ test('人审契约：apply_draft/reject_draft 的 humanApproved 必须显式为 
 })
 
 test('D6：apply_draft 描述明示物化后自动重派生（防回退到手动 derive 提权）', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const at = src.indexOf("name: 'apply_draft'")
   assert.ok(at >= 0, 'apply_draft 工具须在源中登记')
   const window = src.slice(at, at + 900)
@@ -573,7 +573,7 @@ test('D6：apply_draft 描述明示物化后自动重派生（防回退到手动
 })
 
 test('D15：apply_draft/save_skeleton 描述与参数收口——非批准信号不得引用', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   // apply_draft：描述 + humanApproved 参数
   const at = src.indexOf("name: 'apply_draft'")
   assert.ok(at >= 0, 'apply_draft 须在源中登记')
@@ -811,8 +811,8 @@ test('D1 方案 B：相对路径读取失败给出可复制 dataset 内联示例
 
 test('D2 数据集发现引导：run/invoke 工具描述与读取失败信封均指明 examples/ 样例位置', () => {
   // 1) 源断言：三个执行工具的描述/参数描述含样例目录引导（防文案回退）
-  const toolsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
-  const expertsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const toolsSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
+  const expertsSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-experts.ts'), 'utf8')
   for (const [label, src] of [['agent-tools', toolsSrc], ['agent-experts', expertsSrc]]) {
     const hits = src.split('examples/').length - 1
     assert.ok(hits >= 2, `${label} 至少两处 examples/ 样例引导（描述 + 参数/信封），实际 ${hits}`)
@@ -1468,7 +1468,7 @@ test('D12：datasetPath 围栏可发现性——越界报错指引内联，参�
   }
 
   // 2) 工具面参数/描述明示围栏（源断言，防文案回退）
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const hits = src.split('仅限平台进程工作目录').length - 1
   assert.ok(hits >= 2, 'run_scenario 与 run_scenarios 的 datasetPath 描述均须明示围栏')
   assert.ok(src.includes('会话工作区或外部夹具请改用 dataset 内联') || src.includes('会话工作区或外部夹具请改用 dataset 内联')
@@ -1756,7 +1756,7 @@ test('abstract_experience 渲染（E2-1）：结构位回执、空簇说明、hu
 })
 
 test('E2-1 源断言：abstract_experience 注册 + ONTOOL_NAMES + 描述引导方法论链路', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const idx = src.indexOf("name: 'abstract_experience'")
   assert.ok(idx > 0, 'abstract_experience 须注册')
   const next = src.indexOf("name: '", idx + 10)
@@ -1857,7 +1857,7 @@ test('D11 渲染：全库扫描回执逐包一行（含跳过原因）+ 草案�
 })
 
 test('D11 源断言：packageId 可省略 + 描述引导「不必先追问包名」', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const idx = src.indexOf("name: 'abstract_experience'")
   assert.ok(idx > 0)
   const next = src.indexOf("name: '", idx + 10)
@@ -2045,7 +2045,7 @@ test('D13 渲染：op=update/targetId 与 bodyUpToDate 结构位 + 无路径泄�
 })
 
 test('D13 源断言：描述引导正文更新通道（op=update / bodyUpToDate）', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const idx = src.indexOf("name: 'abstract_experience'")
   assert.ok(idx > 0)
   const next = src.indexOf("name: '", idx + 10)
@@ -2128,7 +2128,7 @@ test('I1 recall value 闸：enforceOutputPolicy 遮蔽 goalClass 撞短语', () 
 })
 
 test('I1 source：recall/execute 挂 enforceOutputPolicy + render 挂 retreatRenderText', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   // recall execute 与 annotate execute 都过 value 闸
   const recallIdx = src.indexOf("name: 'recall_experience'")
   const annotateIdx = src.indexOf("name: 'annotate_experience'")
@@ -2302,7 +2302,7 @@ test('E2-2：reviseTopHitAdvice——digest 短路 / heuristic 转人工闸 / LL
 })
 
 test('E2-2 源断言：recall/hint 接 reviseTopHitAdvice（双路+人工闸）；rules.ts 不碰', () => {
-  const atSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const atSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   const recallIdx = atSrc.indexOf("name: 'recall_experience'")
   const annotateIdx = atSrc.indexOf("name: 'annotate_experience'")
   assert.ok(recallIdx > 0 && annotateIdx > recallIdx)
@@ -2310,7 +2310,7 @@ test('E2-2 源断言：recall/hint 接 reviseTopHitAdvice（双路+人工闸）�
   assert.ok(recallSlice.includes('reviseTopHitAdvice'), 'recall execute 须走 reviseTopHitAdvice')
   assert.ok(recallSlice.includes('revision'), 'recall value 须带 revision 结构位回执')
   assert.ok(recallSlice.includes('engine/confidence'), '工具描述须声明 engine/confidence 结构位')
-  const aeSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-experts.ts'), 'utf8')
+  const aeSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-experts.ts'), 'utf8')
   assert.ok(aeSrc.includes('await reviseTopHitAdvice') || aeSrc.includes('reviseTopHitAdvice('), 'hint 须接 reviseTopHitAdvice')
   assert.ok(/await experienceHintOf\(/.test(aeSrc), 'hint 调用点须 await（async 接线）')
   const policySrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-policy.ts'), 'utf8')

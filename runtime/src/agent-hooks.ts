@@ -3,17 +3,22 @@
  * @module @dsh-onto/runtime/agent-hooks
  */
 
-const invalidators = new Set<() => void>()
+import { currentRuntimeContext, runtimeState } from './context.js'
+
+const invalidatorsKey = Symbol('skillInvalidators')
+const invalidatorsFor = () => runtimeState(invalidatorsKey, () => new Set<() => void>())
 
 /** 注册失效回调；返回注销函数（provider dispose 时调用）。 */
 export function registerSkillInvalidator(fn: () => void): () => void {
-  invalidators.add(fn)
+  const invalidators = invalidatorsFor()
+  const bound = currentRuntimeContext().bind(fn)
+  invalidators.add(bound)
   return () => {
-    invalidators.delete(fn)
+    invalidators.delete(bound)
   }
 }
 
 /** 包内容变更（save/materialize/import）后调用，刷新 SKL skill 目录。 */
 export function invalidateSkillCatalog(): void {
-  for (const fn of invalidators) fn()
+  for (const fn of invalidatorsFor()) fn()
 }
