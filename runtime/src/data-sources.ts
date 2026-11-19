@@ -129,6 +129,8 @@ export class DataSourceRegistry {
     dataScope?: { objectTypes: string[]; instanceFilter?: string }
     /** 受控存储根（workspace 根；快照落 snapshots/）。 */
     root: string
+    /** Validate the returned dataset before persisting any snapshot. */
+    authorizeDataset?: (dataset: RuntimeDataset) => void
     /** 可测注入位（fresh 判定与时戳）；缺省 = new Date()。 */
     now?: () => Date
   }): Promise<FetchResult> {
@@ -149,6 +151,7 @@ export class DataSourceRegistry {
     if (!isRecord(out) || !isRecord(out.dataset)) {
       throw new AgentToolError('INVALID_ARGS', '连接器输出非法：须为 { dataset, complete, businessWindow }')
     }
+    input.authorizeDataset?.(out.dataset)
     const now = (input.now ?? (() => new Date()))()
     const fetchedAt = now.toISOString()
     // 时效判定（服务端按业务时间窗）：窗尾距取数时刻超过 maxAgeHours → 超时效

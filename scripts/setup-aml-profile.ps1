@@ -45,27 +45,9 @@ try {
     }
     finally { Pop-Location }
 
-    # Seed ISSUED example packages into AML workspace (read-only consumption).
-    $userHome = [Environment]::GetFolderPath('UserProfile')
-    if (-not $userHome) { $userHome = $env:USERPROFILE }
-    $wsPackages = Join-Path (Join-Path (Join-Path (Join-Path $userHome '.dsh\profiles') $ProfileName) 'dsh-onto') 'workspace\packages'
-    $seedMap = @(
-        @{ Src = 'aml'; Dst = 'aml-analysis' },
-        @{ Src = 'med'; Dst = 'med-safety' },
-        @{ Src = 'tax'; Dst = 'tax-risk' }
-    )
-    foreach ($s in $seedMap) {
-        $src = Join-Path $RepoRoot "packages\$($s.Src)\1.0.0"
-        $dst = Join-Path $wsPackages "$($s.Dst)\1.0.0"
-        if ((Test-Path $src) -and -not (Test-Path $dst)) {
-            New-Item -ItemType Directory -Force -Path (Split-Path $dst -Parent) | Out-Null
-            Copy-Item -Recurse -Force $src $dst
-            Write-Host "seeded $($s.Dst)@1.0.0"
-        }
-    }
-
     Write-Host ""
     Write-Host "AML profile '$ProfileName' ready (@dsh-aml/app only; no backend/workbench)."
+    Write-Host "  Runs require an issued release imported and activated by an authorized operator."
     Write-Host "  Launch:  pnpm dsh --profile $ProfileName --no-open"
     Write-Host "  Assert:  scripts\dump-aml-config.ps1"
 }

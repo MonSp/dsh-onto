@@ -39,7 +39,8 @@ import {
 import { assertDatasetGranted, readToolContracts } from './agent-grants.js'
 import { compareVersions } from './agent-skills-compare.js'
 import { ReleaseError } from './release.js'
-import type { ReleaseStore } from './release-store.js'
+import { isStrictReleaseMode, type ReleaseStore } from './release-store.js'
+import { assertBusinessDataset, requireBusinessIdentity, runAccessBinding } from './business-policy.js'
 import type { PackageWorkspace } from '@dsh-onto/core'
 
 /** agent-duties 条目（derive 产物形状）。 */
@@ -523,12 +524,15 @@ export function registerExpertTools(
           const expertDuties = duties.filter((d) => d.scenario === scenario.id)
           const contracts = readToolContracts(versionDir)
           assertDutiesAligned(scenario, expertDuties, new Set(contracts.map((c) => c.id)))
+          const identity = isStrictReleaseMode() ? requireBusinessIdentity('read') : undefined
+          if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, contracts)
 
           // E1-1：执行前只读召回（经验只提示不改分——不进 runScenario、不碰 rules.ts）。
           // P3-2：提示段失败降级冷启动——只读提示不得阻断场景执行。
           let experience: ExperienceHint
           try {
+            if (identity) throw new Error('Unscoped legacy experience recall is not available in business mode')
             experience = await experienceHintOf({
               root: ws.root,
               pkg,
@@ -562,6 +566,7 @@ export function registerExpertTools(
               inputDataset: dataset,
               result,
               redlines: phrases,
+              accessBinding: identity && runAccessBinding(identity),
             }),
           )
 
