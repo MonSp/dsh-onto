@@ -118,9 +118,12 @@ import {
   validateActionIntent,
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
-import { ReleaseStore } from './release-store.js'
+import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError } from './release.js'
-import { businessPolicy, parseTargetRef, requireBizAuth, type ExistenceChecks } from './business-policy.js'
+import {
+  assertBusinessDataset, assertBusinessRun, businessPolicy, parseTargetRef,
+  requireBusinessIdentity, requireBizAuth, runAccessBinding, scopeDataQuery, type ExistenceChecks,
+} from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills-compare.js'
@@ -800,6 +803,7 @@ export function runScenarioBatch(input: {
   dataset: RuntimeDataset
   ids: readonly string[]
   seedIds?: string[]
+  accessBinding?: string
 }): BatchRunOutput {
   const { ws, pkg, versionDir, dataset, ids, seedIds } = input
   if (ids.length > BATCH_RUN_LIMIT) {
@@ -829,6 +833,7 @@ export function runScenarioBatch(input: {
           inputDataset: dataset,
           result,
           redlines: phrases,
+          accessBinding: input.accessBinding,
         }),
       )
       rememberPhrases(result.runId, phrases)
@@ -1811,6 +1816,7 @@ export function applyDev(ctx: Context): void {
 type ToolFace = 'run' | 'dev'
 
 function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']): void {
+  const strict = isStrictReleaseMode()
   const want = (f: ToolFace): boolean => faces.includes(f)
   // Factory form: object literal is passed directly to defineTool at the call site
   // so const-generic inference (render/execute types) is preserved.
@@ -2019,7 +2025,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           typeof limitRaw === 'number' && Number.isFinite(limitRaw) && limitRaw >= 1
             ? Math.min(Math.floor(limitRaw), 100)
             : 20
+        const binding = strict ? runAccessBinding(requireBusinessIdentity('history')) : undefined
         const runs = listRunRecords(ws.root)
+          .filter(run => !strict || run.accessBinding === binding)
           .slice(0, limit)
           .map((r) => ({
             runId: r.runId,
@@ -2300,6 +2308,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             throw new AgentToolError('INVALID_ARGS', '数据输入三选一：sourceId（正式取数）/ datasetPath / dataset')
           }
           const analysisMode = args.analysisMode === 'formal' ? 'formal' : 'explore'
+          const identity = strict ? requireBusinessIdentity('read') : undefined
+          assertReleaseActive(releases, args.name, args.version)
+          const pkg = load(args.name, args.version)
           let dataset: RuntimeDataset
           let dataBasis: DataBasisInput | undefined
           if (hasSource) {
@@ -2308,16 +2319,19 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             if (!isRecord(query)) {
               throw new AgentToolError('INVALID_ARGS', 'query 必须是 JSON 对象（objectTypes/timeWindow/instanceIds）')
             }
-            const fetched = await dataSources.fetch({
-              sourceId: args.sourceId as string,
-              query: {
+            const dataQuery = {
                 ...(Array.isArray(query.objectTypes) ? { objectTypes: query.objectTypes as string[] } : {}),
                 ...(isRecord(query.timeWindow)
                   ? { timeWindow: { from: String(query.timeWindow.from ?? ''), to: String(query.timeWindow.to ?? '') } }
                   : {}),
                 ...(Array.isArray(query.instanceIds) ? { instanceIds: query.instanceIds as string[] } : {}),
-              },
-              tenant: 'default',
+            }
+            const fetched = await dataSources.fetch({
+              sourceId: args.sourceId as string,
+              query: identity ? scopeDataQuery(identity, dataQuery) : dataQuery,
+              tenant: identity?.tenant ?? 'default',
+              dataScope: identity?.dataScope,
+              authorizeDataset: identity ? data => assertBusinessDataset(identity, pkg, data) : undefined,
               root: ws.root,
             })
             dataset = fetched.dataset
@@ -2326,8 +2340,6 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
           }
           const seedIds = validateRunSeedIds(args.seedIds)
-          assertReleaseActive(releases, args.name, args.version)
-          const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
           if (seedIds !== undefined && !scenario?.prep?.expand) {
@@ -2339,6 +2351,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const contracts = readToolContracts(versionDir)
           // M1-C 六元组：取数（read）+ 候选外关系/行为读取（related-read）在收权/执行之前收口
           gateDatasetAccess(pkg, dataset, analysisMode)
+          if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, contracts)
           const result = runScenario(versionDir, args.scenarioId, dataset, {
             ...(seedIds !== undefined ? { seedIds } : {}),
@@ -2358,6 +2371,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               inputDataset: dataset,
               result,
               redlines: phrases,
+              accessBinding: identity && runAccessBinding(identity),
             }),
           )
           rememberPhrases(result.runId, phrases)
@@ -2406,6 +2420,11 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
           const a = loadRunRecord(ws.root, args.runIdA)
           const b = loadRunRecord(ws.root, args.runIdB)
+          if (strict) {
+            const identity = requireBusinessIdentity('history')
+            assertBusinessRun(identity, a)
+            assertBusinessRun(identity, b)
+          }
           const diff = compareRunRecords(a, b)
           assertDiffContract(diff)
           const phrases = [...new Set([...a.redlines, ...b.redlines].filter((p) => p !== ''))]
@@ -2472,9 +2491,12 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const contracts = readToolContracts(versionDir)
           // M1-C 六元组：批量取数同口径（read + related-read；批量面仅 explore）
           gateDatasetAccess(pkg, dataset, 'explore')
+          const identity = strict ? requireBusinessIdentity('read') : undefined
+          if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, contracts)
           const ids = resolveBatchIds(args.scenarioIds, pkg)
-          const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids, seedIds })
+          const out = runScenarioBatch({ ws, pkg, versionDir, dataset, ids, seedIds,
+            accessBinding: identity && runAccessBinding(identity) })
           assertBatchContract(out)
           // 出口遮蔽基准：包内全部场景红线（覆盖假场景 ID 回显撞红线形态）。
           return toolOut(enforceOutputPolicy(out, phrasesOfPkg(pkg)))
@@ -2628,6 +2650,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         (args: { runId: string }) => {
           // M1-C 六元组：导出（export）——身份/角色面（target=null 不查实例面）
           requireBizAuth('export', null, { typeExists: () => true, instanceExists: () => true })
+          if (strict) assertBusinessRun(requireBusinessIdentity('export'), loadRunRecord(ws.root, args.runId))
           // 固定导出目录（S2.4）：不接受调用方路径，无路径面可攻击。
           const exported = exportRunArchive(ws.root, args.runId)
           const summary = exportSummaryOf(exported)
@@ -3623,6 +3646,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               )
             }
           })()
+          if (strict) assertBusinessRun(requireBusinessIdentity('history'), runRec)
           const snapshotOk =
             args.snapshotDigest === runRec.datasetDigest
             || (runRec.inputDigest !== undefined && args.snapshotDigest === runRec.inputDigest)
@@ -3768,6 +3792,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '提出动作提案')
+          if (strict) assertBusinessRun(requireBusinessIdentity('act'), loadRunRecord(ws.root, args.runId))
           if (!isRecord(args.payload)) {
             throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
           }

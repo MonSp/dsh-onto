@@ -21,6 +21,8 @@ export const RUNS_EXPORTS_DIR = 'exports'
 
 /** 一条运行的人审面留痕（完整短语与证据链；模型面出口仍须过 enforceOutputPolicy）。 */
 export interface RunRecord {
+  /** Server-derived owner and scope fingerprint; older records have no access binding. */
+  accessBinding?: string
   runId: string
   package: { name: string; version: string }
   scenarioId: string
@@ -75,6 +77,7 @@ export function datasetDigest(dataset: RuntimeDataset): string {
 }
 
 export function buildRunRecord(input: {
+  accessBinding?: string
   package: { name: string; version: string }
   /** 实际参与打分的数据集（准备后 effective；无准备 = 原输入）。 */
   dataset: RuntimeDataset
@@ -94,6 +97,7 @@ export function buildRunRecord(input: {
   const effDigest = datasetDigest(dataset)
   const inputDigest = prep !== undefined ? datasetDigest(inputDs) : undefined
   return {
+    ...(input.accessBinding === undefined ? {} : { accessBinding: input.accessBinding }),
     runId: result.runId,
     package: { name: input.package.name, version: input.package.version },
     scenarioId: result.scenarioId,

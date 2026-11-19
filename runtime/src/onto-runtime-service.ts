@@ -33,8 +33,11 @@ import { runtimeContextForHost } from './context.js'
 import { AgentToolError } from './agent-policy.js'
 import { dataSources } from './data-sources.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
-import { ReleaseStore } from './release-store.js'
+import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError } from './release.js'
+import {
+  assertBusinessDataset, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
+} from './business-policy.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -137,15 +140,18 @@ export class RuntimeRemoteService extends TypertRemoteService {
 export class OntoRuntime extends RuntimeRemoteService {
   private readonly ws: PackageWorkspace
   private readonly releases: ReleaseStore
+  private readonly strict: boolean
 
   constructor(ctx: Context) {
     super(ctx, 'ontoRuntime')
     const dataDir = resolveDataDir(ctx)
+    this.strict = runtimeContextForHost(ctx.root).run(isStrictReleaseMode)
     this.ws = new PackageWorkspace(join(dataDir, 'workspace'))
     this.releases = new ReleaseStore({
       root: join(dataDir, 'releases'),
       workspace: this.ws,
       versions: { core: '0.0.0', runtime: '0.0.0' },
+      requireActive: this.strict,
     })
   }
 
@@ -199,14 +205,18 @@ export class OntoRuntime extends RuntimeRemoteService {
         throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset（探索通道）必须且只能提供一个')
       }
       const analysisMode = request.analysisMode === 'formal' ? 'formal' : 'explore'
+      const identity = this.strict ? requireBusinessIdentity('read') : undefined
+      const pkg = loadPackage(dir)
       let dataset: RuntimeDataset
       let dataBasis: DataBasisInput | undefined
       if (hasSource) {
         // 正式通道：provenance/dataBasis 只由服务端连接器产出
         const fetched = await dataSources.fetch({
           sourceId: request.sourceId as string,
-          query: request.query ?? {},
-          tenant: 'default',
+          query: identity ? scopeDataQuery(identity, request.query ?? {}) : request.query ?? {},
+          tenant: identity?.tenant ?? 'default',
+          dataScope: identity?.dataScope,
+          authorizeDataset: identity ? data => assertBusinessDataset(identity, pkg, data) : undefined,
           root: this.ws.root,
         })
         dataset = fetched.dataset
@@ -214,6 +224,7 @@ export class OntoRuntime extends RuntimeRemoteService {
       } else {
         // 数据入口固定来源身份（R5）：wire 入参是外部请求，不得自称 connector 获得可信状态。
         dataset = { ...(request.dataset as RuntimeDataset), provenance: 'inline' }
+        if (identity) assertBusinessDataset(identity, pkg, dataset)
       }
       const result = runScenario(dir, request.scenarioId, dataset, {
         analysisMode,
@@ -221,7 +232,7 @@ export class OntoRuntime extends RuntimeRemoteService {
       })
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
-      const scenario = loadPackage(dir).scenarios.find((s) => s.id === request.scenarioId)
+      const scenario = pkg.scenarios.find((s) => s.id === request.scenarioId)
       const redlines = [
         ...new Set(
           [
@@ -238,10 +249,22 @@ export class OntoRuntime extends RuntimeRemoteService {
           inputDataset: dataset,
           result,
           redlines,
+          accessBinding: identity && runAccessBinding(identity),
         }),
       )
       return { result }
     })
+  }
+
+  private visibleRuns(): RunRecord[] {
+    const binding = this.strict ? runAccessBinding(requireBusinessIdentity('history')) : undefined
+    return listRunRecords(this.ws.root).filter(run => !this.strict || run.accessBinding === binding)
+  }
+
+  private readRun(runId: string, operation: 'history' | 'export' = 'history'): RunRecord {
+    const identity = this.strict ? requireBusinessIdentity(operation) : undefined
+    const run = loadRunRecord(this.ws.root, runId)
+    return identity ? assertBusinessRun(identity, run) : run
   }
 
   /** 运行历史（run-insight S2.5）：时间倒序摘要。wire 人审面。 */
@@ -259,7 +282,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     }>
   }> {
     return guard(() => ({
-      runs: listRunRecords(this.ws.root).map((r) => ({
+      runs: this.visibleRuns().map((r) => ({
         runId: r.runId,
         scenarioId: r.scenarioId,
         package: r.package,
@@ -275,7 +298,7 @@ export class OntoRuntime extends RuntimeRemoteService {
   /** 单轮运行全量（人审面：完整短语与证据链，供复核定位）。 */
   @Remote('showRun')
   async remoteExportShowRun(request: { runId: string }): Promise<{ record: RunRecord }> {
-    return guard(() => ({ record: loadRunRecord(this.ws.root, request.runId) }))
+    return guard(() => ({ record: this.readRun(request.runId) }))
   }
 
   /** 两轮对比（人审面完整；工具面同语义经 compare_runs 投影）。 */
@@ -285,8 +308,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     runIdB: string
   }): Promise<{ diff: RunDiff }> {
     return guard(() => {
-      const a = loadRunRecord(this.ws.root, request.runIdA)
-      const b = loadRunRecord(this.ws.root, request.runIdB)
+      const a = this.readRun(request.runIdA)
+      const b = this.readRun(request.runIdB)
       return { diff: compareRunRecords(a, b) }
     })
   }
@@ -301,6 +324,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     return guard(() => {
       // 本层独立复核 runId（不依赖 exportRunArchive 内部校验的调用顺序）：治理链文件名直拼入参
       const safeRunId = requireSafeRunId(request.runId)
+      if (this.strict) this.readRun(safeRunId, 'export')
       const { locator, archive } = exportRunArchive(this.ws.root, safeRunId)
       // 治理链串联（F1 步骤 7）：snapshot → run → decision → proposal → approval → externalRef
       const chain = this.reviewChainOf(safeRunId)
@@ -318,7 +342,10 @@ export class OntoRuntime extends RuntimeRemoteService {
     proposals: ActionProposal[]
     actions: StoredActionRecord[]
   }> {
-    return guard(() => this.reviewChainOf(request.runId))
+    return guard(() => {
+      if (this.strict) this.readRun(request.runId)
+      return this.reviewChainOf(request.runId)
+    })
   }
 
   private reviewChainOf(runId: string): {
@@ -355,8 +382,10 @@ export class OntoRuntime extends RuntimeRemoteService {
       savedAt: string
     }>
   }> {
-    return guard(() => ({
-      experiences: listExperienceNotes(this.ws.root).map((n) => ({
+    return guard(() => {
+      const ids = this.strict ? new Set(this.visibleRuns().map(run => run.runId)) : undefined
+      return { experiences: listExperienceNotes(this.ws.root)
+        .filter(note => !ids || ids.has(note.runId)).map((n) => ({
         runId: n.runId,
         scenarioId: n.signature.scenarioId,
         packageScope: n.signature.packageScope,
@@ -366,8 +395,8 @@ export class OntoRuntime extends RuntimeRemoteService {
         misTransferJudged: n.misTransfer?.judged ?? false,
         reviewFocus: n.reviewFocus ?? [],
         savedAt: n.savedAt,
-      })),
-    }))
+      })) }
+    })
   }
 
   /** 单条经验全量（含签名与差异表；人审面）。 */
@@ -375,7 +404,10 @@ export class OntoRuntime extends RuntimeRemoteService {
   async remoteExportShowExperience(request: { runId: string }): Promise<{
     note: Awaited<ReturnType<typeof loadExperienceNote>>
   }> {
-    return guard(() => ({ note: loadExperienceNote(this.ws.root, request.runId) }))
+    return guard(() => {
+      if (this.strict) this.readRun(request.runId)
+      return { note: loadExperienceNote(this.ws.root, request.runId) }
+    })
   }
 
   /** 人审回填（S5.4）：改判 outcome、误迁移只由人判（by 必填）、reviewFocus 沉淀。 */
@@ -387,13 +419,14 @@ export class OntoRuntime extends RuntimeRemoteService {
     misTransfer?: { judged: boolean; by: string; note?: string }
     reviewFocus?: string[]
   }): Promise<{ note: Awaited<ReturnType<typeof loadExperienceNote>> }> {
-    return guard(() => ({
-      note: reviewExperienceNote(this.ws.root, request.runId, {
+    return guard(() => {
+      if (this.strict) this.readRun(request.runId)
+      return { note: reviewExperienceNote(this.ws.root, request.runId, {
         outcome: request.outcome,
         outcomeReason: request.outcomeReason,
         misTransfer: request.misTransfer,
         reviewFocus: request.reviewFocus,
-      }),
-    }))
+      }) }
+    })
   }
 }

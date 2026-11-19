@@ -15,6 +15,9 @@
  * @module @dsh-onto/runtime/business-policy
  */
 import { AgentToolError, isRecord } from './agent-policy.js'
+import { createHash } from 'node:crypto'
+import type { OntologyPackage, RunRecord, RuntimeDataset } from '@dsh-onto/core'
+import type { DataQuery } from './data-sources.js'
 import { scopedRuntimeObject } from './context.js'
 
 /** 业务操作面（授权判定入参；不进身份本体）。 */
@@ -193,6 +196,69 @@ export function createLazyUserResolver(
 
 /** Stateless API facade; each host owns its identity provider. */
 export const businessPolicy = scopedRuntimeObject(Symbol('businessPolicy'), () => new BusinessPolicy())
+
+export function requireBusinessIdentity(operation: BusinessOperation): BusinessIdentity {
+  const identity = businessPolicy.resolveIdentity()
+  if (identity === null || identity.roles.length === 0) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', 'Business identity is unavailable')
+  }
+  const denial = authorize(identity, operation, null, {
+    typeExists: () => false, instanceExists: () => false,
+  })
+  if (denial !== undefined) throw new AgentToolError('OBJECT_NOT_GRANTED', denial)
+  return identity
+}
+
+export function scopeDataQuery(identity: BusinessIdentity, query: DataQuery): DataQuery {
+  const { objectTypes, instanceFilter } = identity.dataScope
+  if (objectTypes.length > 0 && query.objectTypes?.some(t => !objectTypes.includes(t))) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', 'Requested object type is outside the business scope')
+  }
+  if (instanceFilter && query.instanceIds?.some(id => !id.startsWith(instanceFilter))) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', 'Requested instance is outside the business scope')
+  }
+  return { ...query, objectTypes: query.objectTypes?.length ? query.objectTypes : objectTypes }
+}
+
+export function assertBusinessDataset(identity: BusinessIdentity, pkg: OntologyPackage, dataset: RuntimeDataset): void {
+  const types = new Set(pkg.objects.map(o => o.id))
+  const objects = new Map(dataset.objects.map(o => [o.id, o]))
+  const checks: ExistenceChecks = {
+    typeExists: type => types.has(type),
+    instanceExists: (type, id) => objects.get(id)?.type === type,
+  }
+  const check = (type: string, instance: string) => {
+    const denial = authorize(identity, 'read', { type, instance }, checks)
+    if (denial !== undefined) throw new AgentToolError('OBJECT_NOT_GRANTED', denial)
+  }
+  const ref = (value: string) => {
+    const object = objects.get(value)
+    if (object) check(object.type, object.id)
+    else {
+      const target = parseTargetRef(value)
+      check(target.type, target.instance)
+    }
+  }
+  for (const object of dataset.objects) check(object.type, object.id)
+  for (const relation of dataset.relations) { ref(relation.from); ref(relation.to) }
+  for (const candidate of dataset.candidates) ref(candidate.objectRef)
+  for (const behavior of dataset.behaviors ?? []) { ref(behavior.anchorRef); ref(behavior.objectRef) }
+}
+
+/** Conservative legacy policy: only the same owner and effective scope may reopen a bound run. */
+export function runAccessBinding(identity: BusinessIdentity): string {
+  return createHash('sha256').update(JSON.stringify([
+    identity.tenant, identity.userId,
+    [...new Set(identity.dataScope.objectTypes)].sort(), identity.dataScope.instanceFilter ?? '',
+  ])).digest('hex')
+}
+
+export function assertBusinessRun(identity: BusinessIdentity, run: RunRecord): RunRecord {
+  if (run.accessBinding !== runAccessBinding(identity)) {
+    throw new AgentToolError('OBJECT_NOT_GRANTED', 'Run is not accessible to the current business identity and scope')
+  }
+  return run
+}
 
 /**
  * 业务授权入口门（六元组接线面）：可解析身份 → 全量 {@link authorize}（三查 + 角色 + dataScope），

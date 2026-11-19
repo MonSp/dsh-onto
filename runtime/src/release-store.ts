@@ -17,10 +17,13 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  renameSync,
   writeFileSync,
   readdirSync,
   statSync,
 } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { runtimeState } from './context.js'
 import { dirname, join, resolve } from 'node:path'
 import type { PackageWorkspace } from '@dsh-onto/core'
 import {
@@ -60,7 +63,13 @@ export interface ReleaseStoreOptions {
   versions?: Partial<CurrentRuntimeVersions>
   /** 激活时校验的连接器能力提供者（含已注册 id）。 */
   capabilities?: () => readonly string[]
+  requireActive?: boolean
 }
+
+const releaseModeKey = Symbol('releaseMode')
+const releaseMode = () => runtimeState(releaseModeKey, () => ({ strict: false }))
+export function enableStrictReleaseMode(): void { releaseMode().strict = true }
+export function isStrictReleaseMode(): boolean { return releaseMode().strict }
 
 export interface ActivePointer {
   format: typeof RELEASE_ACTIVE_FORMAT
@@ -106,6 +115,7 @@ export class ReleaseStore {
   private readonly limits: StagingLimits
   private readonly defaultVersions: CurrentRuntimeVersions
   private readonly capabilities: () => readonly string[]
+  private readonly requireActive: boolean
 
   constructor(opts: ReleaseStoreOptions) {
     this.root = resolve(opts.root)
@@ -121,6 +131,7 @@ export class ReleaseStore {
       ...(opts.versions?.plugin !== undefined ? { plugin: opts.versions.plugin } : {}),
     }
     this.capabilities = opts.capabilities ?? (() => [])
+    this.requireActive = opts.requireActive ?? isStrictReleaseMode()
   }
 
   get inboxDir(): string {
@@ -146,11 +157,15 @@ export class ReleaseStore {
     if (!existsSync(this.activePath)) return null
     try {
       const doc = JSON.parse(readFileSync(this.activePath, 'utf8')) as ActivePointer
-      if (doc === null || typeof doc !== 'object' || typeof doc.packages !== 'object' || doc.packages === null) {
-        return null
+      if (doc === null || doc.format !== RELEASE_ACTIVE_FORMAT || !doc.packages
+        || typeof doc.packages !== 'object' || Array.isArray(doc.packages)
+        || Object.values(doc.packages).some(v => typeof v !== 'string' || v.length === 0)
+        || !doc.versions || typeof doc.versions.core !== 'string' || typeof doc.versions.runtime !== 'string') {
+        throw new ReleaseError('RELEASE_MALFORMED', 'invalid active release pointer')
       }
       return doc
     } catch {
+      if (this.requireActive) throw new ReleaseError('RELEASE_MALFORMED', 'unreadable active release pointer')
       return null
     }
   }
@@ -177,14 +192,21 @@ export class ReleaseStore {
    */
   assertActiveBinding(name: string, version: string): void {
     const a = this.readActive()
-    if (a === null) return
-    const active = a.packages[name]
-    if (active === undefined) return
+    const active = a && Object.hasOwn(a.packages, name) ? a.packages[name] : undefined
+    if (active === undefined) {
+      if (this.requireActive) throw new ReleaseError('RELEASE_NOT_ACTIVE', `no active release for ${name}`)
+      return
+    }
     if (active !== version) {
       throw new ReleaseError(
         'RELEASE_VERSION_NOT_ACTIVE',
         `包 ${name} 活动版本 ${active}，请求 ${version} 拒绝（新运行只绑活动版本）`,
       )
+    }
+    if (this.requireActive) {
+      const manifest = this.readManifest(name, version)
+      if (manifest === null) throw new ReleaseError('RELEASE_NOT_FOUND', `no release manifest: ${name}@${version}`)
+      verifyReleaseAgainstPackage(manifest, this.ws.versionDir(name, version))
     }
   }
 
@@ -194,10 +216,10 @@ export class ReleaseStore {
    */
   filterActiveVersions<T extends { name: string; version: string }>(versions: readonly T[]): T[] {
     const a = this.readActive()
-    if (a === null) return [...versions]
+    if (a === null) return this.requireActive ? [] : [...versions]
     return versions.filter((v) => {
-      const active = a.packages[v.name]
-      return active === undefined || active === v.version
+      const active = Object.hasOwn(a.packages, v.name) ? a.packages[v.name] : undefined
+      return active === v.version || (active === undefined && !this.requireActive)
     })
   }
 
@@ -410,27 +432,10 @@ export class ReleaseStore {
    */
   activate(name: string, version: string, opts: { authorizedBy: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
-    const manifest = this.readManifest(name, version)
-    if (manifest === null) {
-      throw new ReleaseError('RELEASE_NOT_FOUND', `no release manifest: ${name}@${version}`)
-    }
-    const dir = this.ws.versionDir(name, version)
-    if (!existsSync(join(dir, 'package.yaml'))) {
-      throw new ReleaseError('RELEASE_NOT_FOUND', `package missing: ${name}@${version}`)
-    }
-
-    // 激活时再跑一次锚点（防导入后篡改）
-    verifyReleaseAgainstPackage(manifest, dir)
-    assertDependenciesIssued(manifest.dependencies, (n, v) => {
-      const d = this.ws.versionDir(n, v)
-      return existsSync(join(d, 'package.yaml')) ? d : null
-    })
-    assertConnectorCapabilities(manifest.requiredConnectorCapabilities, this.capabilities())
-
+    const manifest = this.validateActivation(name, version)
     const active = this.readActive()
-    const packages = { ...(active?.packages ?? {}) }
-    const previous = packages[name] ?? null
-    packages[name] = version
+    const packages = { ...(active?.packages ?? {}), [name]: version }
+    const previous = active && Object.hasOwn(active.packages, name) ? active.packages[name] : null
 
     const next: ActivePointer = {
       format: RELEASE_ACTIVE_FORMAT,
@@ -448,7 +453,7 @@ export class ReleaseStore {
     this.writeActive(next)
     this.appendHistory({
       at: next.updatedAt,
-      action: previous === null ? 'activate' : 'activate',
+      action: 'activate',
       package: { name, version },
       from: previous,
       to: version,
@@ -456,6 +461,28 @@ export class ReleaseStore {
       packageDigest: manifest.packageDigest,
     })
     return { ok: true, package: { name, version }, previous, versions: next.versions }
+  }
+
+  private validateActivation(name: string, version: string): ReleaseManifest {
+    const manifest = this.readManifest(name, version)
+    if (manifest === null) {
+      throw new ReleaseError('RELEASE_NOT_FOUND', `no release manifest: ${name}@${version}`)
+    }
+    const dir = this.ws.versionDir(name, version)
+    if (!existsSync(join(dir, 'package.yaml'))) {
+      throw new ReleaseError('RELEASE_NOT_FOUND', `package missing: ${name}@${version}`)
+    }
+
+    // 激活时再跑一次锚点（防导入后篡改）
+    verifyReleaseAgainstPackage(manifest, dir)
+    const compat = checkCompat(manifest, this.defaultVersions)
+    if (!compat.ok) throw new ReleaseError(compat.code, compat.reason)
+    assertDependenciesIssued(manifest.dependencies, (n, v) => {
+      const d = this.ws.versionDir(n, v)
+      return existsSync(join(d, 'package.yaml')) ? d : null
+    })
+    assertConnectorCapabilities(manifest.requiredConnectorCapabilities, this.capabilities())
+    return manifest
   }
 
   /**
@@ -466,7 +493,7 @@ export class ReleaseStore {
   rollback(name: string, opts: { authorizedBy: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
     const active = this.readActive()
-    if (active === null || active.packages[name] === undefined) {
+    if (active === null || !Object.hasOwn(active.packages, name)) {
       throw new ReleaseError('RELEASE_NOT_FOUND', `no active pointer for package: ${name}`)
     }
     const current = active.packages[name]
@@ -474,10 +501,7 @@ export class ReleaseStore {
     if (prev === null) {
       throw new ReleaseError('RELEASE_NOT_FOUND', `no previous active version to rollback for ${name}`)
     }
-    // 目标必须仍在存储中
-    if (this.readManifest(name, prev) === null || !existsSync(join(this.ws.versionDir(name, prev), 'package.yaml'))) {
-      throw new ReleaseError('RELEASE_NOT_FOUND', `previous version missing in store: ${name}@${prev}`)
-    }
+    const manifest = this.validateActivation(name, prev)
 
     const packages = { ...active.packages }
     packages[name] = prev
@@ -495,6 +519,7 @@ export class ReleaseStore {
       from: current,
       to: prev,
       by,
+      packageDigest: manifest.packageDigest,
     })
     return {
       ok: true,
@@ -544,7 +569,13 @@ export class ReleaseStore {
 
   private writeActive(doc: ActivePointer): void {
     mkdirSync(dirname(this.activePath), { recursive: true })
-    writeFileSync(this.activePath, `${JSON.stringify(doc, null, 2)}\n`, 'utf8')
+    const temp = `${this.activePath}.${randomUUID()}.tmp`
+    try {
+      writeFileSync(temp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+      renameSync(temp, this.activePath)
+    } finally {
+      rmSync(temp, { force: true })
+    }
   }
 
   private appendHistory(entry: ReleaseHistoryEntry): void {

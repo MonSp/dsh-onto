@@ -363,6 +363,14 @@ test('P4: 激活升级后 filter/assert 只认活动版；旧 RunRecord 版本�
     // 新运行：非活动版拒绝
     expectReleaseCode(() => store.assertActiveBinding('test-pkg', '1.0.0'), 'RELEASE_VERSION_NOT_ACTIVE')
     store.assertActiveBinding('test-pkg', '1.1.0') // 活动版放行
+    const historyBeforeRollback = store.readHistory()
+    const manifestPath = join(a.dir, 'derived', 'manifest.yaml')
+    const originalManifest = readFileSync(manifestPath, 'utf8')
+    writeFileSync(manifestPath, `${originalManifest}\n# changed`, 'utf8')
+    assert.throws(() => store.rollback('test-pkg', { authorizedBy: 'ops-admin' }))
+    assert.equal(store.activeVersion('test-pkg'), '1.1.0')
+    assert.deepEqual(store.readHistory(), historyBeforeRollback)
+    writeFileSync(manifestPath, originalManifest, 'utf8')
 
     // 旧 RunRecord 不串版（模拟历史记录字段——切换不改写）
     const oldRun = { package: { name: 'test-pkg', version: '1.0.0' }, runId: 'run-old' }
@@ -392,6 +400,23 @@ test('P4: 无 active.json 时保持既有行为（不过滤、不拒绝）', () 
     assert.equal(store.filterActiveVersions(versions).length, versions.length)
     store.assertActiveBinding('test-pkg', '1.0.0')
     store.assertActiveBinding('test-pkg', '9.9.9') // 无指针不拦
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('strict publishing requires a valid active pointer and rejects unmanaged packages', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws, { requireActive: true })
+    expectReleaseCode(() => store.assertActiveBinding('test-pkg', '1.0.0'), 'RELEASE_NOT_ACTIVE')
+    assert.deepEqual(store.filterActiveVersions(ws.listVersions()), [])
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'ops-admin' })
+    store.assertActiveBinding('test-pkg', '1.0.0')
+    expectReleaseCode(() => store.assertActiveBinding('unmanaged', '1.0.0'), 'RELEASE_NOT_ACTIVE')
+    writeFileSync(store.activePath, '{invalid', 'utf8')
+    expectReleaseCode(() => store.assertActiveBinding('test-pkg', '1.0.0'), 'RELEASE_MALFORMED')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

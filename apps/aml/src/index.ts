@@ -7,7 +7,7 @@
  * @module @dsh-aml/app
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { OntoRuntime, runtimeContextForHost } from '@dsh-onto/runtime'
+import { enableStrictReleaseMode, OntoRuntime, runtimeContextForHost } from '@dsh-onto/runtime'
 import { applyRun } from '@dsh-onto/runtime/agent-tools'
 import { apply as applySkills } from '@dsh-onto/runtime/agent-skills'
 import {
@@ -46,6 +46,7 @@ export function apply(ctx: Context): void {
 }
 
 function mount(ctx: Context): void {
+  enableStrictReleaseMode()
   // RUN wire only — DEV namespaces (ontoWorkspace/Model/Validate/Derive/Knowledge) 未注册（A2）。
   ctx.plugin(OntoRuntime)
   ctx.plugin(runToolsPlugin)

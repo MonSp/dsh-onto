@@ -11,6 +11,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Context } from '@deepseek-ai/cordis'
 import { applyRun } from '@dsh-onto/runtime/agent-tools'
 import {
   businessPolicy,
@@ -20,7 +21,10 @@ import {
   ReleaseStore,
   buildReleaseManifest,
   buildReleaseBundle,
+  dataSources,
+  runtimeContextForHost,
 } from '@dsh-onto/runtime'
+import { apply as applyAml } from '@dsh-aml/app'
 import { derivePackage, PackageWorkspace, loadPackage, readPackageMeta } from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url))
@@ -33,6 +37,70 @@ const IDENTITY = {
   roles: ['analyst'],
   dataScope: { objectTypes: ['OBJ-AML-ACCOUNT', 'OBJ-AML-CUSTOMER', 'OBJ-AML-TXN'] },
 }
+
+test('AML wire checks release, business scope and run ownership', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-aml-wire-'))
+  const ctx = new Context()
+  ctx.reflect.provide('profileContext', { dir: root })
+  let fiber
+  try {
+    const ws = new PackageWorkspace(join(root, 'dsh-onto', 'workspace'))
+    const dir = installAmlVersion(ws.root, '1.0.0')
+    const releases = new ReleaseStore({ root: join(root, 'dsh-onto', 'releases'), workspace: ws })
+    fiber = await ctx.plugin(applyAml)
+    const wire = ctx.ontoRuntime
+    const runtime = runtimeContextForHost(ctx.root)
+    const args = { name: 'aml-analysis', version: '1.0.0', scenarioId: 'SCN-AML-FIND-CLUES' }
+    await assert.rejects(wire.remoteExportListScenarios(args), /no active release/)
+    const manifest = buildReleaseManifest(dir, {
+      coreCompat: { min: '0.0.0' }, runtimeCompat: { min: '0.0.0' }, releasedBy: 'fixture',
+    })
+    releases.importRelease({ kind: 'controlled-upload', bundle: buildReleaseBundle(dir, manifest) })
+    releases.activate(args.name, args.version, { authorizedBy: 'fixture-ops' })
+    let calls = 0
+    let owner = null
+    runtime.run(() => {
+      businessPolicy.setIdentityProvider(() => owner)
+      dataSources.register('wire-fixture', {
+        version: 'test', nature: 'simulated',
+        async fetch(query, scope) {
+          calls++
+          assert.equal(scope.tenant, IDENTITY.tenant)
+          assert.deepEqual(query.objectTypes, IDENTITY.dataScope.objectTypes)
+          assert.deepEqual(scope.objectTypes, IDENTITY.dataScope.objectTypes)
+          return {
+            dataset: DATASET,
+            complete: true,
+            businessWindow: { from: '2026-01-01', to: new Date().toISOString() },
+          }
+        },
+      })
+    })
+    const source = { ...args, sourceId: 'wire-fixture', analysisMode: 'formal' }
+    await assert.rejects(wire.remoteExportRunScenario(source), /Business identity/)
+    assert.equal(calls, 0)
+    owner = IDENTITY
+    await assert.rejects(wire.remoteExportRunScenario({
+      ...source, query: { objectTypes: ['OBJ-OTHER'] },
+    }), /outside the business scope/)
+    assert.equal(calls, 0)
+    const { result } = await wire.remoteExportRunScenario(source)
+    assert.equal(calls, 1)
+    assert.equal(result.humanReviewRequired, true)
+    assert.equal((await wire.remoteExportListRuns()).runs.length, 1)
+    assert.equal((await wire.remoteExportShowRun({ runId: result.runId })).record.runId, result.runId)
+    owner = { ...IDENTITY, tenant: 'different-tenant' }
+    assert.deepEqual((await wire.remoteExportListRuns()).runs, [])
+    await assert.rejects(wire.remoteExportShowRun({ runId: result.runId }), /not accessible/)
+    await assert.rejects(wire.remoteExportReviewChain({ runId: result.runId }), /not accessible/)
+    owner = { ...IDENTITY, dataScope: { ...IDENTITY.dataScope, instanceFilter: 'unmatched-' } }
+    await assert.rejects(wire.remoteExportRunScenario(source), /数据范围/)
+    await assert.rejects(wire.remoteExportShowRun({ runId: result.runId }), /not accessible/)
+  } finally {
+    await fiber?.dispose()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 /** 复制 AML 包到目标版本目录并签发+派生（1.0.0 原样；1.1.0 改 version）。 */
 function installAmlVersion(wsRoot, version) {
