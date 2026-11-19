@@ -127,6 +127,10 @@ import {
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills-compare.js'
+import {
+  requireReviewerHostId,
+  validateReviewDecision,
+} from './review-decision.js'
 import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
 
@@ -153,18 +157,9 @@ function assertReleaseActive(releases: ReleaseStore, name: string, version: stri
 }
 
 /**
- * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
- * 与 RunRecord 台账可核对，换规则后旧决定不得照常套用（ruleFingerprint 二选一口径之一）。
+ * 运行规则面指纹——实现移至 review-decision（工具面与 UI wire 共用）；此处 re-export 保持既有导出面。
  */
-export function ruleBasisDigest(rec: RunRecord): string {
-  return actionDigest({
-    action: 'review-rule-basis',
-    package: `${rec.package.name}@${rec.package.version}`,
-    ruleHitLog: [...rec.result.ruleHitLog]
-      .map((h) => ({ ruleId: h.ruleId, score: h.score }))
-      .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
-  })
-}
+export { ruleBasisDigest } from './review-decision.js'
 
 /* ───────────────────────── M1-C 六元组接线（requireBizAuth） ───────────────────────── */
 
@@ -3613,97 +3608,43 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '记录业务复核决定')
-          // 边界归一：模型可能把 JSON 数组参数传成字符串（type:'json'）——解析后按数组校验
-          const rawIds = typeof args.candidateIds === 'string'
-            ? (() => {
-                try {
-                  return JSON.parse(args.candidateIds) as unknown
-                } catch {
-                  return args.candidateIds
-                }
-              })()
-            : args.candidateIds
-          if (
-            !Array.isArray(rawIds)
-            || rawIds.length === 0
-            || !rawIds.every((c) => typeof c === 'string')
-          ) {
-            throw new AgentToolError('INVALID_ARGS', 'candidateIds 必须是非空字符串数组')
-          }
-          if (args.decision !== 'approved' && args.decision !== 'rejected') {
-            throw new AgentToolError('INVALID_ARGS', 'decision 必须是 approved / rejected')
-          }
-          // 与 RunRecord 台账核对（D 包防伪造）：自报不核对 = 不存在的 run 也能立决定、
-          // 换数据/换规则后旧决定照常套用——runId 必须真实存在，snapshotDigest/ruleFingerprint
-          // 必须与运行台账一致（不匹配拒绝，不落决定）。
-          const runRec = (() => {
-            try {
-              return loadRunRecord(ws.root, args.runId)
-            } catch {
-              throw new AgentToolError(
-                'REVIEW_RUN_NOT_FOUND',
-                `运行 ${args.runId} 不存在于 RunRecord 台账——复核决定须绑定真实运行，不得对自报 run 立决定`,
-              )
-            }
-          })()
-          if (strict) assertBusinessRun(requireBusinessIdentity('history'), runRec)
-          const snapshotOk =
-            args.snapshotDigest === runRec.datasetDigest
-            || (runRec.inputDigest !== undefined && args.snapshotDigest === runRec.inputDigest)
-            || (args.snapshotDigest.length >= 8
-              && (runRec.datasetDigest.startsWith(args.snapshotDigest)
-                || (runRec.inputDigest ?? '').startsWith(args.snapshotDigest)))
-          if (!snapshotOk) {
-            throw new AgentToolError(
-              'REVIEW_SNAPSHOT_MISMATCH',
-              `snapshotDigest 与运行 ${args.runId} 的数据快照不符（datasetDigest ${runRec.datasetDigest.slice(0, 12)}…）——`
-                + '换数据不可沿用自报摘要立决定',
-            )
-          }
-          const ruleOk =
-            args.ruleFingerprint === `${runRec.package.name}@${runRec.package.version}`
-            || args.ruleFingerprint === ruleBasisDigest(runRec)
-          if (!ruleOk) {
-            throw new AgentToolError(
-              'REVIEW_RULE_MISMATCH',
-              `ruleFingerprint 与运行 ${args.runId} 的规则面不符（期望 ${runRec.package.name}@${runRec.package.version} 或运行规则基指纹）——`
-                + '换规则不可沿用自报指纹立决定',
-            )
-          }
+          // 公共校验（review-decision）：run/snapshot/rule/候选归一——与 UI wire 同一套口径
+          const validated = validateReviewDecision(ws.root, {
+            runId: args.runId,
+            candidateIds: args.candidateIds,
+            snapshotDigest: args.snapshotDigest,
+            ruleFingerprint: args.ruleFingerprint,
+            decision: args.decision,
+            ...(args.reason !== undefined ? { reason: args.reason } : {}),
+          })
+          if (strict) assertBusinessRun(requireBusinessIdentity('history'), validated.runRec)
           // 复核人 = 宿主用户 id（可信身份提供者；不收模型自称、不拿批准摘要冒充用户 id）
-          const reviewerId = businessPolicy.resolveIdentity()?.userId
-          if (typeof reviewerId !== 'string' || reviewerId === '') {
-            throw new AgentToolError(
-              'REVIEWER_UNCONFIRMED',
-              '复核人身份不可确认（可信宿主/业务认证服务缺席）——复核决定须绑定宿主用户 id（fail-closed），'
-                + '不以批准摘要/模型自称冒充复核人',
-            )
-          }
+          const reviewer = requireReviewerHostId()
           const content = actionDigest({
             action: 'record_review_decision',
             runId: args.runId,
-            candidateIds: rawIds,
+            candidateIds: validated.candidateIds,
             snapshotDigest: args.snapshotDigest,
             ruleFingerprint: args.ruleFingerprint,
             decision: args.decision,
             reason: args.reason ?? '',
           })
-          const grant = await approve(exec, {
+          await approve(exec, {
             toolName: 'record_review_decision',
             action: `业务复核决定 ${args.decision}（运行 ${args.runId}）`,
             digest: content,
-            summary: `候选 ${(rawIds as string[]).join('、')}——决定 ${args.decision}`,
+            summary: `候选 ${validated.candidateIds.join('、')}——决定 ${args.decision}`,
           })
           const dec = actionStoreFor(ws.root).createDecision({
-            runId: args.runId,
-            candidateIds: rawIds as string[],
-            snapshotDigest: args.snapshotDigest,
-            ruleFingerprint: args.ruleFingerprint,
+            runId: validated.runRec.runId,
+            candidateIds: validated.candidateIds,
+            snapshotDigest: validated.snapshotDigest,
+            ruleFingerprint: validated.ruleFingerprint,
             // 复核人 = 宿主用户 id（BusinessIdentity.userId，宿主/部署断言）——与 action-store ReviewDecision
             // 口径一致；不收模型自称、不拿批准摘要 12 位冒充用户 id
-            reviewer: `host:${reviewerId}`,
-            decision: args.decision as 'approved' | 'rejected',
-            ...(args.reason !== undefined ? { reason: args.reason } : {}),
+            reviewer,
+            decision: validated.decision,
+            ...(validated.reason !== undefined ? { reason: validated.reason } : {}),
           })
           return toolOut({
             decisionId: dec.decisionId,

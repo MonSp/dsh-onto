@@ -38,6 +38,7 @@ import { ReleaseError } from './release.js'
 import {
   assertBusinessDataset, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
 } from './business-policy.js'
+import { requireReviewerHostId, validateReviewDecision } from './review-decision.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -79,8 +80,8 @@ export function resolveDataDir(ctx: Context): string {
   return join(base, 'dsh-onto')
 }
 
-function ontoError(code: keyof RemoteErrorDetailsMap, message: string): RemoteError {
-  return new RemoteError(code, message, {})
+function ontoError(code: keyof RemoteErrorDetailsMap, message: string, origCode?: string): RemoteError {
+  return new RemoteError(code, message, origCode !== undefined ? { origCode } : {})
 }
 
 function toRemoteError(e: unknown): RemoteError {
@@ -89,13 +90,13 @@ function toRemoteError(e: unknown): RemoteError {
   const code =
     typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : ''
   if (code === 'PACKAGE_READONLY' || code === 'PACKAGE_ISSUE_REQUIRES_HUMAN') {
-    return ontoError('onto/readonly', message)
+    return ontoError('onto/readonly', message, code || undefined)
   }
-  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message)
-  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message)
-  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message)
-  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message)
-  return ontoError('onto/bad-request', message)
+  if (code === 'PACKAGE_EXISTS') return ontoError('onto/conflict', message, code || undefined)
+  if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message, code || undefined)
+  if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message, code || undefined)
+  if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message, code || undefined)
+  return ontoError('onto/bad-request', message, code || undefined)
 }
 
 function guard<T>(fn: () => T): T {
@@ -267,7 +268,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     return identity ? assertBusinessRun(identity, run) : run
   }
 
-  /** 运行历史（run-insight S2.5）：时间倒序摘要。wire 人审面。 */
+  /** 运行历史（run-insight S2.5）+ 复核待办联合（aml-review-workbench S2.1）。wire 人审面。 */
   @Remote('listRuns')
   async remoteExportListRuns(): Promise<{
     runs: Array<{
@@ -279,20 +280,63 @@ export class OntoRuntime extends RuntimeRemoteService {
       auditPassed: boolean
       startedAt: string
       savedAt: string
+      /** 无任何 ReviewDecision = pending；否则取最新决定。不参与 humanReviewRequired 恒真字段。 */
+      reviewStatus: 'pending' | 'approved' | 'rejected'
+      latestDecision?: {
+        decisionId: string
+        decision: 'approved' | 'rejected'
+        createdAt: string
+        reason?: string
+        candidateIds: string[]
+      }
     }>
   }> {
-    return guard(() => ({
-      runs: this.visibleRuns().map((r) => ({
-        runId: r.runId,
-        scenarioId: r.scenarioId,
-        package: r.package,
-        datasetDigest: r.datasetDigest.slice(0, 12),
-        datasetSummary: r.datasetSummary,
-        auditPassed: r.result.audit.passed === true,
-        startedAt: r.startedAt,
-        savedAt: r.savedAt,
-      })),
-    }))
+    return guard(() => {
+      // action-store 缺失/损坏 fail-loud：不静默把全部 run 标成 pending（待办口径不可假阴性）。
+      const store = actionStoreFor(this.ws.root)
+      const rows = this.visibleRuns().map((r) => {
+        const decisions = store.listDecisions(r.runId)
+        const latest = decisions.length === 0
+          ? undefined
+          : [...decisions].sort((a, b) =>
+              a.createdAt < b.createdAt ? 1
+              : a.createdAt > b.createdAt ? -1
+              : a.decisionId < b.decisionId ? 1
+              : a.decisionId > b.decisionId ? -1
+              : 0)[0]
+        return {
+          runId: r.runId,
+          scenarioId: r.scenarioId,
+          package: r.package,
+          datasetDigest: r.datasetDigest.slice(0, 12),
+          datasetSummary: r.datasetSummary,
+          auditPassed: r.result.audit.passed === true,
+          startedAt: r.startedAt,
+          savedAt: r.savedAt,
+          reviewStatus: (latest?.decision ?? 'pending') as 'pending' | 'approved' | 'rejected',
+          ...(latest
+            ? {
+                latestDecision: {
+                  decisionId: latest.decisionId,
+                  decision: latest.decision,
+                  createdAt: latest.createdAt,
+                  ...(latest.reason !== undefined ? { reason: latest.reason } : {}),
+                  candidateIds: latest.candidateIds,
+                },
+              }
+            : {}),
+        }
+      })
+      // pending 在前，其后 savedAt 时间倒序（S2.1）。
+      rows.sort((a, b) => {
+        const ap = a.reviewStatus === 'pending' ? 0 : 1
+        const bp = b.reviewStatus === 'pending' ? 0 : 1
+        if (ap !== bp) return ap - bp
+        if (a.savedAt !== b.savedAt) return a.savedAt < b.savedAt ? 1 : -1
+        return a.runId < b.runId ? 1 : a.runId > b.runId ? -1 : 0
+      })
+      return { runs: rows }
+    })
   }
 
   /** 单轮运行全量（人审面：完整短语与证据链，供复核定位）。 */
@@ -345,6 +389,64 @@ export class OntoRuntime extends RuntimeRemoteService {
     return guard(() => {
       if (this.strict) this.readRun(request.runId)
       return this.reviewChainOf(request.runId)
+    })
+  }
+
+  /**
+   * 业务复核决定 UI 直写（aml-review-workbench S2.3）：与 record_review_decision 工具
+   * 同一套公共校验；候选须在结果集内（比工具面更严）；复核人只信 businessPolicy 身份。
+   * 不走批准卡——UI 点击即人审事件；执行批准仍只在工具面批准卡。
+   */
+  @Remote('recordReviewDecision')
+  async remoteExportRecordReviewDecision(request: {
+    runId: string
+    candidateIds: string[]
+    snapshotDigest: string
+    ruleFingerprint: string
+    decision: 'approved' | 'rejected'
+    reason?: string
+  }): Promise<{
+    decisionId: string
+    runId: string
+    decision: 'approved' | 'rejected'
+    candidateIds: string[]
+    reviewer: string
+    createdAt: string
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      const validated = validateReviewDecision(
+        this.ws.root,
+        {
+          runId: request.runId,
+          candidateIds: request.candidateIds,
+          snapshotDigest: request.snapshotDigest,
+          ruleFingerprint: request.ruleFingerprint,
+          decision: request.decision,
+          ...(request.reason !== undefined ? { reason: request.reason } : {}),
+        },
+        { requireCandidateSubset: true },
+      )
+      if (this.strict) this.readRun(validated.runRec.runId)
+      const reviewer = requireReviewerHostId()
+      const dec = actionStoreFor(this.ws.root).createDecision({
+        runId: validated.runRec.runId,
+        candidateIds: validated.candidateIds,
+        snapshotDigest: validated.snapshotDigest,
+        ruleFingerprint: validated.ruleFingerprint,
+        reviewer,
+        decision: validated.decision,
+        ...(validated.reason !== undefined ? { reason: validated.reason } : {}),
+      })
+      return {
+        decisionId: dec.decisionId,
+        runId: dec.runId,
+        decision: dec.decision,
+        candidateIds: dec.candidateIds,
+        reviewer: dec.reviewer,
+        createdAt: dec.createdAt,
+        humanReviewRequired: true as const,
+      }
     })
   }
 

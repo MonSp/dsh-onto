@@ -148,6 +148,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records.'),
       desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export one run audit archive.'),
       desc('ontoRuntime', 'reviewChain', true, 'RVC', 'Review decision -> proposal -> action chain for one run.'),
+      desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record business review decision (UI write).'),
       desc('ontoRuntime', 'listExperiences', false, 'EXL', 'List experience notes (summary).'),
       desc('ontoRuntime', 'showExperience', true, 'EXS', 'Show one experience note (human-review face).'),
       desc('ontoRuntime', 'reviewExperience', true, 'EXR', 'Human review write-back: outcome / misTransfer / reviewFocus.'),

@@ -15,10 +15,11 @@ for (const m of [
   'remoteExportCompareRuns',
   'remoteExportExportAudit',
   'remoteExportReviewChain',
+  'remoteExportRecordReviewDecision',
   'remoteExportListExperiences',
   'remoteExportShowExperience',
   'remoteExportReviewExperience',
 ]) {
   assert.equal(typeof proto[m], 'function', m)
 }
-console.log('OntoRuntime remote methods OK:', 10)
+console.log('OntoRuntime remote methods OK:', 11)
