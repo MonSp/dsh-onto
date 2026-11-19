@@ -33,6 +33,8 @@ import { runtimeContextForHost } from './context.js'
 import { AgentToolError } from './agent-policy.js'
 import { dataSources } from './data-sources.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
+import { ReleaseStore } from './release-store.js'
+import { ReleaseError } from './release.js'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -134,10 +136,17 @@ export class RuntimeRemoteService extends TypertRemoteService {
 
 export class OntoRuntime extends RuntimeRemoteService {
   private readonly ws: PackageWorkspace
+  private readonly releases: ReleaseStore
 
   constructor(ctx: Context) {
     super(ctx, 'ontoRuntime')
-    this.ws = new PackageWorkspace(join(resolveDataDir(ctx), 'workspace'))
+    const dataDir = resolveDataDir(ctx)
+    this.ws = new PackageWorkspace(join(dataDir, 'workspace'))
+    this.releases = new ReleaseStore({
+      root: join(dataDir, 'releases'),
+      workspace: this.ws,
+      versions: { core: '0.0.0', runtime: '0.0.0' },
+    })
   }
 
   @Remote('listScenarios')
@@ -145,11 +154,29 @@ export class OntoRuntime extends RuntimeRemoteService {
     scenarios: Array<{ id: string; name: string; goal: string; boundary: string }>
   }> {
     return guard(() => {
+      this.assertActive(request.name, request.version)
       const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
       return {
         scenarios: pkg.scenarios.map((s) => ({ id: s.id, name: s.name, goal: s.goal, boundary: s.boundary })),
       }
     })
+  }
+
+  /** M4 活动版本绑定：指针存在时新运行只认活动版（ReleaseError → Remote）。 */
+  private assertActive(name: string, version: string): void {
+    try {
+      this.releases.assertActiveBinding(name, version)
+    } catch (e) {
+      if (e instanceof ReleaseError) {
+        throw ontoError(
+          e.code === 'RELEASE_VERSION_NOT_ACTIVE' || e.code === 'RELEASE_NOT_ACTIVE'
+            ? 'onto/conflict'
+            : 'onto/bad-request',
+          e.message,
+        )
+      }
+      throw e
+    }
   }
 
   @Remote('runScenario')
@@ -165,6 +192,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     analysisMode?: 'formal' | 'explore'
   }): Promise<{ result: ScenarioRunResult }> {
     return guard(async () => {
+      this.assertActive(request.name, request.version)
       const dir = this.ws.versionDir(request.name, request.version)
       const hasSource = typeof request.sourceId === 'string' && request.sourceId !== ''
       if (hasSource === (request.dataset !== undefined && request.dataset !== null)) {

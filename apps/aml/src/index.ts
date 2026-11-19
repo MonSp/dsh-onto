@@ -13,9 +13,12 @@ import { apply as applySkills } from '@dsh-onto/runtime/agent-skills'
 import {
   businessPolicy,
   createLazyUserResolver,
+  registerExtApiConnector,
   registerTicketSimConnector,
   setFormalActionEnabled,
 } from '@dsh-onto/runtime'
+import { createExtDataConnector } from '@dsh-onto/runtime'
+import { dataSources } from '@dsh-onto/runtime'
 
 /** Bare apply functions lose module-level `inject`; reattach for cordis DI. */
 const runToolsPlugin = {
@@ -86,6 +89,30 @@ function mount(ctx: Context): void {
   if (typeof ticketSimUrl === 'string' && ticketSimUrl !== '') {
     registerTicketSimConnector({ baseUrl: ticketSimUrl })
     console.log('[dsh-aml] ticket-sim connector registered (kind=simulated):', ticketSimUrl)
+  }
+
+  // M5/F2 外部业务测试系统（ext-business-test-svc）：显式配置才注册。
+  // 演练 kind=simulated；真实验收 DSH_EXT_API_KIND=formal 且 DSH_FORMAL_ACTION_ENABLED=1。
+  const extApiUrl = process.env.DSH_EXT_API_URL
+  const extClientId = process.env.DSH_EXT_API_CLIENT_ID
+  const extClientSecret = process.env.DSH_EXT_API_CLIENT_SECRET
+  const extApiToken = process.env.DSH_EXT_API_TOKEN
+  const hasCreds = typeof extClientId === 'string' && extClientId !== ''
+    && typeof extClientSecret === 'string' && extClientSecret !== ''
+  const hasStatic = typeof extApiToken === 'string' && extApiToken !== ''
+  if (typeof extApiUrl === 'string' && extApiUrl !== '' && (hasCreds || hasStatic)) {
+    const extKind = process.env.DSH_EXT_API_KIND === 'formal' ? 'formal' : 'simulated'
+    const auth = hasCreds
+      ? { clientId: extClientId as string, clientSecret: extClientSecret as string }
+      : { token: extApiToken as string }
+    registerExtApiConnector({
+      baseUrl: extApiUrl,
+      ...auth,
+      identity: { id: 'ext-api', env: 'test', kind: extKind },
+    })
+    dataSources.register('ext-api', createExtDataConnector({ baseUrl: extApiUrl, ...auth, kind: extKind }))
+    console.log('[dsh-aml] ext-api connector + data source registered (kind=' + extKind
+      + ', auth=' + (hasCreds ? 'client_credentials' : 'static') + '):', extApiUrl)
   }
 
   console.log('[dsh-aml] mounted: OntoRuntime + RUN tools/skills (no DEV services)')

@@ -24,6 +24,7 @@ import {
 } from '@dsh-onto/core'
 import { registerSkillInvalidator } from './agent-hooks.js'
 import { resolveDataDir } from './onto-runtime-service.js'
+import { ReleaseStore } from './release-store.js'
 
 /** SKL id → skill 名（`SKL-AML-NARRATIVE` → `skl-aml-narrative`）；不可用 id 返回空串。 */
 export function skillNameFromId(sklId: string): string {
@@ -465,9 +466,15 @@ function registerSkills(ctx: Context): void {
   const dataDir = resolveDataDir(ctx)
   const wsRoot = join(dataDir, 'workspace')
   const ws = new PackageWorkspace(wsRoot)
+  // M4：活动指针存在时技能发现只扫活动版本（不按 ISSUED/目录最新自动升级）。
+  const releases = new ReleaseStore({
+    root: join(dataDir, 'releases'),
+    workspace: ws,
+    versions: { core: '0.0.0', runtime: '0.0.0' },
+  })
 
   const scan = (): Map<string, SklSource> =>
-    collectSkillSources(ws.listVersions(), (dir, error) => {
+    collectSkillSources(releases.filterActiveVersions(ws.listVersions()), (dir, error) => {
       // 损坏包不再无声消失：经 cordis logger 暴露（目录本身是服务端数据路径，可入服务端日志）。
       ctx.logger('dsh-onto').warn('skill 扫描跳过不可加载包 %s: %o', dir, error)
     })

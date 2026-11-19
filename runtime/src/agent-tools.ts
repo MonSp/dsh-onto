@@ -9,7 +9,8 @@
  * @module @dsh-onto/backend/agent-tools
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, dirname as pathDirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { runtimeContextForHost } from './context.js'
 import { bindRuntimeHost } from './host-binding.js'
@@ -117,12 +118,36 @@ import {
   validateActionIntent,
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
+import { ReleaseStore } from './release-store.js'
+import { ReleaseError } from './release.js'
 import { businessPolicy, parseTargetRef, requireBizAuth, type ExistenceChecks } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { compareVersions } from './agent-skills-compare.js'
 import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
+
+/** 读取本包或 core 的 package.json version（发布激活时分记；失败回退 0.0.0）。 */
+function readOwnVersion(which: 'core' | 'runtime'): string {
+  try {
+    const here = pathDirname(fileURLToPath(import.meta.url))
+    const rel = which === 'runtime' ? '../package.json' : '../../core/package.json'
+    const doc = JSON.parse(readFileSync(join(here, rel), 'utf8')) as { version?: unknown }
+    return typeof doc.version === 'string' && doc.version !== '' ? doc.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+/** ReleaseError → AgentToolError（活动版本绑定；P4 拒绝码透传）。 */
+function assertReleaseActive(releases: ReleaseStore, name: string, version: string): void {
+  try {
+    releases.assertActiveBinding(name, version)
+  } catch (e) {
+    if (e instanceof ReleaseError) throw new AgentToolError(e.code, e.message)
+    throw e
+  }
+}
 
 /**
  * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
@@ -1796,6 +1821,20 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
   // 错误信封剥除清单：工具错误不再回显 dataDir 派生的任何服务端路径（P2.4）。
   registerServerDir(dataDir)
   const ws = new PackageWorkspace(join(dataDir, 'workspace'))
+  // M4 发布管理：活动指针存在时 list/run 只认活动版本；无指针保持 M0–M3 行为。
+  const releases = new ReleaseStore({
+    root: join(dataDir, 'releases'),
+    workspace: ws,
+    versions: { core: readOwnVersion('core'), runtime: readOwnVersion('runtime') },
+    capabilities: () => {
+      try {
+        const id = currentConnectorIdentity()
+        return id.id ? [id.id] : []
+      } catch {
+        return []
+      }
+    },
+  })
   const knowledge = new KnowledgeStore(dataDir)
   // 短语清单持久后端（S2.1）：跨进程 recall 回读 RunRecord.redlines。
   configurePhraseStore((runId) => loadRunRedlines(ws.root, runId))
@@ -1924,7 +1963,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               .join('\n') || '（无包）',
           ),
       },
-      execute: toolExecute(() => ({ packages: projectPackageList(ws.listVersions()) })),
+      execute: toolExecute(() => ({ packages: projectPackageList(releases.filterActiveVersions(ws.listVersions())) })),
     }))
 
   reg('run', () => defineTool({
@@ -2287,6 +2326,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
           }
           const seedIds = validateRunSeedIds(args.seedIds)
+          assertReleaseActive(releases, args.name, args.version)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const scenario = pkg.scenarios.find((s) => s.id === args.scenarioId)
@@ -2426,6 +2466,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         }) => {
           const dataset = loadDatasetFromArgs(args)
           const seedIds = validateRunSeedIds(args.seedIds)
+          assertReleaseActive(releases, args.name, args.version)
           const pkg = load(args.name, args.version)
           const versionDir = ws.versionDir(args.name, args.version)
           const contracts = readToolContracts(versionDir)
@@ -4064,6 +4105,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
   if (want('run')) {
     registerExpertTools(ctx, {
       ws,
+      releases,
       loadGated: load,
       redlines,
       loadDatasetFromArgs,

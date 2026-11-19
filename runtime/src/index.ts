@@ -17,6 +17,8 @@ export * from './data-source-ext.js'
 export * from './ext-token.js'
 export * from './onto-runtime-service.js'
 export * from './model-face.js'
+export * from './release.js'
+export * from './release-store.js'
 
 // Plugin modules export colliding `apply`/`name`/`inject` — expose as namespaces.
 // Subpath imports: @dsh-onto/runtime/agent-tools | agent-skills | agent-experts

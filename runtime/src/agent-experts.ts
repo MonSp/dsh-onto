@@ -38,6 +38,8 @@ import {
 } from './agent-policy.js'
 import { assertDatasetGranted, readToolContracts } from './agent-grants.js'
 import { compareVersions } from './agent-skills-compare.js'
+import { ReleaseError } from './release.js'
+import type { ReleaseStore } from './release-store.js'
 import type { PackageWorkspace } from '@dsh-onto/core'
 
 /** agent-duties 条目（derive 产物形状）。 */
@@ -350,6 +352,8 @@ export function registerExpertTools(
   ctx: Context,
   deps: {
     ws: PackageWorkspace
+    /** M4：活动版本过滤/绑定（无指针时透传）。 */
+    releases?: ReleaseStore
     loadGated(name: string, version: string): OntologyPackage
     redlines(args: unknown): string[]
     loadDatasetFromArgs(args: { datasetPath?: string; dataset?: unknown }): import('@dsh-onto/core').RuntimeDataset
@@ -357,7 +361,16 @@ export function registerExpertTools(
     toolOut<T, R>(value: T): R
   },
 ): void {
-  const { ws, loadGated, redlines, loadDatasetFromArgs, textBlock, toolOut } = deps
+  const { ws, releases, loadGated, redlines, loadDatasetFromArgs, textBlock, toolOut } = deps
+  const assertActive = (name: string, version: string): void => {
+    if (releases === undefined) return
+    try {
+      releases.assertActiveBinding(name, version)
+    } catch (e) {
+      if (e instanceof ReleaseError) throw new AgentToolError(e.code, e.message)
+      throw e
+    }
+  }
 
   ctx.tools.register(
     defineTool({
@@ -394,19 +407,25 @@ export function registerExpertTools(
             throw new AgentToolError('INVALID_ARGS', 'name/version 须同时提供（包内明细），或同时省略（全局索引）')
           }
           if (!args.name && !args.version) {
-            const { cards, phrases } = buildExpertIndex(ws.listVersions())
+            const versions = releases !== undefined
+              ? releases.filterActiveVersions(ws.listVersions())
+              : ws.listVersions()
+            const { cards, phrases } = buildExpertIndex(versions)
             return toolOut(enforceOutputPolicy({ experts: [], derived: false, index: cards }, phrases))
           }
+          const name = args.name as string
+          const version = args.version as string
+          assertActive(name, version)
           // 不存在/损坏包统一 NOT_FOUND（versionDir 对缺失路径返回 direct 不抛，
           // loadPackage 会报 PACKAGE_MALFORMED——与 loadToolPackage 同口径，不回显底层原因）。
           let out: ReturnType<typeof buildExpertProfiles>
           let pkg: ReturnType<typeof loadPackage>
           try {
-            const versionDir = ws.versionDir(args.name as string, args.version as string)
+            const versionDir = ws.versionDir(name, version)
             out = buildExpertProfiles(versionDir)
             pkg = loadPackage(versionDir)
           } catch {
-            throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${args.name}@${args.version}`)
+            throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${name}@${version}`)
           }
           return toolOut(enforceOutputPolicy(out, phrasesOf(pkg)))
         },
@@ -473,6 +492,7 @@ export function registerExpertTools(
           seedIds?: unknown
         }) => {
           const dataset = loadDatasetFromArgs(args)
+          assertActive(args.name, args.version)
           // seedIds 与 run_scenario 同口径（A-8）；未声明 prep.expand 在 runScenario 内拒
           let seedIds: string[] | undefined
           if (args.seedIds !== undefined && args.seedIds !== null) {
