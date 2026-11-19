@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-tax-app
+      name: '@dsh-tax/app'

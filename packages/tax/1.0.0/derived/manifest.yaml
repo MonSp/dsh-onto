@@ -2,11 +2,11 @@ kind: DerivedManifest
 package: tax-risk
 version: 1.0.0
 domain: TAX
-generatedAt: 2026-11-07T11:43:47.770Z
-sourceDigest: 1837a33e1accc6650246e4acbf25b0f857a334d39c97957eacc1b0b8b8b39d8a
+generatedAt: 2026-11-19T10:19:14.937Z
+sourceDigest: eed23b21f3c4e689f872732eefe196d8929fead6c163b363b1950999a1769f7c
 sources:
   - path: package.yaml
-    sha256: 07154170dceb2bf6d77ad08f33adee9989447f5d19f8e6f5f0da8553b8c52ad5
+    sha256: e60c3f9b1e5d1b911cd3214a3902fed21e794a06122c3d9bf5b9b3e78ab97713
   - path: o1-objects/object-types.yaml
     sha256: e6fd120c3ecfc5ca6201003e06bdaa3958ff0d711fcf6b14563fd162aaf1fd88
   - path: o1-objects/relation-types.yaml
@@ -45,10 +45,10 @@ sources:
   - path: o3-scenarios/SCN-TAX-FAKE-INVOICE.yaml
     sha256: 71dcb9d8dcd090641facb0f4b3ec500134ef580bdc0c04504fabb19dacc9fcba
   - path: bindings/field-maps.yaml
-    sha256: 02fd93955240d5080db74bb44a2fdb752e46a89a9ad9f2e80e2fbd6df32e6d9c
+    sha256: 0540e358f61e9a1718d00da5db7b39fedc078238e195ff5bd84dbc0ae5b6bc2d
     layer: L2
   - path: bindings/api-sources.yaml
-    sha256: 22fe005ec4f98753fa690790bf0178f563b731ad04f2789fc8d69739617e9464
+    sha256: 5e95450c233a9ed5044629a91862ae63ae2b958bf1b3d17b2ed691089051a9c3
     layer: L2
 derived:
   - path: derived/tool-contracts/tool-contracts.yaml
@@ -57,7 +57,7 @@ derived:
   - path: derived/rule-engine-config/rule-engine-config.yaml
     sha256: 209239b47a91e3ae808d68b613abcf2ed342153d2fcca8537ff700bbac7e1335
   - path: derived/agent-duties.yaml
-    sha256: de06cee175ae40417bbf132a134ebf39599064645622ad04b73bb014009ad389
+    sha256: 507cf5d30c4e352b2af34f440ea004da0fcb4d7c4c6b3d9ab5aba3d791ee0e21
     layer: L4
   - path: derived/audit-checks.yaml
     sha256: d319f9e27787799012b30bb0af62d2e838cfbe386b23217b702b1d2ba6365809
