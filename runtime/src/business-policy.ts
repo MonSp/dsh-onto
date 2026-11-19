@@ -15,6 +15,7 @@
  * @module @dsh-onto/runtime/business-policy
  */
 import { AgentToolError, isRecord } from './agent-policy.js'
+import { scopedRuntimeObject } from './context.js'
 
 /** 业务操作面（授权判定入参；不进身份本体）。 */
 export type BusinessOperation =
@@ -190,8 +191,8 @@ export function createLazyUserResolver(
   }
 }
 
-/** 服务端共享策略面（同 dataSources 模式；部署适配器接身份提供者）。 */
-export const businessPolicy = new BusinessPolicy()
+/** Stateless API facade; each host owns its identity provider. */
+export const businessPolicy = scopedRuntimeObject(Symbol('businessPolicy'), () => new BusinessPolicy())
 
 /**
  * 业务授权入口门（六元组接线面）：可解析身份 → 全量 {@link authorize}（三查 + 角色 + dataScope），

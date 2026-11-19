@@ -1257,7 +1257,7 @@ test('T2.1-3 摘要绑定：指纹键序/ID 序无关；载荷/版本一变指�
 })
 
 test('T2.1-4 源断言：六个人审写工具闭包先过批准卡才落动作；批准后复核指纹 + 凭证留痕在场', () => {
-  const src = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience']) {
     const head = src.indexOf(`name: '${tool}'`)
     assert.ok(head > 0, `${tool} 登记应在场`)
@@ -1284,7 +1284,7 @@ test('T2.2-3 源断言：HUMAN_REVIEW 是硬停点——自动执行不过人审
   assert.ok(src.includes('!skippedSteps.has(s.stepId)'), '叙述装配须过滤屏障后步骤')
 })
 test('T3-1 源断言：最终回答守卫挂上 llm/stream 出口——禁语/数字核正/无运行支撑降级在场', () => {
-  const toolsSrc = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const toolsSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(toolsSrc.includes("ctx.on('llm/stream'"), '回答守卫须挂在 llm/stream 瀑布')
   assert.ok(toolsSrc.includes('createAnswerGuard'), '回答守卫注册在场')
   const guardSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-answer-guard.ts'), 'utf8')
@@ -1315,7 +1315,7 @@ test('T4-1/T4-2 源断言：动作执行器闭环 + 全工具沙箱收口在场'
   const sandboxSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-sandbox.ts'), 'utf8')
   assert.ok(sandboxSrc.includes('TOOL_SANDBOX_DENIED'), '沙箱拒绝码在场')
   assert.ok(sandboxSrc.includes("startsWith(ONTO_PRESET_PREFIX)"), '沙箱仅约束 onto 专家会话')
-  const toolsSrc2 = readFileSync(join(REPO, 'backend', 'src', 'agent-tools.ts'), 'utf8')
+  const toolsSrc2 = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
   assert.ok(toolsSrc2.includes('toolSandboxDecision('), 'guard 须收口沙箱判定')
   assert.ok(toolsSrc2.includes('await approve(exec'), '动作执行须过系统批准卡')
 })

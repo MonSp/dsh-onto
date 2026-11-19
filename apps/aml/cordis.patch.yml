@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-aml-app
+      name: '@dsh-aml/app'

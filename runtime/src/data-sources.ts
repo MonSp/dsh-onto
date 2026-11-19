@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import type { DataBasisInput, DataSnapshot, RuntimeDataset } from '@dsh-onto/core'
 import { AgentToolError, isRecord } from './agent-policy.js'
+import { scopedRuntimeObject } from './context.js'
 
 /** 取数查询条件（逻辑条件，不放凭证/地址）。 */
 export interface DataQuery {
@@ -234,7 +235,7 @@ export function loadSnapshot(root: string, snapshotId: string): { snapshot: Data
  * 服务端共享注册表（同 registerActionConnector 模式）：部署适配器在此登记连接器，
  * Agent 工具 / wire / CLI 同一入口（sourceId 只在此解析，不接受调用方自带连接器）。
  */
-export const dataSources = new DataSourceRegistry()
+export const dataSources = scopedRuntimeObject(Symbol('dataSources'), () => new DataSourceRegistry())
 
 /** 测试辅助：直接登记（绕过重复校验的便捷面，仅测试调用；生产用 dataSources.register）。 */
 export function registerDataSourceForTest(sourceId: string, connector: DataConnector): void {

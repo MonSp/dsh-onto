@@ -37,6 +37,7 @@ import type { ActionContract } from '@dsh-onto/core'
 import { actionDigest, type ApprovalGrant } from './agent-approval.js'
 import { AgentToolError, isRecord } from './agent-policy.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision } from './action-store.js'
+import { currentRuntimeContext, runtimeState } from './context.js'
 
 /** 动作意图：行为 ID + 锚点对象 + 载荷（业务动作的最小受治理面）。 */
 export interface ActionIntent {
@@ -73,16 +74,33 @@ export type ConnectorKind = 'dryrun' | 'simulated' | 'formal'
  * （FORMAL_ACTION_DISABLED，零外部效应）；演练/模拟连接器不受限但结果明确标注非真实业务成功。
  * M3 验收通过且用户明确启用前保持关闭。
  */
-let formalActionEnabled = false
+const actionStateKey = Symbol('actionState')
+
+function actionState(): {
+  formalActionEnabled: boolean
+  connector: ActionConnector
+  connectorIdentity: ConnectorIdentity
+} {
+  return runtimeState(actionStateKey, () => {
+    const state = {
+      formalActionEnabled: false,
+      connector: dryRunConnector,
+      connectorIdentity: { id: 'dryrun', env: 'dryrun', kind: 'dryrun' } as ConnectorIdentity,
+    }
+    currentRuntimeContext().onStop(() => { state.formalActionEnabled = false })
+    return state
+  })
+}
 
 /** 开关状态（只读查询；翻转走 {@link setFormalActionEnabled}——须服务端/用户明确决定）。 */
 export function isFormalActionEnabled(): boolean {
-  return formalActionEnabled
+  return actionState().formalActionEnabled
 }
 
 /** 翻转正式动作总开关（服务端管理面；AI/工具面不得代用户开启）。 */
 export function setFormalActionEnabled(enabled: boolean): void {
-  formalActionEnabled = enabled
+  currentRuntimeContext().assertActive()
+  actionState().formalActionEnabled = enabled
 }
 
 /** 台账记录：业务幂等键 + 批准上下文 + 执行/补偿终态（全程可回查）。 */
@@ -173,12 +191,9 @@ export const dryRunConnector: ActionConnector = {
   },
 }
 
-let connector: ActionConnector = dryRunConnector
-let connectorIdentity: ConnectorIdentity = { id: 'dryrun', env: 'dryrun', kind: 'dryrun' }
-
 /** 当前连接器身份（入台账、进业务幂等键；不依赖隐含上下文）。 */
 export function currentConnectorIdentity(): ConnectorIdentity {
-  return { ...connectorIdentity }
+  return { ...actionState().connectorIdentity }
 }
 
 /**
@@ -190,9 +205,11 @@ export function currentConnectorIdentity(): ConnectorIdentity {
  * 性质未声明一律拒绝注册（fail-closed）。
  */
 export function registerActionConnector(next: ActionConnector | null, identity?: ConnectorIdentity): void {
+  currentRuntimeContext().assertActive()
+  const state = actionState()
   if (next === null) {
-    connector = dryRunConnector
-    connectorIdentity = { id: 'dryrun', env: 'dryrun', kind: 'dryrun' }
+    state.connector = dryRunConnector
+    state.connectorIdentity = { id: 'dryrun', env: 'dryrun', kind: 'dryrun' }
     return
   }
   const kind = identity?.kind
@@ -203,8 +220,8 @@ export function registerActionConnector(next: ActionConnector | null, identity?:
         + '性质未声明不放行（fail-closed）；dryrun 仅属内置演练连接器，真实连接器不得自称 dryrun 绕过正式动作总开关',
     )
   }
-  connector = next
-  connectorIdentity = { id: identity.id, env: identity.env, kind }
+  state.connector = next
+  state.connectorIdentity = { id: identity.id, env: identity.env, kind }
 }
 
 /** actions/ 目录（workspace 根之下，同 runs/ 惯例）。 */
@@ -847,7 +864,8 @@ export async function executeBehaviorAction(
 
   // M0-A 正式动作总开关（缺省关闭）：formal 连接器派发前检查；回读/对账不受限（停用保留读取与对账能力）。
   // 演练/模拟连接器不受限，但结果须显式标注非真实业务成功（见 connectorNature / 工具渲染）。
-  if (connectorIdentity.kind === 'formal' && !formalActionEnabled) {
+  currentRuntimeContext().assertActive()
+  if (identity.kind === 'formal' && !isFormalActionEnabled()) {
     throw new AgentToolError(
       'FORMAL_ACTION_DISABLED',
       '正式业务动作总开关未开启（缺省关闭）——formal 连接器动作一律拒绝（零外部效应）。'
@@ -904,6 +922,7 @@ export async function executeBehaviorAction(
   let grant: ApprovalGrant
   try {
     grant = await requestGrant(contextDigest)
+    currentRuntimeContext().assertActive()
   } catch (e) {
     releaseClaim(root, businessKey) // 批准被拒：回收占位（无外部效应）
     throw e
@@ -1010,7 +1029,7 @@ export async function executeBehaviorAction(
 
 /** 固定连接器实例（执行与补偿之间不换注册）。 */
 function pinConnector(): ActionConnector {
-  return connector
+  return actionState().connector
 }
 
 /**
@@ -1022,4 +1041,3 @@ export function connectorNature(identity: ConnectorIdentity): { kind: ConnectorK
   const kind: ConnectorKind = identity.kind ?? (identity.id === 'dryrun' ? 'dryrun' : 'simulated')
   return { kind, simulated: kind !== 'formal' }
 }
-

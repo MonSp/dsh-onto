@@ -6,15 +6,22 @@
   "description": "dsh-onto 公共运行与治理库：取数、身份权限、运行记录、复核/批准、动作台账与审计（无自动 dsh 装配）",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node -e \"console.log('runtime: unit tests covered by backend suite')\""
+    "test": "node --test tests/*.test.mjs"
   },
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./agent-tools": "./dist/agent-tools.js",
+    "./agent-skills": "./dist/agent-skills.js",
+    "./agent-experts": "./dist/agent-experts.js"
   },
   "files": ["dist"],
   "dependencies": {
     "@dsh-onto/core": "link:../core",
-    "@deepseek-ai/dsh-llm": "link:../../deepseek-harness/packages/llm/llm"
+    "@deepseek-ai/cordis": "link:../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-llm": "link:../../deepseek-harness/packages/llm/llm",
+    "@deepseek-ai/dsh-skill": "link:../../deepseek-harness/packages/skill/skill",
+    "@deepseek-ai/dsh-tools": "link:../../deepseek-harness/packages/core/tools",
+    "@deepseek-ai/dsh-typert-protocol": "link:../../deepseek-harness/packages/typert/protocol"
   },
   "devDependencies": {
     "@types/node": "^24",

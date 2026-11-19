@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { AgentToolError, isRecord } from './agent-policy.js'
 import type { ActionRecord, ConnectorIdentity } from './action-executor.js'
+import { currentRuntimeContext, runtimeState } from './context.js'
 
 /** 台账存储记录 = 动作记录 + 版本号（CAS）+ D 包链条引用。 */
 export interface StoredActionRecord extends ActionRecord {
@@ -544,10 +545,21 @@ export class ActionStore {
   }
 }
 
-const storeCache = new Map<string, ActionStore>()
+const storeCacheKey = Symbol('actionStores')
+function storesFor(): Map<string, ActionStore> {
+  return runtimeState(storeCacheKey, () => {
+    const stores = new Map<string, ActionStore>()
+    currentRuntimeContext().onCleanup(() => {
+      for (const store of stores.values()) store.close()
+      stores.clear()
+    })
+    return stores
+  })
+}
 
 /** 取（或开）工作区台账：`<root>/actions/ledger.db`。 */
 export function actionStoreFor(root: string): ActionStore {
+  const storeCache = storesFor()
   const key = root.toLowerCase()
   let store = storeCache.get(key)
   if (store === undefined) {
@@ -559,6 +571,7 @@ export function actionStoreFor(root: string): ActionStore {
 
 /** 测试/关停用：关掉并清缓存。 */
 export function closeActionStore(root: string): void {
+  const storeCache = storesFor()
   const key = root.toLowerCase()
   const store = storeCache.get(key)
   if (store !== undefined) {
