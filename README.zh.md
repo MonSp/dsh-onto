@@ -6,6 +6,9 @@
 > 把专家的业务口径写成机器可校验、可签发、可派生的结构；**判定在规则引擎，认定在人工**。
 > 概念、规则与结构的完整定义见 [docs/architecture.md](docs/architecture.md)（自包含）。
 
+**接入请先读：** [用户指南 — 建模 → 运行时 → 业务应用 / 智能问答](docs/user-guide.zh.md)
+（English: [docs/user-guide.en.md](docs/user-guide.en.md)）
+
 ## 总览
 
 通用链路：**知识库 → 本体 → 平台装配 → 辅助决策**。任意领域只换包内容，不换骨架。
@@ -43,24 +46,34 @@
 
 ## 目录
 
-依赖方向：**`core` ← `runtime` ← `backend`（装配外壳）** · workbench 只经 remote 服务对接 backend。
+依赖方向：**`core` ← `runtime` ← `backend`（装配外壳）** · workbench 只经 remote 服务对接 backend ·
+业务插件 `apps/*` 依赖 runtime，禁止反向依赖。
 
 ```
 dsh-onto/
   core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，236 项 node --test 验收测试）
   runtime/    @dsh-onto/runtime — 公共运行与治理库：数据连接器、身份权限、运行留痕、
-              复核/批准、动作台账与对账（无 dsh 自动装配；backend 与后续业务插件
+              复核/批准、动作台账与对账（无 dsh 自动装配；backend 与业务插件
               依赖它，禁止反向依赖）
   backend/    @dsh-onto/backend — dsh bundle：开发面 wire（建模/知识/签发）+
               对 @dsh-onto/runtime 的装配外壳（onto* 落点，289 项测试）
   workbench/  @dsh-onto/workbench — dsh bundle：Web UI 六 tab + 右栏常驻本体图谱
-  mock-services/ ticket-sim —— 独立工单模拟服务（SQLite 自身持久化、跨进程幂等、
+  apps/       业务插件（独立 dsh bundle）：
+                aml/  @dsh-aml/app  — 治理工作台（复核队列、动作）
+                tax/  @dsh-tax/app  — RUN-only 最小运行页 + Agent 同源
+  mock-services/
+              ticket-sim —— 独立工单模拟服务（SQLite 自身持久化、跨进程幂等、
               故障注入、对账补偿；回执恒为 simulated）
+              tax-api —— 第二插件冷启动用只读税务查询 mock
   packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0、tax/1.0.0
   examples/   场景运行样例数据（aml-run.json / med-run.json / tax-run.json）
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
+              setup-tax-profile.ps1 / dump-tax-config.ps1 / m-tax-seed-release.mjs
               ensure-expert-presets.ps1（+ expert-presets.json、preset-plugins.standard.yaml：专家 preset 块幂等管理）
-  docs/       architecture.md（自包含架构与规则）
+  docs/       user-guide.{zh,en}.md —— 如何建模、挂运行时、做应用或问答
+              architecture.md（自包含架构与规则）
+              plugin-authoring.zh.md（第二域插件冷启动卡点表）
+              ops-manual.md（正式动作门槛与对账）
               overview-pipeline.{zh,en}.svg（端到端链路图）
 ```
 
@@ -81,6 +94,22 @@ dsh-onto\scripts\dev-web.ps1
 ```
 
 工作台六个 tab：**包管理 · 建模 · 知识库 · 校验派生 · 场景运行 · 经验**（右栏另有常驻「本体图谱」）。
+
+### 第二样例：TAX 业务插件（RUN-only）
+
+完整工作台起来之后，TAX 冷启动展示**最小业务应用**如何只挂运行时（其 profile 不含 backend/workbench）：
+
+```powershell
+node dsh-onto\mock-services\tax-api\server.mjs --port 3911
+dsh-onto\scripts\setup-tax-profile.ps1
+node dsh-onto\scripts\m-tax-seed-release.mjs
+dsh-onto\scripts\dump-tax-config.ps1   # 有 TAX、无 backend/workbench
+```
+
+随后：打开侧栏「TAX 运行」，或让 Agent 调
+`run_scenario(name=tax-risk, scenarioId=SCN-TAX-BURDEN-ANOMALY, sourceId=SRC-TAX-CORE)`——
+两侧 ruleId 集合一致。完整走查：[docs/user-guide.zh.md](docs/user-guide.zh.md) ·
+[docs/plugin-authoring.zh.md](docs/plugin-authoring.zh.md)。
 
 ## CLI（不经浏览器）
 

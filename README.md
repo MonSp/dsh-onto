@@ -9,6 +9,9 @@ O1 objects / O2 behavior rules / O3 scenario cards. One line to remember:
 
 > **Judgment lives in the rule engine; determination lives with humans.**
 
+**Start here for integration:** [User guide — model → runtime → business app / intelligent Q&A](docs/user-guide.en.md)
+（中文：[docs/user-guide.zh.md](docs/user-guide.zh.md)）
+
 ## Overview
 
 Universal pipeline: **Knowledge → Ontology → Platform assembly → Decision support**.
@@ -78,25 +81,34 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 ## Repository layout
 
 Dependency direction: **`core` ← `runtime` ← `backend` (assembly)** · workbench talks to
-backend over remote services only.
+backend over remote services only · business plugins (`apps/*`) depend on runtime, never the reverse.
 
 ```
 dsh-onto/
   core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 236 node --test acceptance tests)
   runtime/    @dsh-onto/runtime — shared run & governance library: data connectors,
               identity/authorization, run records, review/approval, action ledger,
-              reconciliation (no auto dsh assembly; backend and future business
+              reconciliation (no auto dsh assembly; backend and business
               plugins depend on it — never the reverse)
   backend/    @dsh-onto/backend — dsh bundle: development wires (model/knowledge/issue)
               + assembly shell over @dsh-onto/runtime (onto* landing point; 289 tests)
   workbench/  @dsh-onto/workbench — dsh bundle: Web UI (six tabs + persistent right-rail ontology graph)
-  mock-services/ ticket-sim — standalone ticket simulation service (self-persisting SQLite,
+  apps/       business plugins as separate dsh bundles:
+                aml/  @dsh-aml/app  — governance workbench (review queue, actions)
+                tax/  @dsh-tax/app  — RUN-only minimal run page + Agent same path
+  mock-services/
+              ticket-sim — standalone ticket simulation service (self-persisting SQLite,
               idempotent across processes, fault injection, reconciliation; receipts always `simulated`)
+              tax-api — read-only TAX query mock for the second-plugin cold start
   packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0, tax/1.0.0
   examples/   scenario run fixtures (aml-run.json / med-run.json / tax-run.json)
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
+              setup-tax-profile.ps1 / dump-tax-config.ps1 / m-tax-seed-release.mjs
               ensure-expert-presets.ps1 (+ expert-presets.json, preset-plugins.standard.yaml: idempotent expert-preset block)
-  docs/       architecture.md — self-contained concepts & rules (Chinese)
+  docs/       user-guide.{zh,en}.md — how to model, mount runtime, ship apps or Q&A
+              architecture.md — self-contained concepts & rules (Chinese)
+              plugin-authoring.zh.md — second-domain plugin cold-start checklist
+              ops-manual.md — formal-action gates & reconciliation
               overview-pipeline.{zh,en}.svg — end-to-end pipeline diagrams
 ```
 
@@ -121,6 +133,23 @@ dsh-onto\scripts\dev-web.ps1
 
 The workbench exposes six tabs: **Packages · Modeling · Knowledge · Validate & Derive ·
 Scenarios · Experience** (plus a persistent **Ontology graph** in the right rail).
+
+### Second sample: TAX business plugin (RUN-only)
+
+After the full workbench is up, the TAX cold-start loop shows how a **minimal business app**
+mounts only the runtime (no backend/workbench in its profile):
+
+```powershell
+node dsh-onto\mock-services\tax-api\server.mjs --port 3911
+dsh-onto\scripts\setup-tax-profile.ps1
+node dsh-onto\scripts\m-tax-seed-release.mjs
+dsh-onto\scripts\dump-tax-config.ps1   # TAX present; backend/workbench absent
+```
+
+Then either open the **TAX Run** sidebar panel, or ask the agent `run_scenario` with
+`name=tax-risk, scenarioId=SCN-TAX-BURDEN-ANOMALY, sourceId=SRC-TAX-CORE` — same rule IDs
+both ways. Full walkthrough: [docs/user-guide.en.md](docs/user-guide.en.md) ·
+[docs/plugin-authoring.zh.md](docs/plugin-authoring.zh.md).
 
 ## CLI (no browser needed)
 
