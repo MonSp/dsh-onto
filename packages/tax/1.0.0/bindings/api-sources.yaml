@@ -1,2 +1,7 @@
 kind: O1ApiSources
-sources: []
+sources:
+  - id: SRC-TAX-CORE
+    name: 税务风险查询服务
+    sourceType: SCHEMA_API
+    endpoint: "api://tax-query"
+    description: 纳税人、发票、银行流水、申报表与行业税负基准的只读查询（部署侧以 sourceId 登记连接器，地址与凭证不进包）

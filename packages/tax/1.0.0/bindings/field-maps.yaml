@@ -1,2 +1,151 @@
 kind: O1FieldMaps
-maps: []
+maps:
+  # 纳税人
+  - id: FM-TAX-TIN
+    source: taxpayers.tin
+    target: OBJ-TAX-TAXPAYER.tin
+  - id: FM-TAX-TP-NAME
+    source: taxpayers.name
+    target: OBJ-TAX-TAXPAYER.name
+  - id: FM-TAX-TP-TYPE
+    source: taxpayers.taxpayerType
+    target: OBJ-TAX-TAXPAYER.taxpayerType
+  - id: FM-TAX-TP-INDUSTRY
+    source: taxpayers.industryCode
+    target: OBJ-TAX-TAXPAYER.industryCode
+  - id: FM-TAX-TP-REGION
+    source: taxpayers.regionCode
+    target: OBJ-TAX-TAXPAYER.regionCode
+  - id: FM-TAX-TP-STATUS
+    source: taxpayers.status
+    target: OBJ-TAX-TAXPAYER.status
+  - id: FM-TAX-TP-CREDIT
+    source: taxpayers.creditLevel
+    target: OBJ-TAX-TAXPAYER.creditLevel
+  - id: FM-TAX-TP-REGDATE
+    source: taxpayers.registrationDate
+    target: OBJ-TAX-TAXPAYER.registrationDate
+  # 发票
+  - id: FM-TAX-INV-CODE
+    source: invoices.invoiceCode
+    target: OBJ-TAX-INVOICE.invoiceCode
+  - id: FM-TAX-INV-NO
+    source: invoices.invoiceNo
+    target: OBJ-TAX-INVOICE.invoiceNo
+  - id: FM-TAX-INV-TYPE
+    source: invoices.invoiceType
+    target: OBJ-TAX-INVOICE.invoiceType
+  - id: FM-TAX-INV-DATE
+    source: invoices.issueDate
+    target: OBJ-TAX-INVOICE.issueDate
+  - id: FM-TAX-INV-SELLER
+    source: invoices.sellerTin
+    target: OBJ-TAX-INVOICE.sellerTin
+  - id: FM-TAX-INV-BUYER
+    source: invoices.buyerTin
+    target: OBJ-TAX-INVOICE.buyerTin
+  - id: FM-TAX-INV-EXAMT
+    source: invoices.amountExTax
+    target: OBJ-TAX-INVOICE.amountExTax
+  - id: FM-TAX-INV-TAXAMT
+    source: invoices.taxAmount
+    target: OBJ-TAX-INVOICE.taxAmount
+  - id: FM-TAX-INV-TOTAL
+    source: invoices.totalAmount
+    target: OBJ-TAX-INVOICE.totalAmount
+  - id: FM-TAX-INV-STATUS
+    source: invoices.status
+    target: OBJ-TAX-INVOICE.status
+  # 银行流水
+  - id: FM-TAX-FLOW-BANK
+    source: bankFlows.bankCode
+    target: OBJ-TAX-BANK-FLOW.bankCode
+  - id: FM-TAX-FLOW-NO
+    source: bankFlows.flowNo
+    target: OBJ-TAX-BANK-FLOW.flowNo
+  - id: FM-TAX-FLOW-ACCT
+    source: bankFlows.acctNo
+    target: OBJ-TAX-BANK-FLOW.acctNo
+  - id: FM-TAX-FLOW-CPACCT
+    source: bankFlows.counterpartyAcctNo
+    target: OBJ-TAX-BANK-FLOW.counterpartyAcctNo
+  - id: FM-TAX-FLOW-CPNAME
+    source: bankFlows.counterpartyName
+    target: OBJ-TAX-BANK-FLOW.counterpartyName
+  - id: FM-TAX-FLOW-DIR
+    source: bankFlows.direction
+    target: OBJ-TAX-BANK-FLOW.direction
+  - id: FM-TAX-FLOW-AMT
+    source: bankFlows.amount
+    target: OBJ-TAX-BANK-FLOW.amount
+  - id: FM-TAX-FLOW-CCY
+    source: bankFlows.currency
+    target: OBJ-TAX-BANK-FLOW.currency
+  - id: FM-TAX-FLOW-OCCURRED
+    source: bankFlows.occurredAt
+    target: OBJ-TAX-BANK-FLOW.occurredAt
+  - id: FM-TAX-FLOW-SUMMARY
+    source: bankFlows.summary
+    target: OBJ-TAX-BANK-FLOW.summary
+  - id: FM-TAX-FLOW-PURPOSE
+    source: bankFlows.purpose
+    target: OBJ-TAX-BANK-FLOW.purpose
+  # 申报表
+  - id: FM-TAX-RET-TYPE
+    source: taxReturns.returnType
+    target: OBJ-TAX-TAX-RETURN.returnType
+  - id: FM-TAX-RET-PERIOD
+    source: taxReturns.period
+    target: OBJ-TAX-TAX-RETURN.period
+  - id: FM-TAX-RET-TIN
+    source: taxReturns.taxpayerTin
+    target: OBJ-TAX-TAX-RETURN.taxpayerTin
+  - id: FM-TAX-RET-SALES
+    source: taxReturns.salesAmount
+    target: OBJ-TAX-TAX-RETURN.salesAmount
+  - id: FM-TAX-RET-OUTTAX
+    source: taxReturns.outputTax
+    target: OBJ-TAX-TAX-RETURN.outputTax
+  - id: FM-TAX-RET-INTAX
+    source: taxReturns.inputTax
+    target: OBJ-TAX-TAX-RETURN.inputTax
+  - id: FM-TAX-RET-PAYABLE
+    source: taxReturns.taxPayable
+    target: OBJ-TAX-TAX-RETURN.taxPayable
+  - id: FM-TAX-RET-PAID
+    source: taxReturns.taxPaid
+    target: OBJ-TAX-TAX-RETURN.taxPaid
+  - id: FM-TAX-RET-STATUS
+    source: taxReturns.status
+    target: OBJ-TAX-TAX-RETURN.status
+  - id: FM-TAX-RET-FILED
+    source: taxReturns.filingDate
+    target: OBJ-TAX-TAX-RETURN.filingDate
+  # 行业税负基准
+  - id: FM-TAX-BM-INDUSTRY
+    source: benchmarks.industryCode
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.industryCode
+  - id: FM-TAX-BM-PERIOD
+    source: benchmarks.period
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.period
+  - id: FM-TAX-BM-REGION
+    source: benchmarks.regionCode
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.regionCode
+  - id: FM-TAX-BM-TAXTYPE
+    source: benchmarks.taxType
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.taxType
+  - id: FM-TAX-BM-AVG
+    source: benchmarks.avgBurdenRate
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.avgBurdenRate
+  - id: FM-TAX-BM-P25
+    source: benchmarks.p25
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.p25
+  - id: FM-TAX-BM-P50
+    source: benchmarks.p50
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.p50
+  - id: FM-TAX-BM-P75
+    source: benchmarks.p75
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.p75
+  - id: FM-TAX-BM-SAMPLE
+    source: benchmarks.sampleSize
+    target: OBJ-TAX-INDUSTRY-BENCHMARK.sampleSize

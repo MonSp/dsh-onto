@@ -48,7 +48,7 @@ duties:
     scenario: SCN-TAX-BURDEN-ANOMALY
     stepId: s3
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 排除段（before-scoring，drop/downweight）
     toolRefs: []
     llm: forbidden
     humanGate: false
@@ -56,7 +56,7 @@ duties:
     scenario: SCN-TAX-BURDEN-ANOMALY
     stepId: s4
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 打分段（加权汇总 riskScore）
     toolRefs: []
     llm: forbidden
     humanGate: false
@@ -104,7 +104,7 @@ duties:
     scenario: SCN-TAX-EXPORT-REFUND
     stepId: s3
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 排除段（before-scoring，drop/downweight）
     toolRefs: []
     llm: forbidden
     humanGate: false
@@ -112,7 +112,7 @@ duties:
     scenario: SCN-TAX-EXPORT-REFUND
     stepId: s4
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 打分段（加权汇总 riskScore）
     toolRefs: []
     llm: forbidden
     humanGate: false
@@ -160,7 +160,7 @@ duties:
     scenario: SCN-TAX-FAKE-INVOICE
     stepId: s3
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 排除段（before-scoring，drop/downweight）
     toolRefs: []
     llm: forbidden
     humanGate: false
@@ -168,7 +168,7 @@ duties:
     scenario: SCN-TAX-FAKE-INVOICE
     stepId: s4
     stepType: RULE_EVALUATE
-    stageDuty: 规则引擎判定（排除/打分）
+    stageDuty: 打分段（加权汇总 riskScore）
     toolRefs: []
     llm: forbidden
     humanGate: false

@@ -3,6 +3,11 @@ name: tax-risk
 version: 1.0.0
 domain: TAX
 metaFrameworkVersion: "1.0"
-status: DRAFT
-issueRecord: []
+status: ISSUED
+issueRecord:
+  - version: 1.0.0
+    issuedAt: 2026-11-19T10:19:14.903Z
+    issuedBy: 张三（人工）
+    note: 第二插件冷启动签发
+    manifestDigest: 8347b22074e31eaafd3a4a1228c34e905a18bef4eb20c32de7a7a4511bffd30c
 externalRefs: []

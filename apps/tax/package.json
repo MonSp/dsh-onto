@@ -1,0 +1,53 @@
+{
+  "name": "@dsh-tax/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TAX 业务插件：只读运行装配（一个数据源 + 一个场景 + 最小运行页 + Agent 同源）",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ./node_modules/esbuild/bin/esbuild src/client.ts --bundle --format=iife --platform=browser --target=es2022 --charset=utf8 --outfile=dist/client.js --external:react",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-llm": "link:../../../deepseek-harness/packages/llm/llm",
+    "@deepseek-ai/dsh-skill": "link:../../../deepseek-harness/packages/skill/skill",
+    "@deepseek-ai/dsh-tools": "link:../../../deepseek-harness/packages/core/tools",
+    "@deepseek-ai/dsh-typert-protocol": "link:../../../deepseek-harness/packages/typert/protocol",
+    "@dsh-onto/core": "link:../../core",
+    "@dsh-onto/runtime": "link:../../runtime"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@types/react": "^19.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.2",
+    "zod": "^4.6.7"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  }
+}

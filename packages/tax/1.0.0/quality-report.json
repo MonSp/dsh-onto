@@ -1,17 +1,312 @@
 {
   "package": "tax-risk",
   "version": "1.0.0",
-  "generatedAt": "2026-11-06T13:43:27.577Z",
+  "generatedAt": "2026-11-19T10:19:14.834Z",
   "errors": [],
-  "warnings": [],
+  "warnings": [
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TIN",
+      "message": "ID 未被引用: FM-TAX-TIN"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-NAME",
+      "message": "ID 未被引用: FM-TAX-TP-NAME"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-TYPE",
+      "message": "ID 未被引用: FM-TAX-TP-TYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-INDUSTRY",
+      "message": "ID 未被引用: FM-TAX-TP-INDUSTRY"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-REGION",
+      "message": "ID 未被引用: FM-TAX-TP-REGION"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-STATUS",
+      "message": "ID 未被引用: FM-TAX-TP-STATUS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-CREDIT",
+      "message": "ID 未被引用: FM-TAX-TP-CREDIT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-TP-REGDATE",
+      "message": "ID 未被引用: FM-TAX-TP-REGDATE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-CODE",
+      "message": "ID 未被引用: FM-TAX-INV-CODE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-NO",
+      "message": "ID 未被引用: FM-TAX-INV-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-TYPE",
+      "message": "ID 未被引用: FM-TAX-INV-TYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-DATE",
+      "message": "ID 未被引用: FM-TAX-INV-DATE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-SELLER",
+      "message": "ID 未被引用: FM-TAX-INV-SELLER"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-BUYER",
+      "message": "ID 未被引用: FM-TAX-INV-BUYER"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-EXAMT",
+      "message": "ID 未被引用: FM-TAX-INV-EXAMT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-TAXAMT",
+      "message": "ID 未被引用: FM-TAX-INV-TAXAMT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-TOTAL",
+      "message": "ID 未被引用: FM-TAX-INV-TOTAL"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-INV-STATUS",
+      "message": "ID 未被引用: FM-TAX-INV-STATUS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-BANK",
+      "message": "ID 未被引用: FM-TAX-FLOW-BANK"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-NO",
+      "message": "ID 未被引用: FM-TAX-FLOW-NO"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-ACCT",
+      "message": "ID 未被引用: FM-TAX-FLOW-ACCT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-CPACCT",
+      "message": "ID 未被引用: FM-TAX-FLOW-CPACCT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-CPNAME",
+      "message": "ID 未被引用: FM-TAX-FLOW-CPNAME"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-DIR",
+      "message": "ID 未被引用: FM-TAX-FLOW-DIR"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-AMT",
+      "message": "ID 未被引用: FM-TAX-FLOW-AMT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-CCY",
+      "message": "ID 未被引用: FM-TAX-FLOW-CCY"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-OCCURRED",
+      "message": "ID 未被引用: FM-TAX-FLOW-OCCURRED"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-SUMMARY",
+      "message": "ID 未被引用: FM-TAX-FLOW-SUMMARY"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-FLOW-PURPOSE",
+      "message": "ID 未被引用: FM-TAX-FLOW-PURPOSE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-TYPE",
+      "message": "ID 未被引用: FM-TAX-RET-TYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-PERIOD",
+      "message": "ID 未被引用: FM-TAX-RET-PERIOD"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-TIN",
+      "message": "ID 未被引用: FM-TAX-RET-TIN"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-SALES",
+      "message": "ID 未被引用: FM-TAX-RET-SALES"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-OUTTAX",
+      "message": "ID 未被引用: FM-TAX-RET-OUTTAX"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-INTAX",
+      "message": "ID 未被引用: FM-TAX-RET-INTAX"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-PAYABLE",
+      "message": "ID 未被引用: FM-TAX-RET-PAYABLE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-PAID",
+      "message": "ID 未被引用: FM-TAX-RET-PAID"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-STATUS",
+      "message": "ID 未被引用: FM-TAX-RET-STATUS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-RET-FILED",
+      "message": "ID 未被引用: FM-TAX-RET-FILED"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-INDUSTRY",
+      "message": "ID 未被引用: FM-TAX-BM-INDUSTRY"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-PERIOD",
+      "message": "ID 未被引用: FM-TAX-BM-PERIOD"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-REGION",
+      "message": "ID 未被引用: FM-TAX-BM-REGION"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-TAXTYPE",
+      "message": "ID 未被引用: FM-TAX-BM-TAXTYPE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-AVG",
+      "message": "ID 未被引用: FM-TAX-BM-AVG"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-P25",
+      "message": "ID 未被引用: FM-TAX-BM-P25"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-P50",
+      "message": "ID 未被引用: FM-TAX-BM-P50"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-P75",
+      "message": "ID 未被引用: FM-TAX-BM-P75"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "FM-TAX-BM-SAMPLE",
+      "message": "ID 未被引用: FM-TAX-BM-SAMPLE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SRC-TAX-CORE",
+      "message": "ID 未被引用: SRC-TAX-CORE"
+    }
+  ],
   "info": [
     {
       "level": "info",
       "code": "COVERAGE",
       "where": "package",
-      "message": "对象 10 / 关系 18 / 字典 6 / 行为 13 / 打分规则 13 / 排除规则 8 / 方法论模板 3 / 场景 3 / 字段映射 0 / 数据源 0"
+      "message": "对象 10 / 关系 18 / 字典 6 / 行为 13 / 打分规则 13 / 排除规则 8 / 方法论模板 3 / 场景 3 / 字段映射 48 / 数据源 1"
     }
   ],
-  "score": 100,
+  "score": 2,
   "passed": true
 }

@@ -2,8 +2,11 @@
 
 dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture.md](docs/architecture.md)，自包含），
 以 dsh plugin bundle 形态承载：`backend/`（@dsh-onto/backend 统一后端 wire 服务）、
-`workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）。
+`workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）、
+业务插件 `apps/aml`（@dsh-aml/app 治理工作台）、`apps/tax`（@dsh-tax/app 第二域只读运行）、
+只读 mock `mock-services/tax-api`。
 示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0、tax/1.0.0），场景样例在 `examples/`。
+插件冷启动装配步骤见 [docs/plugin-authoring.zh.md](docs/plugin-authoring.zh.md)。
 
 ## 不可违背
 
@@ -38,6 +41,9 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
    `export_audit` 落盘 `runs/exports/` 且人审面含 ruleId/证据链/审计项 → 工具 content +
    render 禁语零命中 → `run_scenarios` 批量 aml+med+tax 全场景过装配断言 → workbench
    场景运行 tab 运行记录/两轮对比/导出 locator 可见。
+6. 第二业务插件（`apps/tax` / `mock-services/tax-api`）：`node --test mock-services/tax-api/tax-api.test.mjs`
+   + `cd apps/tax && pnpm run build && node --test tests/*.test.mjs`（含 connector→场景 e2e）；
+   `scripts/dump-tax-config.ps1` 断言 TAX 在、backend/workbench 不在；零改 `core runtime backend workbench`。
 
 ## 核心模块地图（core/src/）
 
