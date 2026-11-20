@@ -195,8 +195,8 @@ export async function fetchTaxDataset(
     }
   }
 
-  // 候选：仅保留 objectRef 命中本批纳税人者（ingest 闭合）
-  const candRows = await load('riskCandidates')
+  // 候选：仅在本批含纳税人时拉取（objectRef 必须命中纳税人，否则整批丢弃——避免无用请求）
+  const candRows = want('OBJ-TAX-TAXPAYER') ? await load('riskCandidates') : []
   const taxpayerIds = new Set(taxpayerRows.map(taxpayerId))
   for (const r of candRows) {
     const objectRef = str(r.objectRef)

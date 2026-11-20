@@ -20,11 +20,11 @@
 ## 1. 前置
 
 ```powershell
-# Node ≥ 24.9；harness 为兄弟目录（本 worktree 经 .worktrees/deepseek-harness junction）
+# Node ≥ 24.9；harness 为兄弟目录（仓库根旁 ../deepseek-harness；worktree 经 .worktrees/deepseek-harness junction）
 # 验证：必须是独立 Node，**不能**是带 electron 指纹的嵌入式构建
 node -e "console.log(process.version, process.versions.electron ?? 'ok')"
 # 期望：v24.x ok；若打印 electron 版本号，dsh web 启动会失败（见卡点 C6）
-Test-Path ..\..\deepseek-harness\package.json   # 从仓库根出发
+Test-Path ..\deepseek-harness\package.json   # 从仓库根（或 worktree 根）出发
 ```
 
 pnpm 可用性（任选其一）：
@@ -70,15 +70,22 @@ node dist\cli.js gate     ..\packages\tax\1.0.0
 cd ..
 ```
 
+> **质量分说明**：`quality-report.json` 的 `score = 100 − 2×warnings`。字段映射 `FM-*` 与数据源 `SRC-*`
+> 是叶子 ID（无其它元素按 ID 引用它们），core 的 `UNREFERENCED_EXEMPT_PREFIXES` 只豁免
+> `AGT-/AUD-/TOOL-/SCN-`，故 48 条 field-map + 1 条 api-source 会各记一条 `ID_UNREFERENCED`，
+> score 可低至个位数（本包约 2）而 `passed=true`（签发门禁只拦 errors）。AML 包同类警告 score≈54。
+> 这是校验器计分口径问题，**不代表映射未闭合**；target 闭合以 `validate` 无 error + 连接器 e2e 为准。
+
 ## 4. 签发（人工步骤）
 
 签发 = 人审通过；`issuedBy` **不得**为 agent/llm/ai/bot/system。
 
 ```powershell
 cd core
-# 仓库工作区根 = 仓库根（packages/ 在 root 下；目录名 tax ≠ meta.name tax-risk 时靠扫描回退）
-node dist\cli.js package review --name tax-risk --version 1.0.0 --root ..\..
-node dist\cli.js package issue  --name tax-risk --version 1.0.0 --by "张三（人工）" --root ..\..
+# workspace 根 = 仓库根（packages/ 在 root 下；目录名 tax ≠ meta.name tax-risk 时靠扫描回退）
+# 从 core 出发用 --root ..（勿写 ..\..：那会指到仓库外）
+node dist\cli.js package review --name tax-risk --version 1.0.0 --root ..
+node dist\cli.js package issue  --name tax-risk --version 1.0.0 --by "张三（人工）" --root ..
 cd ..
 ```
 
@@ -115,7 +122,8 @@ $env:DSH_BIZ_SCOPE_TYPES  = 'OBJ-TAX-TAXPAYER,OBJ-TAX-INVOICE,OBJ-TAX-BANK-FLOW,
 
 ```powershell
 # 先杀占用端口的旧监听；Tabbit/浏览器用 localhost 而非 127.0.0.1（项目惯例）
-cd ..\deepseek-harness   # 或 junction：..\..\deepseek-harness
+# 从仓库根或 worktree 根：harness 均在上一级（worktree 下为 .worktrees/deepseek-harness junction）
+cd ..\deepseek-harness
 pnpm dsh --profile dsh-tax --no-open
 ```
 
@@ -152,7 +160,7 @@ node --test tests\*.test.mjs
 |---|---|---|---|---|
 | C1 | 插件构建 | pnpm 11 默认拒跑 esbuild postinstall → `install` 退出码 1，`setup-tax-profile` 当场失败 | 插件装配 | 需在插件包提供 `pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true`；指南模板应预置 |
 | C2 | 连接器类型 | `createExtDataConnector` 的 collection/typeMap 写死 AML 三类，TAX 五类 collection 无法复用 | 连接器配置 | 本插件自写 `DataConnector`（不改 runtime）；runtime 可考虑通用「collection→类型映射」配置面 |
-| C3 | 签发 CLI 工作区 | `--root packages` 会拼成 `packages/packages/...`；目录 `tax` ≠ `meta.name tax-risk` 时必须 `--root <仓库根>` 靠扫描回退 | 字段映射（流程文档） | 指南已写明 `--root ..\..`；CLI 报错未提示扫描回退 |
+| C3 | 签发 CLI 工作区 | `--root packages` 会拼成 `packages/packages/...`；目录 `tax` ≠ `meta.name tax-risk` 时必须 `--root <仓库根>` 靠扫描回退 | 字段映射（流程文档） | 指南已写明从 `core` 用 `--root ..`；CLI 报错未提示扫描回退 |
 | C4 | 特征依据 | TAX 包无 `featureSources`/`featureRecipes`，候选特征来自 API 切片 → explore=`conditional`、formal=`insufficient` | 字段映射 | 业务上特征是上游风险信号；若要 formal=verified，需在包内声明投影契约或配方 |
 | C5 | 工作树依赖 | harness 依赖相对路径在 `.worktrees/<feat>/` 下依赖 `.worktrees/deepseek-harness` junction | 插件装配 | 本环境已有 junction；全新机器需文档说明或改 link 解析 |
 | C6 | 启动宿主 | MiMo 自带 node 的 V8 带 `electron` 指纹，`pnpm dsh` 起宿主时报 `node-addon-require-builtin unsupported` | 插件装配 | 需用独立 Node（如 `D:\nvm\v24.22.1`）；dump-config 可过但 web boot 不过，指南应写「验证 node 非 Electron 构建」 |
@@ -174,8 +182,9 @@ node --test tests\*.test.mjs
 ```powershell
 # 全量（实现者回归）
 node --test mock-services\tax-api\tax-api.test.mjs
-cd apps\tax; node --test tests\*.test.mjs; cd ..\..
+cd apps\tax; pnpm run build; node --test tests\*.test.mjs; cd ..\..
 scripts\dump-tax-config.ps1
 # 零改引擎
-git diff --stat -- core runtime   # 本 feature 应为空
+git diff --stat -- core runtime backend workbench   # 本 feature 应为空
+# 质量分：score 低（FM-/SRC- 记 ID_UNREFERENCED）不代表映射坏——看 errors=[] 与 gate ok
 ```
