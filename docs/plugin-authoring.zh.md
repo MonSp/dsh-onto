@@ -170,9 +170,14 @@ node core\dist\cli.js source map preview --dir <pkg> --url http://127.0.0.1:3912
 等静态闭合错误。报告还含**证据就绪度**：逐特征标注可复算（object-fact/derived/connector，够用）
 还是 unverified-caller（待补）。
 
+> **改 bindings 后先派生**：`bindings/*` 是源文件、进派生指纹。新增/改动 `api-sources.yaml`、
+> `source-maps.yaml` 之后，跑一次 `node core\dist\cli.js derive <pkg>` 再做回放/加载
+> （否则 `DERIVED_DRIFT` 拒载——不是坏了，是 manifest 还没认领新文件）。
+
 ## 4. 发布前回放（随包验收样例）
 
 ```powershell
+# 4.0 改过 bindings 后先派生（见 §3 末注）；然后：
 # 4.1 冻结数据快照（原始响应体）到 <pkg>/fixtures/replay-<SCN>.json
 # 4.2 生成基线（候选/分数/命中规则/证据/排除/人审/审计，写 fixtures/replay-<SCN>.expected.json 并重派生）
 node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --fixture <快照.json> --write-expected
@@ -279,7 +284,8 @@ pnpm dsh --profile dsh-<domain> --no-open
 | `SM_REF_BROKEN` / `SM_REF_PENDING` | 映射 FK 对不上对象 id / 对端集合没取（§3.3） |
 | `SM_IDRULE_MISMATCH` | idTemplate 与对象 idRule 占位序列不一致 |
 | `生成要求已签发包` | plugin generate 只对 ISSUED 包；先人工 issue（§5） |
-| 回放 `DERIVED_DRIFT: ... fixtures/` | 签发后手改夹具/基线；须 fork 新版本或恢复原样 |
+| 回放 `DERIVED_DRIFT: ... bindings/` 或 `... fixtures/` | 新增/改动 bindings 或夹具后未 `derive`；或签发后手改源——前者重派生，后者须 fork 新版本 |
+| `run --data` 崩溃（如 `.map` of undefined） | `run --data` 吃的是**转换后 dataset**（同 `examples/*-run.json` 形态），不是原始 API 响应体；原始快照请走 §4 replay 或先映射转换 |
 | `--check` 退出码 2 | 基线有 diff——看 comparison.diffs（业务口径变了） |
 | `Business identity is unavailable` | `DSH_BIZ_USER_ID/TENANT/ROLES` 不全 |
 | `RELEASE_NOT_ACTIVE` | 未跑 seed-release.mjs 或 profile 不对 |

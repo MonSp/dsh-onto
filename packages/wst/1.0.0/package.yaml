@@ -3,6 +3,10 @@ name: wst-ops
 version: 1.0.0
 domain: WST
 metaFrameworkVersion: "1.0"
-status: DRAFT
-issueRecord: []
+status: ISSUED
+issueRecord:
+  - version: 1.0.0
+    issuedAt: 2026-11-21T20:50:58.270Z
+    issuedBy: 验收主持人（人工代办）
+    manifestDigest: bd155898427c4a7da86f8a4dbed3e71fe88e56077704a6d7395a81b70eb43182
 externalRefs: []

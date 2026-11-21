@@ -636,14 +636,34 @@ export function previewSourceMaps(pkg: OntologyPackage, rows: SourceRows): Sourc
   for (const bm of sourceMaps.filter(isBehaviorMap)) {
     const sample = rows[bm.collection] ?? []
     const where = `bindings/source-maps.yaml#${bm.id}`
-    const needed = new Set<string>(idTemplateFields(bm.objectRefTemplate))
-    if (bm.timeField !== undefined) needed.add(bm.timeField)
-    for (const src of Object.values(bm.attrMap ?? {})) needed.add(src)
-    if (bm.eventsPath !== undefined) needed.add(bm.eventsPath)
-    for (const f of needed) {
+    // behavior-list 的 timeField/attrMap 在事件子项上，objectRef 占位/eventsPath 在父行上
+    const parentNeeded = new Set<string>(idTemplateFields(bm.objectRefTemplate))
+    const eventNeeded = new Set<string>()
+    if (bm.timeField !== undefined) eventNeeded.add(bm.timeField)
+    for (const src of Object.values(bm.attrMap ?? {})) eventNeeded.add(src)
+    if (bm.kind === 'behavior-list') {
+      if (bm.eventsPath !== undefined) parentNeeded.add(bm.eventsPath)
+    } else {
+      for (const f of eventNeeded) parentNeeded.add(f)
+      eventNeeded.clear()
+    }
+    for (const f of parentNeeded) {
       const present = sample.some((r) => readField(r, f) !== undefined)
       if (sample.length > 0 && !present) {
         diagnostics.push(diag('SM_FIELD_MISSING', where, `样本缺源字段: ${bm.collection}.${f}`))
+      }
+    }
+    if (eventNeeded.size > 0) {
+      const events: SourceRow[] = []
+      for (const r of sample) {
+        const raw = bm.eventsPath !== undefined ? readField(r, bm.eventsPath) : undefined
+        if (Array.isArray(raw)) events.push(...(raw.filter((e) => e !== null && typeof e === 'object') as SourceRow[]))
+      }
+      for (const f of eventNeeded) {
+        const present = events.some((e) => readField(e, f) !== undefined)
+        if (events.length > 0 && !present) {
+          diagnostics.push(diag('SM_FIELD_MISSING', where, `样本事件缺源字段: ${bm.collection}.${bm.eventsPath ?? '?'}.${f}`))
+        }
       }
     }
   }

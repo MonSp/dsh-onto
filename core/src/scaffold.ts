@@ -51,6 +51,11 @@ function toLinkPath(fromDir: string, toDir: string): string {
   return (rel === '' ? '.' : rel).split(sep).join('/')
 }
 
+/** 路径 token 统一正斜杠：模板里既进 PowerShell 也进 JS 单引号串（`\1` 等会被当八进制转义）。 */
+function toPosixPath(p: string): string {
+  return resolve(p).split(sep).join('/')
+}
+
 function replaceTokens(text: string, tokens: Record<string, string>): string {
   let out = text
   for (const [k, v] of Object.entries(tokens)) out = out.split(k).join(v)
@@ -137,10 +142,10 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
     __LINK_SKILL__: toLinkPath(outDir, join(harnessDir, 'packages', 'skill', 'skill')),
     __LINK_TOOLS__: toLinkPath(outDir, join(harnessDir, 'packages', 'core', 'tools')),
     __LINK_TYPERt__: toLinkPath(outDir, join(harnessDir, 'packages', 'typert', 'protocol')),
-    __CORE_DIR__: coreDir,
-    __RUNTIME_DIR__: runtimeDir,
-    __HARNESS_DIR__: harnessDir,
-    __SRC_PKG_DIR__: versionDir,
+    __CORE_DIR__: toPosixPath(coreDir),
+    __RUNTIME_DIR__: toPosixPath(runtimeDir),
+    __HARNESS_DIR__: toPosixPath(harnessDir),
+    __SRC_PKG_DIR__: toPosixPath(versionDir),
   }
 
   mkdirSync(outDir, { recursive: true })

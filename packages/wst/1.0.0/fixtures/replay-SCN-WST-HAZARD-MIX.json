@@ -1,0 +1,83 @@
+{
+  "snapshotAt": "2026-11-12T16:00:00+08:00",
+  "bins": [
+    {
+      "binId": "BIN-01",
+      "binNo": "B01",
+      "zone": "canteen",
+      "wasteType": "kitchen",
+      "fillLevel": 0.92,
+      "lastEmptiedAt": "2026-11-11T10:00:00+08:00",
+      "mixEvents": []
+    },
+    {
+      "binId": "BIN-02",
+      "binNo": "B02",
+      "zone": "dorm",
+      "wasteType": "recyclable",
+      "fillLevel": 0.35,
+      "lastEmptiedAt": "2026-11-12T14:00:00+08:00",
+      "mixEvents": []
+    },
+    {
+      "binId": "BIN-03",
+      "binNo": "B03",
+      "zone": "lab",
+      "wasteType": "hazardous",
+      "fillLevel": 0.85,
+      "lastEmptiedAt": "2026-11-12T10:00:00+08:00",
+      "mixEvents": [
+        { "at": "2026-11-12T11:20:00+08:00", "kind": "hazardous-mix" },
+        { "at": "2026-11-12T13:05:00+08:00", "kind": "hazardous-mix" }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "routeId": "ROUTE-1",
+      "routeNo": "R01",
+      "stopCount": 12,
+      "plannedMinutes": 45,
+      "covers": ["BIN-01", "BIN-02"]
+    },
+    {
+      "routeId": "ROUTE-2",
+      "routeNo": "R02",
+      "stopCount": 8,
+      "plannedMinutes": 60,
+      "covers": ["BIN-03"]
+    }
+  ],
+  "dumps": [
+    { "binId": "BIN-01", "at": "2026-11-11T10:00:00+08:00" },
+    { "binId": "BIN-02", "at": "2026-11-12T14:00:00+08:00" },
+    { "binId": "BIN-03", "at": "2026-11-12T10:00:00+08:00" }
+  ],
+  "alerts": [
+    {
+      "alertId": "ALERT-BIN-01",
+      "binId": "BIN-01",
+      "features": { "fillRatio": 0.92, "mixCount": 0, "hazardFlag": 0 },
+      "tags": []
+    },
+    {
+      "alertId": "ALERT-BIN-02",
+      "binId": "BIN-02",
+      "features": { "fillRatio": 0.35, "mixCount": 0, "hazardFlag": 0 },
+      "tags": ["recently-emptied"]
+    },
+    {
+      "alertId": "ALERT-BIN-02B",
+      "binId": "BIN-02",
+      "features": { "fillRatio": 0.35, "mixCount": 0, "hazardFlag": 0 },
+      "tags": ["cleared-whitelist"],
+      "note": "同桶重复候选，适配层应去重"
+    },
+    {
+      "alertId": "ALERT-BIN-03",
+      "binId": "BIN-03",
+      "features": { "fillRatio": 0.85, "mixCount": 2, "hazardFlag": 1 },
+      "tags": []
+    }
+  ]
+}

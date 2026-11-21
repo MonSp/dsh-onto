@@ -79,6 +79,13 @@ function setupWst() {
   const ws = mkWorkspace()
   const dir = ws.versionDir('wst-ops', '1.0.0')
   cpSync(join(REPO_ROOT, 'packages', 'wst', '1.0.0'), dir, { recursive: true })
+  // 示例包可能是 ISSUED（验收产物）：回置 DRAFT、清 issueRecord 锚（manifestDigest 与重派生不符）
+  const metaPath = join(dir, 'package.yaml')
+  let meta = readFileSync(metaPath, 'utf8')
+  meta = meta.replace(/^status:.*$/m, 'status: DRAFT')
+  meta = meta.replace(/^issueRecord:\s*\n(?:[ \t]+.*\n?)*/m, 'issueRecord: []\n')
+  meta = meta.split('\n').filter((l) => !l.includes('manifestDigest')).join('\n')
+  writeFileSync(metaPath, meta, 'utf8')
   writeFileSync(join(dir, 'bindings', 'api-sources.yaml'), shapeYaml(), 'utf8')
   writeFileSync(join(dir, 'bindings', 'source-maps.yaml'), mapsYaml(), 'utf8')
   mkdirSync(join(dir, 'fixtures'), { recursive: true })

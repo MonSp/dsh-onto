@@ -289,6 +289,33 @@ test('预览：证据就绪度（声明投影→ready；未声明→pending）',
   assert.ok(f2 !== undefined && f2.verdict === 'pending')
 })
 
+test('预览：behavior-list 的 timeField 在事件子项上检查，不误报父行缺字段', () => {
+  const pkg = minimalPkg()
+  pkg.sourceMaps = [
+    {
+      id: 'SM-TST-MIX',
+      kind: 'behavior-list',
+      collection: 'rows',
+      behaviorType: 'BHV-TST-X',
+      objectRefTemplate: '<ref>',
+      eventsPath: 'events',
+      timeField: 'at',
+    },
+    { id: 'SM-TST-A', collection: 'rows', objectType: 'OBJ-TST-A', idTemplate: '<ref>' },
+  ]
+  // 事件子项有 at → 不得误报 SM_FIELD_MISSING(.at)
+  const preview = previewSourceMaps(pkg, {
+    rows: [{ ref: 'A1', events: [{ at: '2026-01-01T00:00:00Z', kind: 'x' }] }],
+  })
+  assert.ok(
+    !preview.diagnostics.some((d) => d.code === 'SM_FIELD_MISSING' && d.message.includes('.at')),
+    JSON.stringify(preview.diagnostics),
+  )
+  // 事件真的缺 at → 报事件级缺字段
+  const preview2 = previewSourceMaps(pkg, { rows: [{ ref: 'A1', events: [{ kind: 'x' }] }] })
+  assert.ok(preview2.diagnostics.some((d) => d.code === 'SM_FIELD_MISSING' && d.message.includes('.at')))
+})
+
 test('store：source-maps/api shape/回放夹具 round-trip 且夹具进源清单', () => {
   const { dir, root, pkg } = mkWorkspaceWithPkg()
   try {

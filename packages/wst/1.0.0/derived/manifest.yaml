@@ -2,11 +2,11 @@ kind: DerivedManifest
 package: wst-ops
 version: 1.0.0
 domain: WST
-generatedAt: 2026-11-21T20:20:47.370Z
-sourceDigest: 5afccb98ef3d9922edb61ae4b8e5440d34473e3f64bbec850c11dcba9763593e
+generatedAt: 2026-11-21T20:50:58.290Z
+sourceDigest: 460f58296a66fd2a226658fae8d65efa3821fce451e2923ce03c87a3aa325205
 sources:
   - path: package.yaml
-    sha256: 4be1a7a021e411422f4bfd33784e8367c9b28e0a40ecbac3536ab669b747b88c
+    sha256: 55721f530846a8e86eaa66b8f598c3145e8895dfffffa3b9e19437d44c45a56c
   - path: o1-objects/object-types.yaml
     sha256: cedb6f6fdbc294bb4673454a762e64b1a2a9cf8396922bc1ba2a015800bc7f56
   - path: o1-objects/relation-types.yaml
@@ -30,8 +30,15 @@ sources:
     sha256: 02fd93955240d5080db74bb44a2fdb752e46a89a9ad9f2e80e2fbd6df32e6d9c
     layer: L2
   - path: bindings/api-sources.yaml
-    sha256: add1d44c7f584df2246ce91e5e2f63ece02a122e3b639904f31f37781e1f456b
+    sha256: c2c6349ecc94b22ba7bf81a30d155bbdd0d62404a7ac9a5fd1acd46a171155a7
     layer: L2
+  - path: bindings/source-maps.yaml
+    sha256: 61e5b72546aca4f37c526e1e323fea5843beef2ba2f8bcd21c7c0c4caba79709
+    layer: L2
+  - path: fixtures/replay-SCN-WST-HAZARD-MIX.expected.json
+    sha256: ca0b54ab10419f2f0ab477d024e819b2c0d4da0f8064218aef775b3a9ae69a82
+  - path: fixtures/replay-SCN-WST-HAZARD-MIX.json
+    sha256: 5f0bb2b72d0cb016be81912767ef24bb472ae1845e686f356e84cc89f6ed4ccd
 derived:
   - path: derived/tool-contracts/tool-contracts.yaml
     sha256: 711fc24b95aa739330dca1d7a194396851dd5373dd2b1c1e1650267064ff26d7
