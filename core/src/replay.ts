@@ -190,8 +190,9 @@ function compareExpected(expected: ReplayExpected, actual: ReplayExpected): Repl
   if (expected.auditPassed !== actual.auditPassed) {
     diffs.push({ where: 'auditPassed', expected: String(expected.auditPassed), actual: String(actual.auditPassed) })
   }
-  if ((expected.dataStatus ?? '') !== (actual.dataStatus ?? '')) {
-    diffs.push({ where: 'dataStatus', expected: String(expected.dataStatus ?? ''), actual: String(actual.dataStatus ?? '') })
+  // dataStatus 向后兼容：旧基线未声明该字段则不断言（ISSUED 基线只读，不得要求重写）
+  if (expected.dataStatus !== undefined && expected.dataStatus !== (actual.dataStatus ?? '')) {
+    diffs.push({ where: 'dataStatus', expected: String(expected.dataStatus), actual: String(actual.dataStatus ?? '') })
   }
   return diffs
 }

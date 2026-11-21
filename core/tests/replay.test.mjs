@@ -180,6 +180,12 @@ test('回放：--check 对照含 pendingChecks 与 dataStatus（漏项不得假�
     const wheres = report.comparison.diffs.map((d) => d.where)
     assert.ok(wheres.some((w) => w.includes('pendingChecks')), JSON.stringify(wheres))
     assert.ok(wheres.includes('dataStatus'), JSON.stringify(wheres))
+    // 向后兼容：旧基线无 dataStatus 字段（ISSUED 只读不可重写）→ 不得误报
+    delete exp.dataStatus
+    exp.candidates = JSON.parse(readFileSync(expPath, 'utf8')).candidates
+    writeFileSync(tampered, JSON.stringify(exp, null, 2), 'utf8')
+    const compat = runReplay({ versionDir: dir, scenarioId: SCN, check: true, expectedPath: tampered })
+    assert.equal(compat.comparison.ok, true, JSON.stringify(compat.comparison.diffs))
   } finally {
     rmWorkspace(root)
   }
