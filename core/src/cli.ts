@@ -63,6 +63,7 @@ import {
   shapeCollectionKeys,
 } from './sourcemap.js'
 import { runReplay } from './replay.js'
+import { generatePlugin } from './scaffold.js'
 import { loadPackage, PackageWorkspace, readPackageMeta } from './store.js'
 import type { ApiShape, RuntimeDataset, SourceType } from './types.js'
 import { SOURCE_TYPES } from './types.js'
@@ -145,6 +146,8 @@ function main(): void {
       return cmdSource(sub, args)
     case 'replay':
       return cmdReplay(args)
+    case 'plugin':
+      return cmdPlugin(sub, args)
     case 'knowledge':
       return cmdKnowledge(sub, args)
     case 'exp':
@@ -172,6 +175,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
   replay --dir <versionDir> --scenario <SCN> [--fixture F] [--expected F] [--check]
          [--scope-types A,B] [--against <versionDir>] [--write-expected]
+  plugin generate --dir <versionDir> --scenario <SCN> --source <SRC> --out <dir> [--force] [--profile P]
   knowledge upload|parse|queue|review|materialize
   exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
@@ -547,6 +551,36 @@ function cmdReplay(args: Args): void {
     })
     print(report)
     if (report.comparison !== undefined && !report.comparison.ok) process.exit(2)
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * plugin（api-to-plugin S2.4）：脚手架生成最小 DSH 插件（生成 ≠ 签发）
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+function cmdPlugin(sub: string | undefined, args: Args): void {
+  if (sub !== 'generate') fail('plugin 需要子命令 generate')
+  try {
+    const result = generatePlugin({
+      versionDir: resolve(flagStr(args, 'dir')),
+      scenarioId: flagStr(args, 'scenario'),
+      sourceId: flagStr(args, 'source'),
+      outDir: resolve(flagStr(args, 'out')),
+      force: args.flags['force'] === true,
+      ...(typeof args.flags['profile'] === 'string' ? { profileName: args.flags['profile'] } : {}),
+      ...(typeof args.flags['core-dir'] === 'string' ? { coreDir: resolve(args.flags['core-dir']) } : {}),
+      ...(typeof args.flags['runtime-dir'] === 'string' ? { runtimeDir: resolve(args.flags['runtime-dir']) } : {}),
+      ...(typeof args.flags['harness-dir'] === 'string' ? { harnessDir: resolve(args.flags['harness-dir']) } : {}),
+    })
+    print({
+      ok: true,
+      outDir: result.outDir,
+      files: result.files,
+      warnings: result.warnings,
+      next: 'cd <out> && pnpm install && pnpm run build && node --test tests/*.test.mjs；部署模板见 scripts/ 与 .env.example',
+    })
   } catch (e) {
     fail(e instanceof Error ? e.message : String(e))
   }

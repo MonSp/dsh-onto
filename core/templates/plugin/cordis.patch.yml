@@ -1,0 +1,3 @@
+- insert:
+    - id: __PLUGIN_INSERT_ID__
+      name: '__PKG_ID__'
