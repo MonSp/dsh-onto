@@ -9,6 +9,7 @@
  * @module @dsh-onto/backend/agent-tools
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { isAbsolute, join, relative, resolve, dirname as pathDirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
@@ -22,8 +23,10 @@ import {
   SOURCE_TYPES,
   abstractCounterexampleDrafts,
   abstractSkillDrafts,
+  buildDefaultReportSurface,
   buildDiffTable,
   buildRunRecord,
+  buildRunReport,
   buildTaskSignature,
   compareRunRecords,
   deriveFeatures,
@@ -33,6 +36,7 @@ import {
   isValidId,
   isSafeRelPath,
   listExperienceNotes,
+  listReportPages,
   listRunRecords,
   loadExperienceNote,
   loadPackage,
@@ -44,9 +48,12 @@ import {
   reviewExperienceNote,
   runScenario,
   saveExperienceNote,
+  saveReportPage,
   saveRunRecord,
+  validateReportSurface,
   verifyDerived,
   writeQualityReport,
+  type A2uiSurfaceMessage,
   type DraftCandidate,
   type DraftItem,
   type DataBasisInput,
@@ -60,6 +67,7 @@ import {
   type RunArchive,
   type RunDiff,
   type RunRecord,
+  type RunReport,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SkeletonRecord,
@@ -78,6 +86,7 @@ import {
   recalledAnswerPhrases,
   registerServerDir,
   rememberPhrases,
+  recallPhrases,
   renderBatchText,
   renderExportText,
   renderRunDiffText,
@@ -768,6 +777,98 @@ export function exportSummaryOf(exported: { locator: string; archive: RunArchive
     forbiddenPhraseHitCount: s.forbiddenPhraseHitCount,
     humanReviewRequired: true,
   }
+}
+
+/* ------------------------- chat-run-report S2.3：报表工具面 ------------------------- */
+
+/** show_run_report 模型面精简值：证据/叙述不进模型面（人审面经 wire getRunReport）。 */
+export interface RunReportToolValue {
+  runRef: RunReport['runRef']
+  summary: {
+    candidateCount: number
+    excludedCount: number
+    maxRiskScore: number | null
+    hitRuleCount: number
+    humanReviewRequired: true
+    auditPassed: boolean
+    dataStatus?: string
+    contractStatus?: string
+  }
+  candidates: Array<{
+    candidateId: string
+    objectRef: string
+    riskScore: number
+    riskLevel?: string
+    hitRuleIds: string[]
+    pendingCheckCount: number
+    pendingVerification: boolean
+  }>
+  surface: A2uiSurfaceMessage
+  surfaceSource: 'model' | 'default'
+  humanReviewRequired: true
+}
+
+/** RunReport + surface → 模型面精简值（无证据/叙述自由文本）。 */
+export function leanRunReport(
+  report: RunReport,
+  surface: A2uiSurfaceMessage,
+  surfaceSource: 'model' | 'default',
+): RunReportToolValue {
+  return {
+    runRef: { ...report.runRef, package: { ...report.runRef.package } },
+    summary: {
+      candidateCount: report.summary.candidateCount,
+      excludedCount: report.summary.excludedCount,
+      maxRiskScore: report.summary.maxRiskScore,
+      hitRuleCount: report.summary.hitRuleCount,
+      humanReviewRequired: true,
+      auditPassed: report.summary.auditPassed,
+      ...(report.summary.dataStatus === undefined ? {} : { dataStatus: report.summary.dataStatus }),
+      ...(report.summary.contractStatus === undefined
+        ? {}
+        : { contractStatus: report.summary.contractStatus }),
+    },
+    candidates: report.candidates.map((c) => ({
+      candidateId: c.candidateId,
+      objectRef: c.objectRef,
+      riskScore: c.riskScore,
+      ...(c.riskLevel === undefined ? {} : { riskLevel: c.riskLevel }),
+      hitRuleIds: [...c.hitRuleIds],
+      pendingCheckCount: c.pendingChecks.length,
+      pendingVerification: c.pendingVerification,
+    })),
+    surface,
+    surfaceSource,
+    humanReviewRequired: true,
+  }
+}
+
+/** 模型面回退文本（渲染失败/无 toolview 时宿主按此文渲染）。 */
+export function renderRunReportText(value: RunReportToolValue): string {
+  const r = value.runRef
+  const s = value.summary
+  const lines = [
+    `运行报表 ${r.runId} · ${r.package.name}@${r.package.version} · ${r.scenarioId}`,
+    `候选 ${s.candidateCount} · 排除 ${s.excludedCount} · 最高分 ${s.maxRiskScore === null ? '无' : s.maxRiskScore}`
+      + ` · 命中规则 ${s.hitRuleCount} · 审计${s.auditPassed ? '过' : '未过'} · 人审必需`,
+    ...value.candidates.map(
+      (c) =>
+        `- ${c.candidateId} · ${c.objectRef} · ${c.riskScore}`
+        + ` · 规则 ${c.hitRuleIds.join(',') || '无'}`
+        + (c.pendingVerification ? ' · 待核实' : ''),
+    ),
+    `交互报表（surface ${value.surfaceSource}）在会话中渲染；详情经权限校验取数，humanReviewRequired=true。`,
+  ]
+  return retreatRenderText(lines.join('\n'), recallPhrases(r.runId) ?? [])
+}
+
+/** presentationMeta 投影：只携 runRef + 布局引用，无数值、无短语（R 桥接同 toolOut）。 */
+export function projectRunReportMeta<R>(value: RunReportToolValue): R {
+  return {
+    runRef: value.runRef,
+    surface: value.surface,
+    surfaceSource: value.surfaceSource,
+  } as unknown as R
 }
 
 /** 解析批量场景清单：缺省（undefined/null/空数组）全场景；显式列表去重保序，错型 fail-fast。 */
@@ -2037,6 +2138,231 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       }),
     }))
 
+  reg('run', () => defineTool({
+      name: 'show_run_report',
+      description:
+        '打开一次运行的交互报表（对话内渲染：摘要卡/候选表/证据展开；只读）。'
+        + 'surface 可按问题组织视图（A2UI 1.0 子集，catalogId "dsh-onto/report/v1"；组件 '
+        + 'Card/Stat/Row/Column/Text/Table/Accordion/Button；数值槽位只接受字段绑定，如 '
+        + '{"@path":"/summary/maxRiskScore"}，Table 列 field 用候选行字段 '
+        + 'candidateId/objectRef/riskScore/riskLevel/hitRuleIds/pendingChecks/pendingVerification；'
+        + 'Table props: rowsBind="/candidates"、columns、expandField、sort、filter；'
+        + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"）。'
+        + '省略 surface 用默认模板。数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
+        + '展开详情经权限校验取数。组件事件只做筛选/展开/跳转。',
+      parameters: {
+        runId: {
+          type: 'string',
+          required: true,
+          description: '运行 ID（如 run-abc12345；run_scenario 结果或 list_runs 可得）',
+        },
+        surface: {
+          type: 'json',
+          description:
+            'A2UI 1.0 子集 surface：{version:"1.0",type:"createSurface",surfaceId,catalogId:"dsh-onto/report/v1",root:{id,type,props,children}}。'
+            + '缺省省略=默认模板（摘要卡+候选表+证据展开）。',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runRef: { type: 'json', required: true },
+            summary: { type: 'json', required: true },
+            candidates: { type: 'json', required: true },
+            surface: { type: 'json', required: true },
+            surfaceSource: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) =>
+          textBlock(renderRunReportText(value as unknown as RunReportToolValue)),
+        presentationMeta: (_args, value) =>
+          projectRunReportMeta(value as unknown as RunReportToolValue),
+      },
+      execute: toolExecute(
+        (args: { runId: string; surface?: unknown }) => {
+          // M1-C 元组：运行历史（history）——身份/角色面（target=null 不查实例面，同 list_runs）
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
+          const record = loadRunRecord(ws.root, args.runId)
+          if (strict) {
+            assertBusinessRun(requireBusinessIdentity('history'), record)
+          }
+          const report = buildRunReport(record)
+          const phrases = [...new Set(record.redlines.filter((p) => p !== ''))]
+          let surface: A2uiSurfaceMessage
+          let surfaceSource: 'model' | 'default'
+          if (args.surface === undefined || args.surface === null) {
+            surface = buildDefaultReportSurface()
+            surfaceSource = 'default'
+          } else {
+            const validation = validateReportSurface(args.surface)
+            if (!validation.ok) {
+              throw new AgentToolError(
+                'INVALID_ARGS',
+                `surface 校验失败: ${validation.errors.map((e) => `${e.code}@${e.where}`).join('; ')}`,
+              )
+            }
+            surface = validation.value
+            surfaceSource = 'model'
+          }
+          const value = leanRunReport(report, surface, surfaceSource)
+          return toolOut(enforceOutputPolicy(value, phrases))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }))
+
+  reg('run', () => defineTool({
+      name: 'save_report_page',
+      description:
+        '把对话中用过的报表 surface 沉淀为可复用插件页（spec chat-run-report S2.7）。'
+        + 'surface 与 show_run_report 同一契约（A2UI 1.0 子集，数值槽位只准字段绑定）；'
+        + '同一 name 重复沉淀覆盖同名页（pageId 缺省按 name 派生）。'
+        + '写面仅工作区 reports/ 工件（不进包、不触发激活、ISSUED 不动）；'
+        + '沉淀后在插件「报表页」可见，可换 runId 复用同一视图。页面只读展示，不开写操作入口。',
+      parameters: {
+        name: { type: 'string', required: true, description: '报表页名称（同名覆盖沉淀）' },
+        runId: {
+          type: 'string',
+          required: true,
+          description: '来源运行 ID（溯源 createdFrom；strict 下越权 run 拒绝）',
+        },
+        surface: {
+          type: 'json',
+          required: true,
+          description: 'A2UI 1.0 子集 surface（同 show_run_report 参数契约）',
+        },
+        pageId: { type: 'string', description: '可选页 ID（缺省按 name 派生 rp-<hash12>；同 ID 覆盖）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            pageId: { type: 'string', required: true },
+            name: { type: 'string', required: true },
+            runId: { type: 'string', required: true },
+            savedAt: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { pageId: string; name: string; runId: string }
+          return textBlock(
+            retreatRenderText(
+              `报表页已沉淀：${v.pageId} · ${v.name} · 来源 ${v.runId}（插件「报表页」可换 run 复用）`,
+              recallPhrases(v.runId) ?? [],
+            ),
+          )
+        },
+      },
+      execute: toolExecute(
+        (args: { name: string; runId: string; surface?: unknown; pageId?: string }) => {
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
+          const record = loadRunRecord(ws.root, args.runId)
+          const identity = strict ? requireBusinessIdentity('history') : undefined
+          if (identity) assertBusinessRun(identity, record)
+          const report = buildRunReport(record)
+          const phrases = [...new Set(record.redlines.filter((p) => p !== ''))]
+          const validation = validateReportSurface(args.surface)
+          if (!validation.ok) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `surface 校验失败: ${validation.errors.map((e) => `${e.code}@${e.where}`).join('; ')}`,
+            )
+          }
+          const name = typeof args.name === 'string' ? args.name.trim() : ''
+          if (name === '') {
+            throw new AgentToolError('INVALID_ARGS', 'name 必须是非空字符串')
+          }
+          const pageId =
+            typeof args.pageId === 'string' && args.pageId.trim() !== ''
+              ? args.pageId.trim()
+              : `rp-${createHash('sha256').update(name).digest('hex').slice(0, 12)}`
+          const savedAt = new Date().toISOString()
+          saveReportPage(ws.root, {
+            pageId,
+            name,
+            surface: validation.value,
+            createdFrom: report.runRef,
+            savedAt,
+            ...(identity ? { accessBinding: runAccessBinding(identity) } : {}),
+          })
+          return toolOut(
+            enforceOutputPolicy(
+              { pageId, name, runId: args.runId, savedAt, humanReviewRequired: true as const },
+              phrases,
+            ),
+          )
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }))
+
+  reg('run', () => defineTool({
+      name: 'list_report_pages',
+      description: '列出已沉淀的报表页摘要（pageId/名称/来源 run）。只读——「有哪些可复用报表页」发现入口。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            pages: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  pageId: { type: 'string', required: true },
+                  name: { type: 'string', required: true },
+                  runId: { type: 'string', required: true },
+                  package: { type: 'string', required: true },
+                  savedAt: { type: 'string', required: true },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          const pages = (value as { pages: Array<Record<string, unknown>> }).pages
+          if (pages.length === 0) return textBlock('（无报表页）')
+          return textBlock(
+            pages
+              .map(
+                (p) =>
+                  `- ${String(p.pageId)} · ${String(p.name)} · 来源 ${String(p.runId)}`
+                  + ` · ${String(p.package)} · ${String(p.savedAt)}`,
+              )
+              .join('\n'),
+          )
+        },
+      },
+      execute: toolExecute(
+        () => {
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
+          const binding = strict ? runAccessBinding(requireBusinessIdentity('history')) : undefined
+          const pages = listReportPages(ws.root)
+            .filter((p) => !strict || p.accessBinding === binding)
+            .map((p) => ({
+              pageId: p.pageId,
+              name: p.name,
+              runId: p.createdFrom.runId,
+              package: `${p.createdFrom.package.name}@${p.createdFrom.package.version}`,
+              savedAt: p.savedAt,
+            }))
+          return toolOut(enforceOutputPolicy({ pages }, redlinesForRuns(ws, {})))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }))
+
   reg('dev', () => defineTool({
       name: 'list_drafts',
       description:
@@ -2268,14 +2594,16 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         render: (args, value) => {
           const a = args as { name?: string; version?: string; analysisMode?: string }
-          return textBlock(
-            renderRunText(value as unknown as ScenarioRunResult, undefined, {
-              ...(typeof a.name === 'string' && typeof a.version === 'string'
-                ? { package: { name: a.name, version: a.version } }
-                : {}),
-              ...(typeof a.analysisMode === 'string' ? { analysisMode: a.analysisMode } : {}),
-            }),
-          )
+          const result = value as unknown as ScenarioRunResult
+          const text = renderRunText(result, undefined, {
+            ...(typeof a.name === 'string' && typeof a.version === 'string'
+              ? { package: { name: a.name, version: a.version } }
+              : {}),
+            ...(typeof a.analysisMode === 'string' ? { analysisMode: a.analysisMode } : {}),
+          })
+          // chat-run-report：运行→打开报表动线（提示行同样过渲染闸）
+          const hint = `\n查看交互报表：show_run_report(runId=${result.runId})`
+          return textBlock(retreatRenderText(text + hint, recallPhrases(result.runId) ?? []))
         },
       },
       execute: toolExecute(

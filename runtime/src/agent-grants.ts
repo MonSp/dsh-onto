@@ -29,6 +29,11 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'compare_runs',
   'export_audit',
   'list_runs',
+  // 对话报表（chat-run-report S2.3/S2.7）：打开交互报表、沉淀/列出报表页
+  // （save 写面仅工作区 reports/ 工件，不进包不触发激活）
+  'show_run_report',
+  'save_report_page',
+  'list_report_pages',
   // 经验闭环（experience-loop P2-2 / P4-3；closed-loop E2-1）
   'recall_experience',
   'annotate_experience',

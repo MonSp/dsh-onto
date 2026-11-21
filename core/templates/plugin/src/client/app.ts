@@ -2,6 +2,10 @@ import { h, useState, useEffect, setReact } from './react'
 import type { ReactNode, Ctx, PluginModule } from './types'
 import { zh, en } from './locale'
 import { CSS } from './styles'
+import { createReportToolView, ReportSurface } from './report'
+import { buildDefaultReportSurface } from '@dsh-onto/core/surface'
+import type { RunReport } from '@dsh-onto/core/report'
+import type { ReportPage } from '@dsh-onto/core/reportpage'
 
 const NS = '__NS__'
 const PANEL_ID = '__PANEL_ID__'
@@ -42,37 +46,6 @@ interface ScenarioRow {
   goal: string
 }
 
-interface EvidenceEntry {
-  ruleId: string
-  score: number
-  evidence: string
-}
-
-interface PendingCheck {
-  ruleId?: string
-  note: string
-}
-
-interface CandidateRow {
-  candidateId: string
-  objectRef: string
-  riskScore: number
-  hitRuleIds: string[]
-  evidenceChains: EvidenceEntry[]
-  pendingChecks: PendingCheck[]
-  pendingVerification?: boolean
-}
-
-interface RunResult {
-  runId: string
-  scenarioId: string
-  candidates: CandidateRow[]
-  humanReviewRequired: true
-  dataStatus?: string
-  contractStatus?: string
-  audit?: { passed: boolean }
-}
-
 function statusTone(s: string | undefined): 'ok' | 'warn' | 'err' | undefined {
   if (s === 'verified' || s === 'conformant') return 'ok'
   if (s === 'conditional' || s === 'pending') return 'warn'
@@ -87,7 +60,7 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [scenarioId, setScenarioId] = useState(DEFAULT_SCENARIO)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [result, setResult] = useState<RunResult | null>(null)
+  const [report, setReport] = useState<RunReport | null>(null)
 
   useEffect(() => {
     if (!api) return
@@ -117,9 +90,9 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
     void (async () => {
       setError('')
       setBusy('run')
-      setResult(null)
+      setReport(null)
       try {
-        const out = unwrap<{ result: RunResult }>(
+        const out = unwrap<{ result: { runId: string } }>(
           await api.runScenario({
             name: PKG_NAME,
             version: PKG_VERSION,
@@ -128,7 +101,11 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             analysisMode: 'explore',
           }),
         )
-        setResult(out.result)
+        // 固定页与对话报表共用 getRunReport 同一投影（chat-run-report S2.5）
+        const rep = unwrap<{ report: RunReport }>(
+          await api.getRunReport({ runId: out.result.runId }),
+        )
+        setReport(rep.report)
       } catch (e) {
         setError(errText(e))
       } finally {
@@ -137,86 +114,29 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
     })()
   }
 
-  const cands = result?.candidates ?? []
-
   const resultView = (): ReactNode[] => {
-    if (!result) return [h('p', { key: 'e', className: 'txri-note' }, t('empty'))]
+    if (!report) return [h('p', { key: 'e', className: 'txri-note' }, t('empty'))]
     return [
-      h(
-        'p',
-        { key: 'rid', className: 'txri-note txri-mono' },
-        `${t('runId')}: ${result.runId}`,
-      ),
+      h('p', { key: 'rid', className: 'txri-note txri-mono' }, `${t('runId')}: ${report.runRef.runId}`),
       h(
         'div',
         { key: 'meta', className: 'txri-bar' },
-        result.dataStatus !== undefined
-          ? h('span', { className: `tag ${statusTone(result.dataStatus) ?? ''}` }, `${t('dataStatus')}: ${result.dataStatus}`)
+        report.summary.dataStatus !== undefined
+          ? h('span', { className: `tag ${statusTone(report.summary.dataStatus) ?? ''}` }, `${t('dataStatus')}: ${report.summary.dataStatus}`)
           : null,
-        result.contractStatus !== undefined
-          ? h('span', { className: `tag ${statusTone(result.contractStatus) ?? ''}` }, `${t('contractStatus')}: ${result.contractStatus}`)
+        report.summary.contractStatus !== undefined
+          ? h('span', { className: `tag ${statusTone(report.summary.contractStatus) ?? ''}` }, `${t('contractStatus')}: ${report.summary.contractStatus}`)
           : null,
-        result.audit !== undefined
-          ? h('span', { className: `tag ${result.audit.passed ? 'ok' : 'err'}` }, `${t('audit')}: ${result.audit.passed ? 'PASS' : 'FAIL'}`)
-          : null,
+        h('span', { className: `tag ${report.summary.auditPassed ? 'ok' : 'err'}` }, `${t('audit')}: ${report.summary.auditPassed ? 'PASS' : 'FAIL'}`),
         h('span', { className: 'tag ok' }, t('humanReview')),
       ),
-      cands.length === 0
-        ? h('p', { key: 'nc', className: 'txri-note' }, t('noCandidates'))
-        : h(
-            'table',
-            { key: 'ct' },
-            h(
-              'thead',
-              null,
-              h(
-                'tr',
-                null,
-                h('th', null, 'candidateId'),
-                h('th', null, t('objectRef')),
-                h('th', null, t('riskScore')),
-                h('th', null, t('hitRules')),
-              ),
-            ),
-            h(
-              'tbody',
-              null,
-              ...cands.map((c) =>
-                h(
-                  'tr',
-                  { key: c.candidateId },
-                  h('td', { className: 'txri-mono' }, c.candidateId),
-                  h('td', { className: 'txri-mono' }, c.objectRef),
-                  h('td', null, String(c.riskScore)),
-                  h('td', { className: 'txri-mono' }, (c.hitRuleIds ?? []).join(', ') || '—'),
-                ),
-              ),
-            ),
-          ),
-      ...cands.slice(0, 3).map((c, i) =>
-        h(
-          'div',
-          { key: `d${i}`, className: 'txri-panel', style: { marginBottom: '8px' } },
-          h('strong', null, `${c.candidateId} · ${t('evidence')}`),
-          (c.evidenceChains ?? []).length === 0
-            ? h('p', { className: 'txri-note' }, t('evidenceEmpty'))
-            : h(
-                'ul',
-                null,
-                ...(c.evidenceChains ?? []).map((e, j) =>
-                  h('li', { key: j, className: 'txri-mono' }, `${e.ruleId}: ${e.evidence} (${e.score})`),
-                ),
-              ),
-          h('strong', null, t('pendingChecks')),
-          (c.pendingChecks ?? []).length === 0
-            ? h('p', { className: 'txri-note' }, t('pendingEmpty'))
-            : h(
-                'ul',
-                null,
-                ...(c.pendingChecks ?? []).map((p, j) => h('li', { key: j }, p.note)),
-              ),
-        ),
-      ),
+      h(ReportSurface, {
+        key: 'rs',
+        surface: buildDefaultReportSurface(),
+        report,
+        t,
+        navigate: () => {},
+      }),
     ]
   }
 
@@ -250,12 +170,94 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   )
 }
 
+/** 报表页（chat-run-report S2.7）：沉淀的 surface 换 run 复用（绑定按稳定字段引用重解析）。 */
+function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
+  const { t, ctx } = props
+  const api = ctx.remote['ontoRuntime']
+  const [pages, setPages] = useState<ReportPage[]>([])
+  const [pageId, setPageId] = useState('')
+  const [runs, setRuns] = useState<Array<{ runId: string }>>([])
+  const [runId, setRunId] = useState('')
+  const [report, setReport] = useState<RunReport | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!api) return
+    void (async () => {
+      setError('')
+      try {
+        const out = unwrap<{ pages: ReportPage[] }>(await api.listReportPages())
+        const list = out.pages ?? []
+        setPages(list)
+        if (list.length > 0) {
+          setPageId((prev) => (prev !== '' ? prev : list[0].pageId))
+          setRunId((prev) => (prev !== '' ? prev : list[0].createdFrom.runId))
+        }
+        const runsOut = unwrap<{ runs: Array<{ runId: string }> }>(await api.listRuns())
+        setRuns(runsOut.runs ?? [])
+      } catch (e) {
+        setError(errText(e))
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!api || pageId === '' || runId === '') return
+    void (async () => {
+      setError('')
+      setReport(null)
+      try {
+        const out = unwrap<{ report: RunReport }>(await api.getRunReport({ runId }))
+        setReport(out.report)
+      } catch (e) {
+        setError(errText(e))
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId, runId])
+
+  const page = pages.find((p) => p.pageId === pageId)
+  return h(
+    'div',
+    { className: 'txri-gov' },
+    h('h3', null, t('pages')),
+    error ? h('p', { className: 'txri-err' }, `${t('error')}: ${error}`) : null,
+    pages.length === 0
+      ? h('p', { className: 'txri-note' }, t('pagesEmpty'))
+      : h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'txri-bar' },
+            h('label', null, `${t('pages')}: `),
+            h(
+              'select',
+              { value: pageId, onChange: (e: { target: { value: string } }) => setPageId(e.target.value) },
+              ...pages.map((p) => h('option', { key: p.pageId, value: p.pageId }, `${p.name} (${p.pageId})`)),
+            ),
+            h('label', null, `${t('pagesRun')}: `),
+            h(
+              'select',
+              { value: runId, onChange: (e: { target: { value: string } }) => setRunId(e.target.value) },
+              ...runs.map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
+            ),
+          ),
+          page && report
+            ? h(ReportSurface, { surface: page.surface, report, t, navigate: () => {} })
+            : h('p', { className: 'txri-note' }, t('reportLoading')),
+        ),
+  )
+}
+
 export function createPlugin(React: typeof import('react')): PluginModule {
   setReact(React)
 
   return {
-    inject: ['slots', 'locale', 'remote', 'remote.ontoRuntime'],
+    inject: ['slots', 'locale', 'remote', 'remote.ontoRuntime', 'layout'],
     apply(ctx: Ctx) {
+      const t = ctx.locale.bind(NS)
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), '__PLUGIN_INSERT_ID__: dictionaries')
 
       ctx.effect(() => {
@@ -276,7 +278,31 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       }
 
       function Panel() {
-        return h(RunPanel, { t: ctx.locale.bind(NS), ctx })
+        return h(
+          'div',
+          null,
+          h(RunPanel, { t, ctx }),
+          h(ReportPages, { t, ctx }),
+        )
+      }
+
+      // 对话内交互报表（chat-run-report S2.5）：tool.call.toolview keyed = show_run_report
+      const navigate = (): void => {
+        try {
+          ctx.layout?.selectPanel(PANEL_ID)
+        } catch {
+          /* 面板未注册时跳转静默降级（回退文本仍在） */
+        }
+      }
+      const ReportToolView = createReportToolView({
+        api: { getRunReport: (request: { runId: string }) => api().getRunReport(request) },
+        t,
+        navigate,
+      })
+      function api() {
+        const remote = ctx.remote['ontoRuntime']
+        if (!remote) throw new Error('remote.ontoRuntime missing')
+        return remote
       }
 
       ctx.slots.inject('main', () =>
@@ -284,8 +310,14 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       )
       ctx.slots.inject('sidebar.panellist', () =>
         ctx.slots.register(
-          { name: 'sidebar.panellist', id: PANEL_ID, order: 3, locale: NS, label: () => ctx.locale.bind(NS)('panel') },
+          { name: 'sidebar.panellist', id: PANEL_ID, order: 3, locale: NS, label: () => t('panel') },
           PanelIcon,
+        ),
+      )
+      ctx.slots.inject('tool.call.toolview', () =>
+        ctx.slots.register(
+          { name: 'tool.call.toolview', key: 'show_run_report', locale: NS },
+          ReportToolView,
         ),
       )
     },

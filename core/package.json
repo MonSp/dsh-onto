@@ -10,7 +10,10 @@
   },
   "exports": {
     ".": "./dist/index.js",
-    "./cli": "./dist/cli.js"
+    "./cli": "./dist/cli.js",
+    "./report": "./dist/report.js",
+    "./surface": "./dist/surface.js",
+    "./reportpage": "./dist/reportpage.js"
   },
   "bin": {
     "dsh-onto": "./dist/cli.js"

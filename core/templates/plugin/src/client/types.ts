@@ -23,6 +23,7 @@ export interface Ctx {
   locale: LocaleRuntime
   slots: SlotsRuntime
   remote: Record<string, Record<string, RemoteFn> | undefined>
+  layout?: { selectPanel(panelId: string): void }
 }
 
 export interface ModuleRequire {

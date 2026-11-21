@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { extractSnapshotRows, transformSourceRows, runScenario, loadPackage } from '@dsh-onto/core'
+import { extractSnapshotRows, transformSourceRows, runScenario, loadPackage, buildRunRecord, buildRunReport } from '@dsh-onto/core'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -58,4 +58,31 @@ test('页面与 Agent 同源：runScenario 单一执行路径（同快照同分�
       .map((c) => `${c.candidateId}@${Math.round(c.riskScore * 1e6)}|${[...c.hitRuleIds].sort().join(',')}`)
       .sort()
   assert.deepEqual(proj(ra), proj(rb))
+})
+
+test('报表投影：buildRunReport 与运行结果逐项同分（页面/对话共用投影）', () => {
+  const rows = fixtureRows()
+  const { dataset } = transformSourceRows({ rows, maps: config.maps })
+  const result = runScenario(packageDir, config.scenarioId, dataset)
+  const meta = loadPackage(packageDir).meta
+  const report = buildRunReport(
+    buildRunRecord({
+      package: { name: meta.name, version: meta.version },
+      dataset,
+      result,
+      redlines: [],
+    }),
+  )
+  assert.equal(report.candidates.length, result.candidates.length)
+  for (const [i, c] of result.candidates.entries()) {
+    const row = report.candidates[i]
+    assert.equal(row.candidateId, c.candidateId)
+    assert.equal(row.objectRef, c.objectRef)
+    assert.equal(row.riskScore, c.riskScore)
+    assert.deepEqual(row.hitRuleIds, c.hitRuleIds)
+    assert.equal(row.evidenceChains.length, c.evidenceChains.length)
+  }
+  assert.equal(report.summary.humanReviewRequired, true)
+  assert.equal(report.summary.candidateCount, result.candidates.length)
+  assert.equal(report.runRef.runId, result.runId)
 })

@@ -95,13 +95,16 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),
       desc('ontoRuntime', 'showRun', true, 'RSH', 'Show one run record (human-review face).'),
+      desc('ontoRuntime', 'getRunReport', true, 'RGR', 'Run report projection (human-review face).'),
+      desc('ontoRuntime', 'listReportPages', false, 'RLP', 'List saved report pages (human-review face).'),
+      desc('ontoRuntime', 'getReportPage', true, 'RGP', 'Show one saved report page (human-review face).'),
     ]
 
     const React = require('react') as typeof import('react')
     const ui = createPlugin(React)
 
     return {
-      inject: ['remote', 'slots', 'locale'],
+      inject: ['remote', 'slots', 'locale', 'layout'],
       async apply(ctx: Ctx): Promise<void> {
         try {
           await ctx.remote.$mount({ package: '__PKG_ID__', descriptors: allDescriptors })
@@ -114,7 +117,7 @@ window.__ModuleLoader__.load({
         if (typeof nested.plugin === 'function' && ctx.slots && ctx.locale) {
           nested.plugin({
             name: '__PLUGIN_INSERT_ID__-run-ui',
-            inject: ['remote.ontoRuntime', 'slots', 'locale', 'remote'],
+            inject: ['remote.ontoRuntime', 'slots', 'locale', 'remote', 'layout'],
             apply: (c: unknown) => ui.apply(c as never),
           })
         } else if (ctx.slots && ctx.locale) {

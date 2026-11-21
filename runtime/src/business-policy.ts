@@ -260,6 +260,19 @@ export function assertBusinessRun(identity: BusinessIdentity, run: RunRecord): R
   return run
 }
 
+/** 报表页访问面（chat-run-report S2.7）：strict 下 accessBinding 必须相符（RunRecord 同口径）。 */
+export function assertBusinessReportPage(
+  identity: BusinessIdentity,
+  page: { accessBinding?: string },
+): void {
+  if (page.accessBinding !== runAccessBinding(identity)) {
+    throw new AgentToolError(
+      'OBJECT_NOT_GRANTED',
+      'Report page is not accessible to the current business identity and scope',
+    )
+  }
+}
+
 /**
  * 业务授权入口门（六元组接线面）：可解析身份 → 全量 {@link authorize}（三查 + 角色 + dataScope），
  * 拒绝抛 {@link AgentToolError} `OBJECT_NOT_GRANTED`（批准卡不是授予权限的工具——权限判定在批准之前）。

@@ -30,4 +30,12 @@ export const CSS = `
 .txri-gov .txri-panel { border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; padding: 10px; }
 .txri-gov ul { margin: 4px 0 10px; padding-left: 18px; }
 .txri-gov li { margin: 2px 0; }
+.txri-gov .txri-card { border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.txri-gov .txri-card > h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.txri-gov .txri-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0; }
+.txri-gov .txri-stat { min-width: 96px; }
+.txri-gov .txri-stat .k { display: block; opacity: 0.65; font-size: 11px; }
+.txri-gov .txri-stat .v { font-size: 15px; font-weight: 600; }
+.txri-gov .txri-thbtn { cursor: pointer; border: none; background: transparent; color: inherit; font: inherit; font-weight: 600; padding: 0; opacity: 0.85; }
+.txri-gov .txri-exp { margin: 4px 0 8px; padding: 6px 8px; border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); }
 `
