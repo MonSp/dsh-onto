@@ -219,8 +219,9 @@ pnpm install; pnpm run build; node --test tests\*.test.mjs
 
 # 6.3 装进独立 profile（无 backend/workbench）
 powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
-# 6.4 播种已签发包并激活（受控导入 ≠ 激活是两步）
+# 6.4 原样导入已签发包，再由授权部署人单独激活
 node scripts\seed-release.mjs
+node scripts\seed-release.mjs activate "授权部署人姓名"
 # 6.5 组合断言
 powershell -ExecutionPolicy Bypass -File scripts\dump-config.ps1
 # 必须：OK: @dsh-<domain>/app present / backend absent / workbench absent
@@ -288,7 +289,8 @@ pnpm dsh --profile dsh-<domain> --no-open
 | `run --data` 崩溃（如 `.map` of undefined） | `run --data` 吃的是**转换后 dataset**（同 `examples/*-run.json` 形态），不是原始 API 响应体；原始快照请走 §4 replay 或先映射转换 |
 | `--check` 退出码 2 | 基线有 diff——看 comparison.diffs（业务口径变了） |
 | `Business identity is unavailable` | `DSH_BIZ_USER_ID/TENANT/ROLES` 不全 |
-| `RELEASE_NOT_ACTIVE` | 未跑 seed-release.mjs 或 profile 不对 |
+| `RELEASE_NOT_ACTIVE` | 检查 profile，确认已导入并单独执行 `seed-release.mjs activate <授权部署人>` |
+| `暂不支持 instanceIds` | 配置驱动连接器首版不支持按实例查询；不要用无筛选的请求替代单实例查询 |
 | 页面 `remote.ontoRuntime missing` | `$mount` 失败，看浏览器 console `[dsh-<domain>]` |
 | dump 断言失败 | 确认装的是生成插件而非 backend |
 

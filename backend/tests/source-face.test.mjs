@@ -4,7 +4,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +26,48 @@ const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const WST_SRC = join(REPO, 'packages', 'wst', '1.0.0')
 const WST_SNAPSHOT = join(REPO, 'mock-services', 'wst-api', 'data', 'snapshot.json')
 const SCN = 'SCN-WST-HAZARD-MIX'
+
+test('脚手架部署：保留原签发、重复导入幂等、显式激活、冲突不改写目标', () => {
+  const root = mkFence()
+  try {
+    const outDir = join(root, 'app')
+    const { config } = generatePlugin({ versionDir: WST_SRC, scenarioId: SCN, sourceId: 'SRC-WST-CORE', outDir })
+    symlinkSync(join(REPO, 'backend', 'node_modules'), join(outDir, 'node_modules'), 'junction')
+    const profile = join(root, 'profile')
+    const seed = (dir, ...args) => spawnSync(process.execPath, [join(outDir, 'scripts', 'seed-release.mjs'), ...args], {
+      encoding: 'utf8', env: { ...process.env, [config.env.profileDir]: dir },
+    })
+    const pkgFile = (dir) => join(dir, 'dsh-onto', 'workspace', 'packages', 'wst-ops', '1.0.0', 'package.yaml')
+    const active = join(profile, 'dsh-onto', 'releases', 'active.json')
+    const original = readFileSync(join(WST_SRC, 'package.yaml'))
+    const first = seed(profile)
+    assert.equal(first.status, 0, first.stderr)
+    assert.deepEqual(readFileSync(pkgFile(profile)), original)
+    const again = seed(profile, 'import')
+    assert.equal(again.status, 0, again.stderr)
+    assert.match(again.stdout, /idempotent=true/)
+    assert.notEqual(seed(profile, 'activate').status, 0)
+    assert.notEqual(seed(profile, 'activate', 'agent').status, 0)
+    assert.equal(existsSync(active), false)
+    const activation = seed(profile, 'activate', '测试部署人')
+    assert.equal(activation.status, 0, activation.stderr)
+    assert.equal(JSON.parse(readFileSync(active, 'utf8')).packages['wst-ops'], '1.0.0')
+
+    const conflict = join(root, 'conflict')
+    const target = pkgFile(conflict)
+    mkdirSync(join(target, '..'), { recursive: true })
+    cpSync(WST_SRC, join(target, '..'), { recursive: true })
+    const existing = Buffer.concat([original, Buffer.from('\n# existing version\n')])
+    writeFileSync(target, existing)
+    const rejected = seed(conflict)
+    assert.notEqual(rejected.status, 0)
+    assert.match(rejected.stderr, /RELEASE_CONFLICT|already exists with different content/)
+    assert.deepEqual(readFileSync(target), existing)
+    assert.deepEqual(readFileSync(join(WST_SRC, 'package.yaml')), original)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 function expectInvalid(fn, label) {
   try {

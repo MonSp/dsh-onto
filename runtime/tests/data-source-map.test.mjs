@@ -176,6 +176,41 @@ test('collections/none：一次取完，paged=false', async () => {
 
 /* ─────────────────────────── complete=false 如实上报 ─────────────────────────── */
 
+test('instanceIds 不受支持时，取数前明确拒绝', async () => {
+  const { fetchImpl, calls } = fakeFetch({})
+  const connector = createMappedDataConnector({
+    baseUrl: 'http://api.test', shape: collectionsShape(), maps: [binMap], fetchImpl,
+  })
+  await assert.rejects(connector.fetch({ instanceIds: ['BIN-01'] }, scopeAll), /instanceIds/)
+  assert.equal(calls.length, 0)
+})
+
+test('collections：后续页格式错误不返回部分完整结果', async () => {
+  const { fetchImpl, calls } = fakeFetch({
+    bins: [{ items: [bin('BIN-01')], nextCursor: 'c2' }, { items: [null] }],
+  })
+  const connector = createMappedDataConnector({
+    baseUrl: 'http://api.test', shape: collectionsShape(), maps: [binMap], fetchImpl,
+  })
+  await assert.rejects(connector.fetch({}, scopeAll), /items 须为对象数组/)
+  assert.equal(calls.length, 2)
+})
+
+test('snapshot：坏 JSON、错误信封与合法空数组不会混淆', async () => {
+  const fetchBody = (body) => createMappedDataConnector({
+    baseUrl: 'http://api.test',
+    shape: { mode: 'snapshot', path: '/snapshot', collectionPaths: { bins: 'data.bins' }, pagination: { mode: 'none' } },
+    maps: [binMap], fetchImpl: async () => new Response(body),
+  }).fetch({}, scopeAll)
+  await assert.rejects(fetchBody('not json'), /不是有效 JSON/)
+  await assert.rejects(fetchBody('null'), /须为 JSON 对象/)
+  await assert.rejects(fetchBody('{"data":{}}'), /data\.bins 须为对象数组/)
+  await assert.rejects(fetchBody('{"data":{"bins":{}}}'), /data\.bins 须为对象数组/)
+  const empty = await fetchBody('{"data":{"bins":[]}}')
+  assert.equal(empty.complete, true)
+  assert.deepEqual(empty.dataset.objects, [])
+})
+
 test('complete=false：上游 completeField 显式 false → 如实上报 + truncatedReason', async () => {
   const { fetchImpl } = fakeFetch({
     bins: [{ items: [bin('BIN-01', '2026-11-11T10:00:00+08:00')], complete: false }],

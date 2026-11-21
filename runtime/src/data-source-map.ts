@@ -89,16 +89,24 @@ async function getJson(
   } catch (e) {
     throw new Error(`外部取数失败（${label}）：${e instanceof Error ? e.message : String(e)}`)
   }
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
   if (res.status !== 200) {
     throw new Error(`外部取数拒绝（${label} ${res.status}）`)
   }
-  return body
+  const body: unknown = await res.json().catch(() => {
+    throw new Error(`外部取数响应不是有效 JSON（${label}）`)
+  })
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error(`外部取数响应须为 JSON 对象（${label}）`)
+  }
+  return body as Record<string, unknown>
 }
 
-function pageItems(body: Record<string, unknown>, itemsPath: string): SourceRow[] {
+function pageItems(body: Record<string, unknown>, itemsPath: string, label: string): SourceRow[] {
   const raw = readField(body, itemsPath)
-  return Array.isArray(raw) ? (raw.filter((r) => r !== null && typeof r === 'object') as SourceRow[]) : []
+  if (!Array.isArray(raw) || raw.some((r) => r === null || typeof r !== 'object' || Array.isArray(r))) {
+    throw new Error(`外部取数响应 ${itemsPath} 须为对象数组（${label}）`)
+  }
+  return raw as SourceRow[]
 }
 
 interface CollectionFetch {
@@ -149,7 +157,7 @@ async function fetchCollection(
       const query = new URLSearchParams()
       if (cursor !== null) query.set(cursorParam, cursor)
       const body = await take(query)
-      rows.push(...pageItems(body, itemsPath))
+      rows.push(...pageItems(body, itemsPath, label))
       if (readField(body, completeField) === false) {
         complete = false
         upstreamIncomplete = true
@@ -172,7 +180,7 @@ async function fetchCollection(
       query.set(limitParam, String(pageSize))
       query.set(offsetParam, String(offset))
       const body = await take(query)
-      const got = pageItems(body, itemsPath)
+      const got = pageItems(body, itemsPath, label)
       rows.push(...got)
       if (readField(body, completeField) === false) {
         complete = false
@@ -187,7 +195,7 @@ async function fetchCollection(
     }
   } else {
     const body = await take(new URLSearchParams())
-    rows.push(...pageItems(body, itemsPath))
+    rows.push(...pageItems(body, itemsPath, label))
     if (readField(body, completeField) === false) {
       complete = false
       upstreamIncomplete = true
@@ -215,8 +223,7 @@ async function fetchSnapshot(
 
   const rows: SourceRows = {}
   for (const [key, jsonPath] of Object.entries(shape.collectionPaths ?? {})) {
-    const raw = readField(body, jsonPath)
-    rows[key] = Array.isArray(raw) ? (raw.filter((r) => r !== null && typeof r === 'object') as SourceRow[]) : []
+    rows[key] = pageItems(body, jsonPath, label)
   }
   const upstreamIncomplete = readField(body, completeField) === false
   return { rows, complete: !upstreamIncomplete, upstreamIncomplete }
@@ -252,6 +259,9 @@ export function createMappedDataConnector(opts: MappedDataConnectorOptions): Map
     nature: opts.kind === 'formal' ? 'business-source' : 'simulated',
     ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
     async fetch(query: DataQuery, scope): Promise<ConnectorFetchOutput> {
+      if (query.instanceIds?.length) {
+        throw new Error('配置驱动连接器暂不支持 instanceIds 查询；不会扩大取数范围')
+      }
       const wanted =
         query.objectTypes !== undefined && query.objectTypes.length > 0
           ? query.objectTypes

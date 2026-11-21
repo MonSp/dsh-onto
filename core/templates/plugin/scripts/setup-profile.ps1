@@ -49,7 +49,8 @@ try {
 
     Write-Host ""
     Write-Host "__PKG_ID__ profile '$ProfileName' ready (no backend/workbench)."
-    Write-Host "  Seed release:  node scripts\seed-release.mjs"
+    Write-Host "  Import:        node scripts\seed-release.mjs"
+    Write-Host '  Activate:      node scripts\seed-release.mjs activate "<authorizedBy>"'
     Write-Host "  Data source:   set __ENV_API_URL__ before launch (see .env.example)"
     Write-Host "  Identity:      set DSH_BIZ_USER_ID / DSH_BIZ_TENANT / DSH_BIZ_ROLES"
     Write-Host "  Launch:  pnpm dsh --profile $ProfileName --no-open"
