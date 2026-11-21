@@ -77,6 +77,21 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim() !== ''
 }
 
+/**
+ * 绑定信封归一：`{"@path": "/…"}`（A2UI 形态）或裸指针字符串 → 指针字符串；
+ * 数字/布尔等数据字面量、残缺信封 → null（数据槽位据此拒字面量）。
+ */
+export function bindPointer(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() !== '' ? value : null
+  if (isRecord(value)) {
+    const keys = Object.keys(value)
+    if (keys.length !== 1 || keys[0] !== '@path') return null
+    const p = value['@path']
+    return isNonEmptyString(p) ? p : null
+  }
+  return null
+}
+
 /** 校验 surface（工具入参与 client 渲染前共用同一闸口）。 */
 export function validateReportSurface(input: unknown): SurfaceValidation {
   const errors: SurfaceDiagnostic[] = []
@@ -163,10 +178,11 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
           err('SF_SLOT_LITERAL', where, 'Stat 数值槽位只允许 bind 绑定，拒绝字面量')
         }
         if (!isNonEmptyString(props.label)) err('SF_SHAPE', `${where}.props.label`, 'label 必填')
-        if (!isNonEmptyString(props.bind)) {
-          err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Stat 必须 bind 到报表字段引用')
-        } else if (!isReportPointer(props.bind)) {
-          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${props.bind}`)
+        const statBind = bindPointer(props.bind)
+        if (statBind === null) {
+          err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Stat 数值槽位只允许 bind 字段绑定（{"@path":"/…"} 或指针字符串）')
+        } else if (!isReportPointer(statBind)) {
+          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${statBind}`)
         }
         break
       }
@@ -181,16 +197,20 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
           err('SF_SHAPE', `${where}.props.text`, 'text 必须是非空字符串')
         }
         if (hasBind) {
-          if (!isNonEmptyString(props.bind) || !isReportPointer(props.bind)) {
-            err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${String(props.bind)}`)
+          const textBind = bindPointer(props.bind)
+          if (textBind === null) {
+            err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Text 数据槽位只允许字段绑定，拒绝字面量')
+          } else if (!isReportPointer(textBind)) {
+            err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${textBind}`)
           }
         }
         break
       }
       case 'Table': {
         rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter'], where, err)
-        if (reportPointerToRef(String(props.rowsBind ?? '')) !== 'candidates') {
-          err('SF_BIND_INVALID', `${where}.props.rowsBind`, "v1 候选表 rowsBind 必须是 '/candidates'")
+        const rowsBind = bindPointer(props.rowsBind)
+        if (rowsBind === null || reportPointerToRef(rowsBind) !== 'candidates') {
+          err('SF_BIND_INVALID', `${where}.props.rowsBind`, "v1 候选表 rowsBind 必须绑定 '/candidates'（{\"@path\":\"/candidates\"} 或指针字符串）")
         }
         const columns = props.columns
         if (!Array.isArray(columns) || columns.length === 0) {
@@ -256,9 +276,11 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       case 'Accordion': {
         rejectUnknownKeys(props, ['title', 'bind', 'defaultExpanded'], where, err)
         if (!isNonEmptyString(props.title)) err('SF_SHAPE', `${where}.props.title`, 'title 必填')
-        const bind = props.bind
-        if (!isNonEmptyString(bind) || !isReportListPointer(bind)) {
-          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不是报表列表引用: ${String(bind)}`)
+        const bind = bindPointer(props.bind)
+        if (bind === null) {
+          err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Accordion 列表槽位只允许字段绑定，拒绝字面量')
+        } else if (!isReportListPointer(bind)) {
+          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不是报表列表引用: ${bind}`)
         } else {
           const ref = reportPointerToRef(bind)
           if (ref === 'candidates' || !(ref !== null && ACCORDION_LIST_REFS.has(ref))) {

@@ -2,8 +2,8 @@ import { h, useState, useEffect, setReact } from './react'
 import type { ReactNode, Ctx, PluginModule } from './types'
 import { zh, en } from './locale'
 import { CSS } from './styles'
-import { createReportToolView, ReportSurface } from './report'
-import { buildDefaultReportSurface } from '@dsh-onto/core/surface'
+import { createReportToolView, ReportSurface, reportTextSummary } from './report'
+import { buildDefaultReportSurface, validateReportSurface } from '@dsh-onto/core/surface'
 import type { RunReport } from '@dsh-onto/core/report'
 import type { ReportPage } from '@dsh-onto/core/reportpage'
 
@@ -176,7 +176,7 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
   const api = ctx.remote['ontoRuntime']
   const [pages, setPages] = useState<ReportPage[]>([])
   const [pageId, setPageId] = useState('')
-  const [runs, setRuns] = useState<Array<{ runId: string }>>([])
+  const [runs, setRuns] = useState<Array<{ runId: string; package?: { name?: string } }>>([])
   const [runId, setRunId] = useState('')
   const [report, setReport] = useState<RunReport | null>(null)
   const [error, setError] = useState('')
@@ -218,6 +218,14 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
   }, [pageId, runId])
 
   const page = pages.find((p) => p.pageId === pageId)
+  // 渲染前校验闸（S2.2 两处共用）：wire 面数据亦须过同一契约
+  const checked = page ? validateReportSurface(page.surface) : null
+  const runOptions = runs.filter(
+    (r) =>
+      page === undefined ||
+      r.runId === page.createdFrom.runId ||
+      (r.package?.name ?? '') === page.createdFrom.package.name,
+  )
   return h(
     'div',
     { className: 'txri-gov' },
@@ -241,11 +249,18 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
             h(
               'select',
               { value: runId, onChange: (e: { target: { value: string } }) => setRunId(e.target.value) },
-              ...runs.map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
+              ...runOptions.map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
             ),
           ),
           page && report
-            ? h(ReportSurface, { surface: page.surface, report, t, navigate: () => {} })
+            ? checked !== null && checked.ok
+              ? h(ReportSurface, { surface: checked.value, report, t, navigate: () => {} })
+              : h(
+                  'div',
+                  null,
+                  h('p', { className: 'txri-note' }, t('reportBadSurface')),
+                  reportTextSummary(report, t),
+                )
             : h('p', { className: 'txri-note' }, t('reportLoading')),
         ),
   )

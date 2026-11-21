@@ -170,3 +170,34 @@ test('未知属性拒绝', () => {
   assert.equal(v.ok, false)
   assert.ok(codes(v).includes('SF_PROPS_UNKNOWN'))
 })
+
+test('绑定信封：@path 形态与裸指针等价，数据字面量/残缺信封拒', () => {
+  const v1 = validateReportSurface(
+    msg(node('s', 'Stat', { label: '分', bind: { '@path': '/summary/maxRiskScore' } })),
+  )
+  assert.equal(v1.ok, true)
+
+  const v2 = validateReportSurface(msg(node('s', 'Stat', { label: '分', bind: 0.94 })))
+  assert.equal(v2.ok, false)
+  assert.ok(codes(v2).includes('SF_SLOT_LITERAL'))
+
+  const v3 = validateReportSurface(
+    msg(node('s', 'Stat', { label: '分', bind: { '@path': '/summary/maxRiskScore', extra: 1 } })),
+  )
+  assert.equal(v3.ok, false)
+
+  const v4 = validateReportSurface(
+    msg(node('t', 'Table', { rowsBind: { '@path': '/candidates' }, columns: [{ field: 'riskScore', header: 'x' }] })),
+  )
+  assert.equal(v4.ok, true)
+
+  const v5 = validateReportSurface(
+    msg(node('a', 'Accordion', { title: '证据', bind: { '@path': '/candidates/0/evidenceChains' } })),
+  )
+  assert.equal(v5.ok, true)
+
+  const v6 = validateReportSurface(
+    msg(node('x', 'Text', { bind: { '@path': '/summary/maxRiskScore' } })),
+  )
+  assert.equal(v6.ok, true)
+})

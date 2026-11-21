@@ -7,6 +7,7 @@
 import { h, useState, useEffect, Component } from './react'
 import type { ReactNode } from './types'
 import {
+  bindPointer,
   buildDefaultReportSurface,
   validateReportSurface,
   type A2uiSurfaceMessage,
@@ -108,9 +109,9 @@ interface RenderCtx {
 }
 
 function renderBound(props: Record<string, unknown>, ctx: RenderCtx): ReactNode {
-  const bind = props.bind
-  if (typeof bind !== 'string') return fmtValue(null)
-  return fmtValue(resolveReportPointer(ctx.report, bind))
+  const pointer = bindPointer(props.bind)
+  if (pointer === null) return fmtValue(null)
+  return fmtValue(resolveReportPointer(ctx.report, pointer))
 }
 
 function renderListBlock(items: unknown[], t: T): ReactNode {
@@ -136,13 +137,13 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
         (c) => c !== null && typeof c === 'object' && typeof c.field === 'string',
       )
     : []
-  const rowsRaw = listItems(resolveReportPointer(ctx.report, String(p.rowsBind ?? '')))
+  const rowsRaw = listItems(resolveReportPointer(ctx.report, bindPointer(p.rowsBind) ?? '/'))
   const declaredSort = (p.sort ?? null) as { field: string; dir: 'asc' | 'desc' } | null
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(
     declaredSort && typeof declaredSort.field === 'string' ? declaredSort : null,
   )
   const [query, setQuery] = useState('')
-  const [open, setOpen] = useState<Record<number, boolean>>({})
+  const [open, setOpen] = useState<Record<string, boolean>>({})
   const expandField = typeof p.expandField === 'string' ? p.expandField : ''
   const filter = (p.filter ?? null) as { field: string; op: string; value: unknown } | null
 
@@ -254,15 +255,16 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
           'div',
           null,
           ...rows.map((r, i) => {
-            const isOpen = open[i] === true
+            const rowKey = String(r.candidateId ?? i)
+            const isOpen = open[rowKey] === true
             return h(
               'div',
-              { key: `x${i}` },
+              { key: `x${rowKey}` },
               h(
                 'button',
                 {
                   type: 'button',
-                  onClick: () => setOpen({ ...open, [i]: !isOpen }),
+                  onClick: () => setOpen({ ...open, [rowKey]: !isOpen }),
                 },
                 `${isOpen ? t('collapse') : t('expand')} · ${fmtValue(r.candidateId ?? i)}`,
               ),
@@ -329,7 +331,7 @@ function AccordionBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string |
   const { node, ctx } = props
   const p = (node.props ?? {}) as Record<string, unknown>
   const [isOpen, setOpen] = useState(p.defaultExpanded === true)
-  const items = listItems(resolveReportPointer(ctx.report, String(p.bind ?? '')))
+  const items = listItems(resolveReportPointer(ctx.report, bindPointer(p.bind) ?? '/'))
   return h(
     'div',
     { className: 'txri-card' },
@@ -355,15 +357,34 @@ class ReportBoundary extends Component<
   }
 }
 
+/** 报表文字摘要（渲染失败回退面；spec chat-run-report S2.5/S2.7）。 */
+export function reportTextSummary(report: RunReport, t: T): ReactNode {
+  return h(
+    'pre',
+    { className: 'txri-mono' },
+    [
+      `${report.runRef.runId} · ${report.runRef.package.name}@${report.runRef.package.version}`
+        + ` · ${t('candidates')} ${report.summary.candidateCount}`
+        + ` · ${t('riskScore')} ${report.summary.maxRiskScore === null ? '—' : report.summary.maxRiskScore}`,
+      ...report.candidates.map(
+        (c) => `- ${c.candidateId} ${c.riskScore} [${c.hitRuleIds.join(',')}]`,
+      ),
+    ].join('\n'),
+  )
+}
+
 export function ReportSurface(props: {
   surface: A2uiSurfaceMessage
   report: RunReport
   t: T
   navigate: () => void
+  /** 渲染失败回退面；缺省为报表文字摘要。 */
+  fallback?: ReactNode
 }): ReactNode {
   const ctx: RenderCtx = { report: props.report, t: props.t, navigate: props.navigate }
+  const fallback = props.fallback ?? reportTextSummary(props.report, props.t)
   try {
-    return renderNode(props.surface.root, ctx, 'root')
+    return h(ReportBoundary, { fallback }, renderNode(props.surface.root, ctx, 'root'))
   } catch (e) {
     return h('p', { className: 'txri-err' }, `render error: ${errText(e)}`)
   }
@@ -442,18 +463,14 @@ function ReportLoader(props: {
     return h('p', { className: 'txri-note' }, t('reportLoading'))
   }
   return h(
-    ReportBoundary,
-    { fallback },
+    'div',
+    { className: 'txri-gov' },
+    badSurface ? h('p', { className: 'txri-note' }, t('reportBadSurface')) : null,
     h(
-      'div',
-      { className: 'txri-gov' },
-      badSurface ? h('p', { className: 'txri-note' }, t('reportBadSurface')) : null,
-      h(
-        'p',
-        { className: 'txri-note txri-mono' },
-        `${report.runRef.runId} · ${report.runRef.package.name}@${report.runRef.package.version}`,
-      ),
-      h(ReportSurface, { surface, report, t, navigate }),
+      'p',
+      { className: 'txri-note txri-mono' },
+      `${report.runRef.runId} · ${report.runRef.package.name}@${report.runRef.package.version}`,
     ),
+    h(ReportSurface, { surface, report, t, navigate, fallback }),
   )
 }

@@ -115,7 +115,12 @@ export function loadReportPage(root: string, pageId: unknown): ReportPage {
   if (!isReportPageShaped(parsed)) {
     throw new PackageStoreError('PACKAGE_MALFORMED', `report page ${String(pageId)} is corrupt`)
   }
-  return parsed
+  // 渲染前校验闸（S2.2 两处共用）：手改/伪造 reports/*.json 在读盘面即拒
+  const validation = validateReportSurface(parsed.surface)
+  if (!validation.ok) {
+    throw new PackageStoreError('PACKAGE_MALFORMED', `report page ${String(pageId)} surface invalid`)
+  }
+  return { ...parsed, surface: validation.value }
 }
 
 /** 列出报表页（损坏条目跳过——列表不因单条损坏 fail-loud，详情面再拒）。 */
@@ -129,7 +134,7 @@ export function listReportPages(root: string): ReportPage[] {
     try {
       if (!statSync(full).isFile()) continue
       const parsed: unknown = JSON.parse(readFileSync(full, 'utf8'))
-      if (isReportPageShaped(parsed)) out.push(parsed)
+      if (isReportPageShaped(parsed) && validateReportSurface(parsed.surface).ok) out.push(parsed)
     } catch {
       /* 跳过损坏条目 */
     }

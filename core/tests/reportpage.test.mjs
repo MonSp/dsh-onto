@@ -1,7 +1,7 @@
 /** report-page 存储（spec chat-run-report S2.7）：围栏、surface 闸、损坏容错、列表排序。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -125,6 +125,27 @@ test('列表按 savedAt 倒序', () => {
       })
     }
     assert.deepEqual(listReportPages(root).map((p) => p.pageId), ['rp-b00000000002', 'rp-a00000000001'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('读盘闸：手改 surface 的报表页拒载、列表跳过', () => {
+  const root = mkRoot()
+  try {
+    saveReportPage(root, {
+      pageId: 'rp-tamper000001',
+      name: 'x',
+      surface: buildDefaultReportSurface(),
+      createdFrom: runRef(),
+      savedAt: '2026-11-22T00:02:00.000Z',
+    })
+    const file = join(root, 'reports', 'rp-tamper000001.json')
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    raw.surface.root = { id: 'cheat', type: 'Stat', props: { label: 'x', value: 0.01 } }
+    writeFileSync(file, JSON.stringify(raw), 'utf8')
+    assert.throws(() => loadReportPage(root, 'rp-tamper000001'), (e) => e.code === 'PACKAGE_MALFORMED')
+    assert.equal(listReportPages(root).length, 0)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

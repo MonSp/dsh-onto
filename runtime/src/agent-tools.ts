@@ -2251,10 +2251,11 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         render: (_args, value) => {
           const v = value as { pageId: string; name: string; runId: string }
+          const phrases = [...new Set([...redlinesForRuns(ws, _args), ...(recallPhrases(v.runId) ?? [])])]
           return textBlock(
             retreatRenderText(
               `报表页已沉淀：${v.pageId} · ${v.name} · 来源 ${v.runId}（插件「报表页」可换 run 复用）`,
-              recallPhrases(v.runId) ?? [],
+              phrases,
             ),
           )
         },
@@ -2331,16 +2332,17 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         render: (_args, value) => {
           const pages = (value as { pages: Array<Record<string, unknown>> }).pages
-          if (pages.length === 0) return textBlock('（无报表页）')
-          return textBlock(
-            pages
-              .map(
-                (p) =>
-                  `- ${String(p.pageId)} · ${String(p.name)} · 来源 ${String(p.runId)}`
-                  + ` · ${String(p.package)} · ${String(p.savedAt)}`,
-              )
-              .join('\n'),
-          )
+          const text =
+            pages.length === 0
+              ? '（无报表页）'
+              : pages
+                  .map(
+                    (p) =>
+                      `- ${String(p.pageId)} · ${String(p.name)} · 来源 ${String(p.runId)}`
+                      + ` · ${String(p.package)} · ${String(p.savedAt)}`,
+                  )
+                  .join('\n')
+          return textBlock(retreatRenderText(text, redlinesForRuns(ws, _args)))
         },
       },
       execute: toolExecute(

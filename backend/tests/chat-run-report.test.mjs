@@ -217,13 +217,13 @@ test('真实工具：run_scenario 动线提示 + show_run_report 默认/自定�
     assert.equal(meta.runRef.runId, out.runId)
     assert.equal(meta.surfaceSource, 'default')
 
-    // 自定义 surface：模型组织布局
+    // 自定义 surface：模型组织布局（@path 信封绑定）
     const surface = buildDefaultReportSurface({ surfaceId: 'custom-1' })
     surface.root = {
       id: 'only-table',
       type: 'Table',
       props: {
-        rowsBind: '/candidates',
+        rowsBind: { '@path': '/candidates' },
         columns: [{ field: 'riskScore', header: '风险分' }],
         sort: { field: 'riskScore', dir: 'desc' },
       },
