@@ -591,6 +591,8 @@ export interface RuntimeBehaviorInstance {
   objectRef: string
   occurredAt: string
   source?: string
+  /** 事件属性（source-maps attrMap 落地；可选）。 */
+  attrs?: Record<string, unknown>
 }
 
 export interface RuntimeCandidate {

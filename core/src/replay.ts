@@ -36,6 +36,8 @@ export interface ReplayExpected {
   excluded: Array<{ candidateId: string; ruleId: string }>
   humanReviewRequired: true
   auditPassed: boolean
+  /** 数据状态（M1-B）：来源/时效/完整性/特征依据。 */
+  dataStatus?: string
 }
 
 export interface ReplayDiff {
@@ -119,6 +121,7 @@ function projectResult(scenarioId: string, r: ScenarioRunResult): ReplayExpected
       .sort((a, b) => `${a.candidateId}|${a.ruleId}`.localeCompare(`${b.candidateId}|${b.ruleId}`)),
     humanReviewRequired: true,
     auditPassed: r.audit.passed === true,
+    ...(r.dataStatus !== undefined ? { dataStatus: String(r.dataStatus) } : {}),
   }
 }
 
@@ -158,6 +161,15 @@ function compareExpected(expected: ReplayExpected, actual: ReplayExpected): Repl
     for (const k of aEv) {
       if (!eEv.has(k)) diffs.push({ where: `candidates.${ec.candidateId}.evidenceChains`, expected: '缺失', actual: k })
     }
+    const pcKey = (p: { ruleId?: string; missing?: string[] }): string => JSON.stringify(p)
+    const ePc = new Set(ec.pendingChecks.map(pcKey))
+    const aPc = new Set(ac.pendingChecks.map(pcKey))
+    for (const k of ePc) {
+      if (!aPc.has(k)) diffs.push({ where: `candidates.${ec.candidateId}.pendingChecks`, expected: k, actual: '缺失' })
+    }
+    for (const k of aPc) {
+      if (!ePc.has(k)) diffs.push({ where: `candidates.${ec.candidateId}.pendingChecks`, expected: '缺失', actual: k })
+    }
     if (ec.pendingVerification !== ac.pendingVerification) {
       diffs.push({
         where: `candidates.${ec.candidateId}.pendingVerification`,
@@ -177,6 +189,9 @@ function compareExpected(expected: ReplayExpected, actual: ReplayExpected): Repl
   }
   if (expected.auditPassed !== actual.auditPassed) {
     diffs.push({ where: 'auditPassed', expected: String(expected.auditPassed), actual: String(actual.auditPassed) })
+  }
+  if ((expected.dataStatus ?? '') !== (actual.dataStatus ?? '')) {
+    diffs.push({ where: 'dataStatus', expected: String(expected.dataStatus ?? ''), actual: String(actual.dataStatus ?? '') })
   }
   return diffs
 }

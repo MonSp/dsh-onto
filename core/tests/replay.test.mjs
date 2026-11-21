@@ -164,6 +164,27 @@ test('回放：越权（scope 不含 OBJ-WST-BIN）→ 候选为空且 scopedOut
   }
 })
 
+test('回放：--check 对照含 pendingChecks 与 dataStatus（漏项不得假绿）', () => {
+  const { dir, root } = setupWst()
+  try {
+    runReplay({ versionDir: dir, scenarioId: SCN, writeExpected: true })
+    // 篡改基线放包外（包内 fixtures 进指纹，手改会 DRIFT）——对照面必须抓到漏项
+    const expPath = join(dir, 'fixtures', `replay-${SCN}.expected.json`)
+    const exp = JSON.parse(readFileSync(expPath, 'utf8'))
+    exp.candidates[0].pendingChecks = [{ ruleId: 'RULE-GHOST', missing: ['ghost'] }]
+    exp.dataStatus = 'TAMPERED'
+    const tampered = join(root, 'expected-tampered.json')
+    writeFileSync(tampered, JSON.stringify(exp, null, 2), 'utf8')
+    const report = runReplay({ versionDir: dir, scenarioId: SCN, check: true, expectedPath: tampered })
+    assert.equal(report.comparison.ok, false)
+    const wheres = report.comparison.diffs.map((d) => d.where)
+    assert.ok(wheres.some((w) => w.includes('pendingChecks')), JSON.stringify(wheres))
+    assert.ok(wheres.includes('dataStatus'), JSON.stringify(wheres))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('回放：版本切换（同夹具跑两版本）→ 分数/命中 diff', () => {
   const { dir, root } = setupWst()
   try {

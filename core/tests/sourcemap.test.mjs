@@ -8,6 +8,7 @@ import {
   checkSourceMapsStatic,
   renderIdTemplate,
   parseIdTemplate,
+  fetchShapeRows,
   listSourceFiles,
   loadPackage,
   savePackage,
@@ -314,6 +315,63 @@ test('预览：behavior-list 的 timeField 在事件子项上检查，不误报�
   // 事件真的缺 at → 报事件级缺字段
   const preview2 = previewSourceMaps(pkg, { rows: [{ ref: 'A1', events: [{ kind: 'x' }] }] })
   assert.ok(preview2.diagnostics.some((d) => d.code === 'SM_FIELD_MISSING' && d.message.includes('.at')))
+})
+
+test('fetchShapeRows：offset 分页续页取全（短页即停），samples 截断', async () => {
+  const shape = {
+    mode: 'collections',
+    collectionPath: '/api/v1/data/{collection}',
+    itemsPath: 'items',
+    pagination: { mode: 'offset', pageSize: 2, limitParam: 'limit', offsetParam: 'offset' },
+  }
+  const pages = [
+    [{ n: 1 }, { n: 2 }],
+    [{ n: 3 }, { n: 4 }],
+    [{ n: 5 }],
+  ]
+  const calls = []
+  const rows = await fetchShapeRows({
+    shape,
+    collections: ['xs'],
+    samples: 0,
+    request: async (path) => {
+      calls.push(path)
+      const off = Number(new URLSearchParams(path.split('?')[1] ?? '').get('offset') ?? 0)
+      return { items: pages[off / 2] ?? [] }
+    },
+  })
+  assert.equal(rows.xs.length, 5, JSON.stringify(calls))
+  assert.equal(calls.length, 3)
+  const capped = await fetchShapeRows({
+    shape,
+    collections: ['xs'],
+    samples: 3,
+    request: async (path) => {
+      const off = Number(new URLSearchParams(path.split('?')[1] ?? '').get('offset') ?? 0)
+      return { items: pages[off / 2] ?? [] }
+    },
+  })
+  assert.equal(capped.xs.length, 3)
+})
+
+test('预览：缺省同名全映也做类型检查（passthrough 报 SM_TYPE_MISMATCH）', () => {
+  const pkg = minimalPkg()
+  pkg.sourceMaps = [
+    { id: 'SM-TST-1', collection: 'rows', objectType: 'OBJ-TST-A', idTemplate: '<c>:<a1>' },
+  ]
+  // 无 fields（同名全映）：a2 是 enum，样本给非法枚举值 → 应报类型不符
+  const preview = previewSourceMaps(pkg, { rows: [{ c: '1', a1: 'x', a2: 'not-in-dict' }] })
+  assert.ok(preview.diagnostics.some((d) => d.code === 'SM_TYPE_MISMATCH'), JSON.stringify(preview.diagnostics))
+})
+
+test('转换：behavior attrMap 落地为事件 attrs', () => {
+  const maps = wstMaps().map((m) =>
+    m.id === 'SM-WST-MIX' ? { ...m, attrMap: { kind: 'kind' } } : m,
+  )
+  const { dataset } = transformSourceRows({ rows: wstRows(), maps })
+  const mix = (dataset.behaviors ?? []).find((b) => b.type === 'BHV-WST-MIX')
+  assert.ok(mix !== undefined)
+  assert.deepEqual(mix.attrs, { kind: 'hazardous-mix' })
 })
 
 test('store：source-maps/api shape/回放夹具 round-trip 且夹具进源清单', () => {

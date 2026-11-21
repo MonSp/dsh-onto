@@ -172,12 +172,18 @@ export function listSourceFiles(versionDir: string): string[] {
   push(SOURCE_FILE_LAYOUT.fieldMaps)
   push(SOURCE_FILE_LAYOUT.apiSources)
   push(SOURCE_FILE_LAYOUT.sourceMaps)
-  // 回放夹具随包进指纹（api-to-plugin S2.5：冻结快照不被手改）
+  // 回放夹具随包进指纹（api-to-plugin S2.5：冻结快照不被手改）；子目录递归
   const fixDir = join(versionDir, SOURCE_FILE_LAYOUT.fixturesDir)
-  if (existsSync(fixDir) && statSync(fixDir).isDirectory()) {
-    for (const f of readdirSync(fixDir).sort()) {
-      rel.push(`${SOURCE_FILE_LAYOUT.fixturesDir}/${f}`)
+  const walkFix = (base: string, prefix: string): void => {
+    for (const name of readdirSync(base).sort()) {
+      const full = join(base, name)
+      const childRel = prefix === '' ? name : `${prefix}/${name}`
+      if (statSync(full).isDirectory()) walkFix(full, childRel)
+      else rel.push(`${SOURCE_FILE_LAYOUT.fixturesDir}/${childRel}`)
     }
+  }
+  if (existsSync(fixDir) && statSync(fixDir).isDirectory()) {
+    walkFix(fixDir, '')
   }
   return rel
 }

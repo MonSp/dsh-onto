@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "__PKG_ID__",
   "version": "0.1.0",
   "private": true,
@@ -26,7 +26,7 @@
     "@deepseek-ai/dsh-llm": "link:__LINK_LLM__",
     "@deepseek-ai/dsh-skill": "link:__LINK_SKILL__",
     "@deepseek-ai/dsh-tools": "link:__LINK_TOOLS__",
-    "@deepseek-ai/dsh-typert-protocol": "link:__LINK_TYPERt__",
+    "@deepseek-ai/dsh-typert-protocol": "link:__LINK_TYPERT__",
     "@dsh-onto/core": "link:__LINK_CORE__",
     "@dsh-onto/runtime": "link:__LINK_RUNTIME__"
   },

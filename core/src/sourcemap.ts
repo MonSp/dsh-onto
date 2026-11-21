@@ -340,12 +340,18 @@ export function transformSourceRows(input: SourceMapTransformInput): SourceMapTr
         const bid = `BVI-${bm.id}-${i}-${j}`
         if (behSeen.has(bid)) continue
         behSeen.add(bid)
+        const attrs: Record<string, unknown> = {}
+        for (const [name, src] of Object.entries(bm.attrMap ?? {})) {
+          const v = readField(ev, src)
+          if (v !== undefined) attrs[name] = v
+        }
         behaviors.push({
           id: bid,
           type: bm.behaviorType,
           anchorRef: objectRef,
           objectRef,
           occurredAt: occurredAt !== undefined && occurredAt !== null ? String(occurredAt) : '',
+          ...(Object.keys(attrs).length > 0 ? { attrs } : {}),
         })
       }
     }
@@ -507,6 +513,9 @@ export function checkSourceMapsStatic(pkg: OntologyPackage): ValidationIssue[] {
       }
       const rel = pkg.relations.find((r) => r.id === m.relationType)
       const selfType = objTypeOfCollection.get(m.collection)
+      if (selfType === undefined) {
+        err('SM_REL_ENDPOINT', where, `关系集合无对象映射（self 端无法渲染）: ${m.collection}`)
+      }
       const targetType =
         m.targetCollection !== undefined ? objTypeOfCollection.get(m.targetCollection) : undefined
       if (rel !== undefined && selfType !== undefined) {
@@ -602,6 +611,22 @@ export function previewSourceMaps(pkg: OntologyPackage, rows: SourceRows): Sourc
           if (bad !== null) {
             diagnostics.push(diag('SM_TYPE_MISMATCH', `${where}#${om.collection}[${i}]`, `${f.source}→${f.target}: ${bad}`))
             break // 每字段一条，避免样本刷屏
+          }
+        }
+      }
+    } else {
+      // 缺省同名全映：按对象属性表同名查样本（passthrough 也要报类型不符）
+      const table = attrs.get(om.objectType)
+      if (table !== undefined) {
+        for (const attr of table.values()) {
+          for (let i = 0; i < Math.min(sample.length, 20); i++) {
+            const v = readField(sample[i], attr.name)
+            if (v === undefined) continue
+            const bad = checkAttrType(v, attr, pkg)
+            if (bad !== null) {
+              diagnostics.push(diag('SM_TYPE_MISMATCH', `${where}#${om.collection}[${i}]`, `${attr.name}: ${bad}`))
+              break
+            }
           }
         }
       }
@@ -781,8 +806,14 @@ export async function fetchShapeRows(opts: {
       }
       const qs = params.toString()
       const body = await opts.request(`${tpl.replace('{collection}', c)}${qs ? `?${qs}` : ''}`)
-      rows.push(...extractPageItems(body, shape.itemsPath))
-      if (page.mode !== 'cursor') break
+      const items = extractPageItems(body, shape.itemsPath)
+      rows.push(...items)
+      if (page.mode === 'none') break
+      if (page.mode === 'offset') {
+        // 短页即停（与 runtime fetchCollection 同口径）；满页继续取下一段
+        if (items.length === 0 || items.length < (page.pageSize ?? 100)) break
+        continue
+      }
       const next = readPath(body, page.nextField ?? 'nextCursor')
       cursor = typeof next === 'string' && next !== '' ? next : null
       if (cursor === null) break

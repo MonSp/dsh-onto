@@ -39,6 +39,15 @@ function taxRows() {
         revenue: 10,
       },
     ],
+    benchmarks: [
+      {
+        industryCode: 'C1',
+        taxType: 'VAT',
+        period: '2026-09',
+        regionCode: '110000',
+        burdenRatio: 0.06,
+      },
+    ],
     riskCandidates: [
       {
         candidateId: 'TAX-CAND-001',
@@ -80,6 +89,13 @@ function taxMaps() {
       objectType: 'OBJ-TAX-TAX-RETURN',
       idTemplate: '<taxpayerTin>:<returnType>:<period>',
       timeField: 'filingDate',
+    },
+    {
+      // 行业基准（第 5 对象集合；period 非记录时间，tax-connector 启发亦不认——不设 timeField 对齐）
+      id: 'SM-TAX-BENCHMARK',
+      collection: 'benchmarks',
+      objectType: 'OBJ-TAX-INDUSTRY-BENCHMARK',
+      idTemplate: '<industryCode>:<taxType>:<period>:<regionCode>',
     },
     {
       id: 'SM-TAX-ISSUES',
@@ -130,7 +146,7 @@ function taxMaps() {
 test('TAX 对照：对象 id/attrs 与 tax-connector 同构', () => {
   const { dataset } = transformSourceRows({ rows: taxRows(), maps: taxMaps() })
   const byId = new Map(dataset.objects.map((o) => [o.id, o]))
-  assert.equal(dataset.objects.length, 5)
+  assert.equal(dataset.objects.length, 6) // 2 taxpayer + invoice + flow + return + benchmark
   assert.deepEqual(byId.get('9111T001'), {
     id: '9111T001',
     type: 'OBJ-TAX-TAXPAYER',
@@ -150,6 +166,17 @@ test('TAX 对照：对象 id/attrs 与 tax-connector 同构', () => {
   })
   assert.ok(byId.has('B1:F001'))
   assert.ok(byId.has('9111T001:VAT:2026-09'))
+  assert.deepEqual(byId.get('C1:VAT:2026-09:110000'), {
+    id: 'C1:VAT:2026-09:110000',
+    type: 'OBJ-TAX-INDUSTRY-BENCHMARK',
+    attrs: {
+      industryCode: 'C1',
+      taxType: 'VAT',
+      period: '2026-09',
+      regionCode: '110000',
+      burdenRatio: 0.06,
+    },
+  })
 })
 
 test('TAX 对照：FK 关系 id 与方向同 tax-connector', () => {

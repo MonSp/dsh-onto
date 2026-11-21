@@ -400,7 +400,8 @@ function pickIdField(collection: string, fields: string[]): string {
   const want = `${singular(collection)}id`
   const hit = fields.find((f) => normKey(f) === want)
   if (hit !== undefined) return hit
-  const idish = fields.filter((f) => /^(.*[_-]?id|.*Id)$/.test(f))
+  // 只认 camel `*Id` / 分隔 `*_id` `*-id`；防 'valid' 这类以 id 结尾的普通词
+  const idish = fields.filter((f) => /(_id|-id|Id)$/.test(f))
   return (idish.length > 0 ? idish[0] : fields[0]) ?? ''
 }
 

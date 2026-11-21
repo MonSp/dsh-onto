@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 插件脚手架（api-to-plugin S2.4）：由**已签发**包 + 场景 + 逻辑源生成最小 DSH 插件。
  *
  * - 生成 ≠ 签发：不改包状态、不落凭据、不触发激活；地址/令牌只出现在部署模板占位。
@@ -141,7 +141,7 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
     __LINK_LLM__: toLinkPath(outDir, join(harnessDir, 'packages', 'llm', 'llm')),
     __LINK_SKILL__: toLinkPath(outDir, join(harnessDir, 'packages', 'skill', 'skill')),
     __LINK_TOOLS__: toLinkPath(outDir, join(harnessDir, 'packages', 'core', 'tools')),
-    __LINK_TYPERt__: toLinkPath(outDir, join(harnessDir, 'packages', 'typert', 'protocol')),
+    __LINK_TYPERT__: toLinkPath(outDir, join(harnessDir, 'packages', 'typert', 'protocol')),
     __CORE_DIR__: toPosixPath(coreDir),
     __RUNTIME_DIR__: toPosixPath(runtimeDir),
     __HARNESS_DIR__: toPosixPath(harnessDir),
