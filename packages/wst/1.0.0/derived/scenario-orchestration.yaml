@@ -1,0 +1,74 @@
+kind: DerivedScenarioOrchestration
+scenarios:
+  - id: SCN-WST-HAZARD-MIX
+    name: 危险废物混投与满溢风险排查
+    goal: 从垃圾桶、清运路线与清运记录出发，识别危险废物混投与满溢滞留等候选风险线索，输出风险分与待核实点；不作定性。
+    boundary: 仅输出候选线索、风险分与待核实点；不作定性，不替代人工复核与处理决定。
+    inputs:
+      - description: 桶位标识
+        name: binId
+        required: true
+        type: string
+      - description: 观察窗口（天），缺省 30
+        name: windowDays
+        required: false
+        type: int
+    outputs:
+      fields:
+        - candidateList
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+        - excluded
+    pipeline:
+      - label: 归一垃圾桶、路线、清运与混投记录
+        stepId: s1
+        stepType: DATA_INGEST
+      - label: 装载混投、清运行为
+        stepId: s2
+        stepType: BEHAVIOR_CALL
+      - label: 排除段：已核销白名单/近期已清运
+        order: before-scoring
+        stepId: s3
+        stepType: RULE_EVALUATE
+      - label: 打分段：满溢/危险混投/危废标记
+        stepId: s4
+        stepType: RULE_EVALUATE
+      - label: 危废混投满溢叙述
+        skillRefs:
+          - SKL-WST-HAZARD-MIX-NARRATIVE
+        stepId: s5
+        stepType: SKILL_RUN
+      - label: 三层闭合审计
+        stepId: s6
+        stepType: AUDIT_CHECK
+      - label: 人工复核（含排除件）
+        stepId: s7
+        stepType: HUMAN_REVIEW
+    behaviorRefs:
+      - BHV-WST-MIX
+      - BHV-WST-DUMP
+    exclusionRefs:
+      - RULE-WST-EXCL-CLEARED
+      - RULE-WST-EXCL-RECENT-EMPTY
+    scoreRefs:
+      - RULE-WST-SCORE-FILL
+      - RULE-WST-SCORE-MIX
+      - RULE-WST-SCORE-HAZARD
+    outputContract:
+      mustInclude:
+        - candidateList
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+      forbiddenPhrases:
+        - 认定违法倾倒危险废物
+        - 确定为危险废物混投违规
+        - 已构成环境污染犯罪
+        - 该单位系违法处置危废企业
+    reviewGate:
+      required: true
+      threshold: 0.45
+      includeExcluded: true

@@ -8,7 +8,7 @@
  * is a seed word and backs the codecs.
  *
  * Namespaces: ontoWorkspace, ontoModel, ontoValidate, ontoDerive,
- * ontoKnowledge, ontoRuntime.
+ * ontoKnowledge, ontoRuntime, ontoSource.
  */
 
 type RemoteResult<T> =
@@ -153,6 +153,11 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listExperiences', false, 'EXL', 'List experience notes (summary).'),
       desc('ontoRuntime', 'showExperience', true, 'EXS', 'Show one experience note (human-review face).'),
       desc('ontoRuntime', 'reviewExperience', true, 'EXR', 'Human review write-back: outcome / misTransfer / reviewFocus.'),
+      // ontoSource —— 接入面（api-to-plugin S2.6：采样/映射预览/生成/回放）
+      desc('ontoSource', 'probe', true, 'SPB', 'Probe a sample API: field/type table (build-time only).'),
+      desc('ontoSource', 'preview', true, 'SPV', 'Preview source maps: counts + diagnostics + evidence readiness.'),
+      desc('ontoSource', 'generate', true, 'SGN', 'Generate a minimal DSH plugin (workspace-fenced outDir).'),
+      desc('ontoSource', 'replay', true, 'SRY', 'Replay fixture report (workspace-fenced paths).'),
     ]
 
     return {

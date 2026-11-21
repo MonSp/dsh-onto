@@ -348,13 +348,124 @@ export interface O1FieldMap {
   description?: string
 }
 
+/** API 形态（信封/分页）；地址与凭证仍在部署侧，包内只描述结构（api-to-plugin S2.1）。 */
+export interface ApiShapePagination {
+  /** cursor=游标翻页；offset=偏移翻页；none=一次取完。 */
+  mode: 'cursor' | 'offset' | 'none'
+  /** cursor 模式：请求游标参数名（缺省 cursor）。 */
+  cursorParam?: string
+  /** cursor 模式：响应下一页游标字段名（缺省 nextCursor；空/缺=无下一页）。 */
+  nextField?: string
+  /** offset 模式：limit 参数名（缺省 limit）。 */
+  limitParam?: string
+  /** offset 模式：offset 参数名（缺省 offset）。 */
+  offsetParam?: string
+  /** offset 模式：每页条数（缺省 100）。 */
+  pageSize?: number
+  /** 响应完整性字段名（缺省 complete；显式 false → complete=false）。 */
+  completeField?: string
+}
+
+export interface ApiShape {
+  /** collections=每集合一次 GET；snapshot=单请求多集合。 */
+  mode: 'collections' | 'snapshot'
+  /** collections 模式：集合路径模板，须含 `{collection}`。 */
+  collectionPath?: string
+  /** snapshot 模式：单请求路径。 */
+  path?: string
+  /** collections 模式：items 字段路径（缺省 items）。 */
+  itemsPath?: string
+  /** snapshot 模式：集合键 → 响应体 JSON 路径（如 `bins`、`data.bins`）。 */
+  collectionPaths?: Record<string, string>
+  pagination: ApiShapePagination
+}
+
 export interface O1ApiSource {
   id: string
   name: string
   sourceType: SourceType
   endpoint?: string
   description?: string
+  /** API 形态声明（供配置驱动连接器/采样使用；手写连接器可缺省）。 */
+  shape?: ApiShape
 }
+
+/** source-maps：源字段 → 目标属性名（对象映射内，target 是本对象类型上的属性名）。 */
+export interface O1SourceFieldMap {
+  source: string
+  target: string
+  description?: string
+}
+
+/** 关系端点：self=本行对象 id；{field}=字段值即对端对象 id（数组字段→多条关系）。 */
+export type SourceMapEndpoint = 'self' | { field: string }
+
+export interface O1ObjectSourceMap {
+  id: string
+  kind?: 'object'
+  collection: string
+  /** 目标对象类型（OBJ-*）。 */
+  objectType: string
+  /** 实例 id 模板：`<field>` 占位 + 字面分隔符（与 O1 idRule 同构）。 */
+  idTemplate: string
+  /** 业务记录时间字段（业务窗/时效门用）。 */
+  timeField?: string
+  /** 源字段→属性映射；缺省按同名全映。 */
+  fields?: O1SourceFieldMap[]
+  description?: string
+}
+
+export interface O1RelationSourceMap {
+  id: string
+  kind: 'relation'
+  collection: string
+  relationType: string
+  from: SourceMapEndpoint
+  to: SourceMapEndpoint
+  /** 对端所在集合键（断引用检查与提示用）。 */
+  targetCollection?: string
+  description?: string
+}
+
+export interface O1CandidateSourceMap {
+  id: string
+  kind: 'candidate'
+  collection: string
+  /** 候选 id 字段。 */
+  idField: string
+  /** 候选归属对象 id 字段（须命中同批对象 id）。 */
+  objectRefField: string
+  /** objectRef 指向的对象类型（断引用检查用）。 */
+  objectType?: string
+  /** 特征名 → 源字段。 */
+  features?: Record<string, string>
+  /** 标签数组字段。 */
+  tagsField?: string
+  description?: string
+}
+
+export interface O1BehaviorSourceMap {
+  id: string
+  /** behavior=独立集合即事件行；behavior-list=行内嵌套事件数组。 */
+  kind: 'behavior' | 'behavior-list'
+  collection: string
+  behaviorType: string
+  /** 归属对象 id 模板（占位取自归属行：list 模式为父行，否则为本行）。 */
+  objectRefTemplate: string
+  /** 事件行上的时间字段。 */
+  timeField?: string
+  /** 行为属性名 → 事件行源字段。 */
+  attrMap?: Record<string, string>
+  /** behavior-list：行内事件数组字段路径。 */
+  eventsPath?: string
+  description?: string
+}
+
+export type O1SourceMap =
+  | O1ObjectSourceMap
+  | O1RelationSourceMap
+  | O1CandidateSourceMap
+  | O1BehaviorSourceMap
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * 包元数据与内存模型
@@ -394,6 +505,8 @@ export interface OntologyPackage {
   scenarios: O3ScenarioCard[]
   fieldMaps: O1FieldMap[]
   apiSources: O1ApiSource[]
+  /** 源映射（bindings/source-maps.yaml）：配置驱动取数的转换契约（api-to-plugin S2.1）。 */
+  sourceMaps: O1SourceMap[]
   /**
    * 包级特征配方（scenario-prep S2.2 / PR#18 P6）：落 package.yaml，自动进派生指纹。
    * 仅当场景 prep.features=true 时由执行层注入 now 后执行 deriveFeatures；包内禁写 now。
@@ -478,6 +591,8 @@ export interface RuntimeBehaviorInstance {
   objectRef: string
   occurredAt: string
   source?: string
+  /** 事件属性（source-maps attrMap 落地；可选）。 */
+  attrs?: Record<string, unknown>
 }
 
 export interface RuntimeCandidate {
@@ -696,6 +811,7 @@ export const DRAFT_TARGET_KINDS = [
   'RedLine',
   'FieldMap',
   'ApiSource',
+  'SourceMap',
 ] as const
 
 export type DraftTargetKind = (typeof DRAFT_TARGET_KINDS)[number]

@@ -169,18 +169,20 @@ Scores never depend on the entry point — computed once in the rule engine.
 
 ## 4. Path A — Build a business application
 
-### 4.1 Minimal app template (copy TAX)
+### 4.1 Minimal app (self-service: configure a read-only API → generate the plugin)
 
-For “one scenario + one data source + one run page”:
+For “one read-only JSON API + one scenario + one result page + one agent entry” — **no hand-written connector, no engine changes**:
 
-1. Copy `apps/tax` → `apps/<domain>`; rename package, scenario IDs, `sourceId`, object types.
-2. Implement `DataConnector`: business API → `RuntimeDataset` (IDs follow idRules, relation ends in-graph, candidate `objectRef` hits).
-3. Update `bindings/` → `validate` / `derive` / `gate` → human `issue`.
-4. Deploy-side `dataSources.register('SRC-XXX', connector)` behind env.
-5. Page only calls `runScenario` (same as agent); register a sidebar panel.
-6. Tests: mock unit tests + connector→scenario e2e (see `apps/tax/tests`).
+1. Author the business package (objects/rules/scenario); `validate`/`derive` pass (DRAFT is fine to start).
+2. Declare the logical source + `shape` (envelope/pagination) in `bindings/api-sources.yaml` → `source probe` to sample fields.
+3. Map object ids/attributes/relations/candidates/behaviors in `bindings/source-maps.yaml` → `source map preview`
+   reports missing fields / type mismatches / broken refs, plus evidence readiness (sufficient vs pending).
+4. Replay baseline: `fixtures/replay-<SCN>.json` + `replay --write-expected`; before upgrades `replay --check`.
+5. Human `issue` (issuing = human review) → `plugin generate` produces the minimal plugin (result page + agent entry + deploy templates).
+6. Generated bundle: `pnpm install/build/test` → `setup-profile` → `seed-release` (import ≠ activate) → `dump-config` assert → env launch.
+7. Dual-entry check: page and Agent `run_scenario` share scenario + sourceId; candidates/scores/ruleIds identical.
 
-Boundaries: same scenario + `sourceId` for page and agent; no scoring outside core; RUN-only must not import backend/workbench; i18n via `ctx.locale.register`.
+Boundaries: same scenario + `sourceId` for page and agent; no scoring outside core; generated bundles are RUN-only (no backend/workbench imports); credentials only in deploy env.
 
 Full checklist: [plugin-authoring.zh.md](plugin-authoring.zh.md).
 
@@ -293,10 +295,9 @@ Same execution path as the page table, different presentation.
 
 **Build a business app:**
 
-1. Follow [plugin-authoring.zh.md](plugin-authoring.zh.md): package → bindings → validate/issue.  
-2. Connector + env-registered `sourceId`.  
-3. Page only calls `runScenario` (same as agent).  
-4. Always surface `humanReviewRequired=true`; real actions behind approval cards.
+1. Follow [plugin-authoring.zh.md](plugin-authoring.zh.md): package → shape/mapping → preview → issue → replay baseline → `plugin generate`.  
+2. Assemble the generated bundle (setup-profile / seed-release / dump-config) + env-registered `sourceId`.  
+3. Page and agent share one `runScenario`; always surface `humanReviewRequired=true`; real actions behind approval cards.
 
 **Iterate criteria over time:**
 
@@ -311,7 +312,7 @@ Same execution path as the page table, different presentation.
 | Doc | Content |
 |---|---|
 | [architecture.md](architecture.md) | Concepts, three-layer ontology, validate/derive/engine rules (self-contained) |
-| [plugin-authoring.zh.md](plugin-authoring.zh.md) | Second-domain plugin cold start (blockers C1–C7, Chinese) |
+| [plugin-authoring.zh.md](plugin-authoring.zh.md) | Self-service onboarding: configure a read-only API → mapping preview → replay → generate plugin (Chinese) |
 | [ops-manual.md](ops-manual.md) | Formal action gates, reconciliation, shutdown |
 | [../README.md](../README.md) | Quick start and CLI |
 | [user-guide.zh.md](user-guide.zh.md) | Chinese version of this guide |

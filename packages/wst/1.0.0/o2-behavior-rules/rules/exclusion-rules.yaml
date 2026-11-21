@@ -1,0 +1,13 @@
+kind: O2ExclusionRules
+rules:
+  - id: RULE-WST-EXCL-CLEARED
+    name: 已核销白名单排除
+    action: drop
+    condition: tag == 'cleared-whitelist'
+    description: 上游已核销白名单候选直接剔除。
+  - id: RULE-WST-EXCL-RECENT-EMPTY
+    name: 近期已清运降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'recently-emptied'
+    description: 刚完成清运的桶位降权观察，避免滞留误报。

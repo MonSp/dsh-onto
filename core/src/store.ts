@@ -7,7 +7,8 @@
  *     o1-objects/{object-types.yaml,relation-types.yaml,dictionaries/*.yaml}
  *     o2-behavior-rules/{behavior-types.yaml,rules/*.yaml,skill-templates/*.yaml}
  *     o3-scenarios/*.yaml
- *     bindings/{field-maps.yaml,api-sources.yaml}
+ *     bindings/{field-maps.yaml,api-sources.yaml,source-maps.yaml}
+ *     fixtures/**          回放夹具（随包进派生指纹，api-to-plugin S2.5）
  *     derived/**            派生物（只读、可再生成）
  *     quality-report.json
  *
@@ -31,6 +32,7 @@ import type {
   O1FieldMap,
   O1ObjectType,
   O1RelationType,
+  O1SourceMap,
   O2BehaviorType,
   O2ExclusionRule,
   O2ScoreRule,
@@ -112,6 +114,8 @@ export const SOURCE_FILE_LAYOUT = {
   scenariosDir: 'o3-scenarios',
   fieldMaps: 'bindings/field-maps.yaml',
   apiSources: 'bindings/api-sources.yaml',
+  sourceMaps: 'bindings/source-maps.yaml',
+  fixturesDir: 'fixtures',
 } as const
 
 export const DERIVED_DIR = 'derived'
@@ -167,6 +171,20 @@ export function listSourceFiles(versionDir: string): string[] {
   }
   push(SOURCE_FILE_LAYOUT.fieldMaps)
   push(SOURCE_FILE_LAYOUT.apiSources)
+  push(SOURCE_FILE_LAYOUT.sourceMaps)
+  // 回放夹具随包进指纹（api-to-plugin S2.5：冻结快照不被手改）；子目录递归
+  const fixDir = join(versionDir, SOURCE_FILE_LAYOUT.fixturesDir)
+  const walkFix = (base: string, prefix: string): void => {
+    for (const name of readdirSync(base).sort()) {
+      const full = join(base, name)
+      const childRel = prefix === '' ? name : `${prefix}/${name}`
+      if (statSync(full).isDirectory()) walkFix(full, childRel)
+      else rel.push(`${SOURCE_FILE_LAYOUT.fixturesDir}/${childRel}`)
+    }
+  }
+  if (existsSync(fixDir) && statSync(fixDir).isDirectory()) {
+    walkFix(fixDir, '')
+  }
   return rel
 }
 
@@ -353,6 +371,9 @@ interface FieldMapsDoc {
 interface ApiSourcesDoc {
   sources?: O1ApiSource[]
 }
+interface SourceMapsDoc {
+  maps?: O1SourceMap[]
+}
 
 /** 加载一个包版本目录为内存模型。 */
 export function loadPackage(versionDir: string): OntologyPackage {
@@ -392,6 +413,8 @@ export function loadPackage(versionDir: string): OntologyPackage {
     .maps ?? []
   const apiSources = readYamlFile<ApiSourcesDoc>(join(versionDir, SOURCE_FILE_LAYOUT.apiSources), {})
     .sources ?? []
+  const sourceMaps = readYamlFile<SourceMapsDoc>(join(versionDir, SOURCE_FILE_LAYOUT.sourceMaps), {})
+    .maps ?? []
   // package.yaml 顶层 featureRecipes（scenario-prep S2.2）。
   // 有键即透传（非数组也收）——错型由 validate 报 FEATURE_RECIPE_INVALID，不静默丢（评审缺陷3）。
   const metaDoc = readYamlFile<Record<string, unknown>>(join(versionDir, SOURCE_FILE_LAYOUT.meta), {})
@@ -411,6 +434,7 @@ export function loadPackage(versionDir: string): OntologyPackage {
     scenarios,
     fieldMaps,
     apiSources,
+    sourceMaps,
     ...(featureRecipes !== undefined ? { featureRecipes } : {}),
   }
 }
@@ -468,6 +492,10 @@ export function savePackage(versionDir: string, pkg: OntologyPackage): void {
   writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.apiSources), {
     kind: 'O1ApiSources',
     sources: pkg.apiSources,
+  })
+  writeYamlFile(join(versionDir, SOURCE_FILE_LAYOUT.sourceMaps), {
+    kind: 'O1SourceMaps',
+    maps: pkg.sourceMaps,
   })
 }
 
@@ -571,6 +599,7 @@ export class PackageWorkspace {
       scenarios: [],
       fieldMaps: [],
       apiSources: [],
+      sourceMaps: [],
     }
     savePackage(dir, pkg)
     return dir

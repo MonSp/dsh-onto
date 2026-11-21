@@ -1,0 +1,60 @@
+{
+  "package": "wst-ops",
+  "version": "1.0.0",
+  "generatedAt": "2026-11-21T20:50:58.230Z",
+  "errors": [],
+  "warnings": [
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SRC-WST-CORE",
+      "message": "ID 未被引用: SRC-WST-CORE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-BIN",
+      "message": "ID 未被引用: SM-WST-BIN"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-ROUTE",
+      "message": "ID 未被引用: SM-WST-ROUTE"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-COVERS",
+      "message": "ID 未被引用: SM-WST-COVERS"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-ALERT",
+      "message": "ID 未被引用: SM-WST-ALERT"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-DUMP",
+      "message": "ID 未被引用: SM-WST-DUMP"
+    },
+    {
+      "level": "warn",
+      "code": "ID_UNREFERENCED",
+      "where": "SM-WST-MIX",
+      "message": "ID 未被引用: SM-WST-MIX"
+    }
+  ],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 2 / 关系 1 / 字典 2 / 行为 2 / 打分规则 3 / 排除规则 2 / 方法论模板 1 / 场景 1 / 字段映射 0 / 数据源 1 / 源映射 6"
+    }
+  ],
+  "score": 86,
+  "passed": true
+}

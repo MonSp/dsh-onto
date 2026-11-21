@@ -1,0 +1,45 @@
+kind: DerivedToolContracts
+llmForbidden: true
+idRules:
+  - objectId: OBJ-WST-BIN
+    idRule: <bin_id>
+  - objectId: OBJ-WST-ROUTE
+    idRule: <route_id>
+tools:
+  - id: TOOL-WST-BIN
+    name: 读取垃圾桶
+    kind: object-read
+    objectId: OBJ-WST-BIN
+    grantScope: OBJ-WST-BIN
+    inputs:
+      - OBJ-WST-BIN.binId
+      - OBJ-WST-BIN.binNo
+    outputs:
+      - OBJ-WST-BIN.binId
+      - OBJ-WST-BIN.binNo
+      - OBJ-WST-BIN.zone
+      - OBJ-WST-BIN.wasteType
+      - OBJ-WST-BIN.fillLevel
+      - OBJ-WST-BIN.lastEmptiedAt
+  - id: TOOL-WST-ROUTE
+    name: 读取清运路线
+    kind: object-read
+    objectId: OBJ-WST-ROUTE
+    grantScope: OBJ-WST-ROUTE
+    inputs:
+      - OBJ-WST-ROUTE.routeId
+      - OBJ-WST-ROUTE.routeNo
+    outputs:
+      - OBJ-WST-ROUTE.routeId
+      - OBJ-WST-ROUTE.routeNo
+      - OBJ-WST-ROUTE.stopCount
+      - OBJ-WST-ROUTE.plannedMinutes
+  - id: TOOL-WST-COVERS
+    name: 读取路线覆盖桶位
+    kind: relation-read
+    relationId: REL-WST-COVERS
+    grantScope: REL-WST-COVERS
+    inputs:
+      - OBJ-WST-ROUTE
+      - OBJ-WST-BIN
+    outputs: []

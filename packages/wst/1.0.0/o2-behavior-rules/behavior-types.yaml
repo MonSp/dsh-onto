@@ -1,0 +1,18 @@
+kind: O2BehaviorTypes
+behaviors:
+  - id: BHV-WST-MIX
+    name: 混投事件
+    anchor: OBJ-WST-BIN
+    relations: []
+    states:
+      - 待核实
+      - 已记录
+    trigger: 桶内混投记录（mixEvents 子记录）
+  - id: BHV-WST-DUMP
+    name: 清运事件
+    anchor: OBJ-WST-BIN
+    relations:
+      - REL-WST-COVERS
+    states:
+      - 已清运
+    trigger: 清运倾倒记录（dumps 行）

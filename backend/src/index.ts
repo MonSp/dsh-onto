@@ -10,6 +10,7 @@ import {
   OntoKnowledge,
   OntoModel,
   OntoRuntime,
+  OntoSource,
   OntoValidate,
   OntoWorkspace,
 } from './services.js'
@@ -22,6 +23,7 @@ import { setFormalActionEnabled } from './action-executor.js'
 import { runtimeContextForHost } from '@dsh-onto/runtime'
 
 export * from './services.js'
+export * from './source-face.js'
 export * from './agent-hooks.js'
 
 /**
@@ -47,6 +49,7 @@ function mount(ctx: Context): void {
   ctx.plugin(OntoDerive)
   ctx.plugin(OntoKnowledge)
   ctx.plugin(OntoRuntime)
+  ctx.plugin(OntoSource)
   // agent 面按服务依赖各自挂载：tools/skills 缺席只跳过对应能力。
   ctx.plugin(agentTools)
   ctx.plugin(agentSkills)

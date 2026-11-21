@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractAttrRefs, parseAttrRef, UNREFERENCED_EXEMPT_PREFIXES } from './ids.js'
 import { referencedFeatures, validateExpression } from './rules.js'
+import { checkSourceMapsStatic } from './sourcemap.js'
 import { listSourceFiles, loadPackage, readPackageMeta, PackageStoreError, QUALITY_REPORT_FILE } from './store.js'
 import { derivePackage } from './derive.js'
 import { verifyDerived } from './loadgate.js'
@@ -104,6 +105,7 @@ function collectDefinedIds(pkg: OntologyPackage): {
   for (const s of pkg.scenarios) add(s.id, `o3-scenarios/${s.id}.yaml`)
   for (const f of pkg.fieldMaps) add(f.id, 'bindings/field-maps.yaml')
   for (const s of pkg.apiSources) add(s.id, 'bindings/api-sources.yaml')
+  for (const m of pkg.sourceMaps ?? []) add(m.id, 'bindings/source-maps.yaml')
   return { ids, dupes, empty }
 }
 
@@ -482,6 +484,13 @@ export function validatePackage(
     }
   })
 
+  /* ── error: 源映射闭合（api-to-plugin S2.1）──────────────────────── */
+
+  for (const smIssue of checkSourceMapsStatic(pkg)) {
+    if (smIssue.level === 'error') err(smIssue.code, smIssue.where, smIssue.message)
+    else warn(smIssue.code, smIssue.where, smIssue.message)
+  }
+
   /* ── error: 权重合计 = 1.0 + 方法论模板权重集合一致（§7.1） ──────────── */
 
   const ruleWeights = new Map<string, number>()
@@ -636,7 +645,7 @@ export function validatePackage(
       `对象 ${pkg.objects.length} / 关系 ${pkg.relations.length} / 字典 ${pkg.dictionaries.length} / ` +
       `行为 ${pkg.behaviors.length} / 打分规则 ${pkg.scoreRules.length} / 排除规则 ${pkg.exclusionRules.length} / ` +
       `方法论模板 ${pkg.skillTemplates.length} / 场景 ${pkg.scenarios.length} / ` +
-      `字段映射 ${pkg.fieldMaps.length} / 数据源 ${pkg.apiSources.length}`,
+      `字段映射 ${pkg.fieldMaps.length} / 数据源 ${pkg.apiSources.length} / 源映射 ${(pkg.sourceMaps ?? []).length}`,
   })
 
   return { errors, warnings, info }

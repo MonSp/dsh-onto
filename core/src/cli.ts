@@ -55,8 +55,18 @@ import {
   saveRunRecord,
 } from './runstore.js'
 import { runScenario } from './scenario.js'
+import {
+  extractPageItems,
+  extractSnapshotRows,
+  fetchShapeRows,
+  previewSourceMaps,
+  readPath,
+  shapeCollectionKeys,
+} from './sourcemap.js'
+import { runReplay } from './replay.js'
+import { generatePlugin } from './scaffold.js'
 import { loadPackage, PackageWorkspace, readPackageMeta } from './store.js'
-import type { RuntimeDataset, SourceType } from './types.js'
+import type { ApiShape, RuntimeDataset, SourceType } from './types.js'
 import { SOURCE_TYPES } from './types.js'
 import { buildQualityReport, writeQualityReport, assertIssueReady } from './validate.js'
 
@@ -133,6 +143,12 @@ function main(): void {
       return cmdRun(args)
     case 'runs':
       return cmdRuns(sub, args)
+    case 'source':
+      return cmdSource(sub, args)
+    case 'replay':
+      return cmdReplay(args)
+    case 'plugin':
+      return cmdPlugin(sub, args)
     case 'knowledge':
       return cmdKnowledge(sub, args)
     case 'exp':
@@ -156,6 +172,11 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   gate <versionDir>
   run <versionDir> <scenarioId> --data run.json [--out result.json]
   runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
+  source probe --dir <versionDir> [--url U | --data F] [--collections a,b] [--samples N]
+  source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
+  replay --dir <versionDir> --scenario <SCN> [--fixture F] [--expected F] [--check]
+         [--scope-types A,B] [--against <versionDir>] [--write-expected]
+  plugin generate --dir <versionDir> --scenario <SCN> --source <SRC> --out <dir> [--force] [--profile P]
   knowledge upload|parse|queue|review|materialize
   exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
@@ -271,6 +292,281 @@ function workspaceRootOfVersionDir(versionDir: string): string | null {
   if (basename(packagesDir) !== 'packages') return null
   return dirname(packagesDir)
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * source（api-to-plugin S2.2）：probe / map init / map preview
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+interface SampleRows {
+  rows: Record<string, Array<Record<string, unknown>>>
+  origin: string
+}
+
+const TIME_FIELD_RE = /(?:At|Time|Date|Ts|Timestamp|On|Updated)$/i
+
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function singular(s: string): string {
+  return normKey(s).replace(/s$/, '')
+}
+
+async function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
+  let res: Response
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  } catch (e) {
+    fail(`采样请求失败 ${url}：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (res.status !== 200) fail(`采样请求拒绝 ${url}（${res.status}）`)
+  return res.json().catch(() => ({}))
+}
+
+/** 采样取行：--data 离线快照 或 --url 在线 GET（collections 只取首页直到 --samples 上限）。 */
+async function sampleRows(args: Args, shape: ApiShape, collections: string[], samples: number): Promise<SampleRows> {
+  const dataPath = args.flags['data']
+  if (typeof dataPath === 'string') {
+    const body = JSON.parse(readFileSync(resolve(dataPath), 'utf8')) as unknown
+    if (shape.mode === 'snapshot') {
+      return { rows: extractSnapshotRows(body, shape), origin: `file:${dataPath}` }
+    }
+    const rows: SampleRows['rows'] = {}
+    const src = body as Record<string, unknown>
+    for (const c of collections) {
+      const v = src[c]
+      rows[c] = Array.isArray(v)
+        ? (v.filter((x) => x !== null && typeof x === 'object') as Array<Record<string, unknown>>)
+        : extractPageItems(v, shape.itemsPath)
+    }
+    return { rows, origin: `file:${dataPath}` }
+  }
+  const baseUrl = flagStr(args, 'url').replace(/\/$/, '')
+  const timeoutMs = Number(args.flags['timeout'] ?? 8000)
+  const rows = await fetchShapeRows({
+    shape,
+    collections,
+    samples,
+    request: (pathWithQuery) => fetchJson(`${baseUrl}${pathWithQuery}`, timeoutMs),
+  })
+  return { rows, origin: `url:${baseUrl}` }
+}
+
+function collectionsFor(pkg: ReturnType<typeof loadPackage>, shape: ApiShape, args: Args): string[] {
+  const flag = args.flags['collections']
+  if (typeof flag === 'string' && flag !== '') {
+    return flag.split(',').map((s) => s.trim()).filter((s) => s !== '')
+  }
+  const fromMaps = [...new Set((pkg.sourceMaps ?? []).map((m) => m.collection))]
+  if (fromMaps.length > 0) return fromMaps
+  const fromShape = [...shapeCollectionKeys(shape)]
+  if (fromShape.length > 0) return fromShape
+  fail('无法确定集合：请给 --collections a,b（或先写 source-maps / shape.collectionPaths）')
+  return []
+}
+
+function shapeOf(pkg: ReturnType<typeof loadPackage>, args: Args): ApiShape {
+  const sourceId = args.flags['source']
+  const src =
+    typeof sourceId === 'string' && sourceId !== ''
+      ? pkg.apiSources.find((s) => s.id === sourceId)
+      : pkg.apiSources.find((s) => s.shape !== undefined) ?? pkg.apiSources[0]
+  if (src === undefined) fail('包内没有 apiSources')
+  if (src.shape === undefined) fail(`${src.id} 未声明 shape（api-sources.yaml 形态块）`)
+  return src.shape
+}
+
+function probeReport(rows: SampleRows['rows']): unknown {
+  const out: Record<string, unknown> = {}
+  for (const [c, rs] of Object.entries(rows)) {
+    const fields: Record<string, { types: string[]; nonNull: number; samples: unknown[] }> = {}
+    for (const r of rs) {
+      for (const [k, v] of Object.entries(r)) {
+        const f = (fields[k] ??= { types: [], nonNull: 0, samples: [] })
+        if (v !== null && v !== undefined) {
+          f.nonNull += 1
+          const t = Array.isArray(v) ? 'array' : typeof v
+          if (!f.types.includes(t)) f.types.push(t)
+          if (f.samples.length < 3 && !f.samples.includes(v)) f.samples.push(v)
+        }
+      }
+    }
+    out[c] = { rows: rs.length, fields }
+  }
+  return out
+}
+
+function pickIdField(collection: string, fields: string[]): string {
+  const want = `${singular(collection)}id`
+  const hit = fields.find((f) => normKey(f) === want)
+  if (hit !== undefined) return hit
+  // 强候选：camel `*Id` / 分隔 `*_id` `*-id` / 裸 `id`；弱候选：`^[a-z]+id$`（cardid 等，排后防 'valid' 抢位）
+  const strong = fields.filter((f) => /(_id|-id|Id)$/.test(f) || f === 'id')
+  const weak = fields.filter((f) => /^[a-z]+id$/.test(f))
+  return (strong[0] ?? weak[0] ?? fields[0]) ?? ''
+}
+
+function cmdSource(sub: string | undefined, args: Args): void {
+  void (async () => {
+    const dir = flagStr(args, 'dir')
+    const versionDir = resolve(dir)
+    const pkg = loadPackage(versionDir)
+    const shape = shapeOf(pkg, args)
+    const samples = Number(args.flags['samples'] ?? 50)
+
+    if (sub === 'probe') {
+      const collections = collectionsFor(pkg, shape, args)
+      const { rows, origin } = await sampleRows(args, shape, collections, samples)
+      print({ origin, shape: shape.mode, collections, probe: probeReport(rows) })
+      return
+    }
+
+    if (sub === 'map') {
+      const mode = args._[2]
+      if (mode === 'init') {
+        const collections = collectionsFor(pkg, shape, args)
+        const { rows } = await sampleRows(args, shape, collections, samples)
+        const maps: Array<Record<string, unknown>> = []
+        const unmatchedCollections: string[] = []
+        const usedTypes = new Set<string>()
+        for (const [c, rs] of Object.entries(rows)) {
+          const objectType = pkg.objects.find(
+            (o) => singular(o.id.split('-').pop() ?? o.id) === singular(c) || normKey(o.id) === normKey(c),
+          )
+          if (objectType === undefined) {
+            unmatchedCollections.push(c)
+            continue
+          }
+          usedTypes.add(objectType.id)
+          const fields = Object.keys(rs[0] ?? {})
+          const timeField = fields.find((f) => TIME_FIELD_RE.test(f))
+          maps.push({
+            id: `SM-${pkg.meta.domain.toUpperCase().slice(0, 12)}-${c.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16)}`,
+            collection: c,
+            objectType: objectType.id,
+            idTemplate: `<${pickIdField(c, fields)}>`,
+            ...(timeField !== undefined ? { timeField } : {}),
+          })
+        }
+        const outRel = 'bindings/source-maps.yaml'
+        const outFile = resolve(versionDir, outRel)
+        if (existsSync(outFile) && args.flags['force'] !== true) {
+          fail(`${outRel} 已存在；覆盖请加 --force`)
+        }
+        writeFileSync(
+          outFile,
+          `kind: O1SourceMaps\nmaps:\n${maps.map((m) => yamlMapEntry(m)).join('')}`,
+          'utf8',
+        )
+        print({
+          wrote: outRel,
+          maps: maps.map((m) => ({ id: m['id'], collection: m['collection'], objectType: m['objectType'] })),
+          unmatchedCollections,
+          unmatchedObjectTypes: pkg.objects.filter((o) => !usedTypes.has(o.id)).map((o) => o.id),
+          next: '编辑 bindings/source-maps.yaml 后跑 source map preview',
+        })
+        return
+      }
+      if (mode === 'preview') {
+        const collections = collectionsFor(pkg, shape, args)
+        const { rows, origin } = await sampleRows(args, shape, collections, samples)
+        const result = previewSourceMaps(pkg, rows)
+        if (args.flags['json'] === true) {
+          print({ origin, ...result })
+        } else {
+          print({
+            origin,
+            counts: result.counts,
+            businessWindow: result.businessWindow,
+            diagnostics: result.diagnostics,
+            evidence: result.evidence,
+          })
+        }
+        const hasError = result.diagnostics.some((d) => d.level === 'error')
+        if (hasError && args.flags['strict'] === true) process.exit(2)
+        return
+      }
+      fail('source map 需要子命令 init|preview')
+      return
+    }
+
+    fail('source 需要子命令 probe|map（map init|map preview）')
+  })().catch((e) => {
+    fail(e instanceof Error ? e.message : String(e))
+  })
+}
+
+/** 单条 source-map 的最小 YAML（手写以保注释友好；条目少且结构稳定）。 */
+function yamlMapEntry(m: Record<string, unknown>): string {
+  const lines = [`  - id: ${m['id']}`]
+  for (const [k, v] of Object.entries(m)) {
+    if (k === 'id') continue
+    if (typeof v === 'string') lines.push(`    ${k}: ${v}`)
+    else lines.push(`    ${k}: ${JSON.stringify(v)}`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * replay（api-to-plugin S2.5）：随包快照回放 / 基线对照 / 版本切换 diff
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+function cmdReplay(args: Args): void {
+  const dir = flagStr(args, 'dir')
+  const scenarioId = flagStr(args, 'scenario')
+  const scopeFlag = args.flags['scope-types']
+  const againstFlag = args.flags['against']
+  try {
+    const report = runReplay({
+      versionDir: resolve(dir),
+      scenarioId,
+      ...(typeof args.flags['fixture'] === 'string' ? { fixturePath: resolve(args.flags['fixture']) } : {}),
+      ...(typeof args.flags['expected'] === 'string' ? { expectedPath: resolve(args.flags['expected']) } : {}),
+      ...(typeof scopeFlag === 'string' && scopeFlag !== ''
+        ? { scopeTypes: scopeFlag.split(',').map((s) => s.trim()).filter((s) => s !== '') }
+        : {}),
+      ...(typeof args.flags['source'] === 'string' ? { sourceId: args.flags['source'] } : {}),
+      ...(typeof againstFlag === 'string' ? { againstDir: resolve(againstFlag) } : {}),
+      check: args.flags['check'] === true,
+      writeExpected: args.flags['write-expected'] === true,
+    })
+    print(report)
+    if (report.comparison !== undefined && !report.comparison.ok) process.exit(2)
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * plugin（api-to-plugin S2.4）：脚手架生成最小 DSH 插件（生成 ≠ 签发）
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+function cmdPlugin(sub: string | undefined, args: Args): void {
+  if (sub !== 'generate') fail('plugin 需要子命令 generate')
+  try {
+    const result = generatePlugin({
+      versionDir: resolve(flagStr(args, 'dir')),
+      scenarioId: flagStr(args, 'scenario'),
+      sourceId: flagStr(args, 'source'),
+      outDir: resolve(flagStr(args, 'out')),
+      force: args.flags['force'] === true,
+      ...(typeof args.flags['profile'] === 'string' ? { profileName: args.flags['profile'] } : {}),
+      ...(typeof args.flags['core-dir'] === 'string' ? { coreDir: resolve(args.flags['core-dir']) } : {}),
+      ...(typeof args.flags['runtime-dir'] === 'string' ? { runtimeDir: resolve(args.flags['runtime-dir']) } : {}),
+      ...(typeof args.flags['harness-dir'] === 'string' ? { harnessDir: resolve(args.flags['harness-dir']) } : {}),
+    })
+    print({
+      ok: true,
+      outDir: result.outDir,
+      files: result.files,
+      warnings: result.warnings,
+      next: 'cd <out> && pnpm install && pnpm run build && node --test tests/*.test.mjs；部署模板见 scripts/ 与 .env.example',
+    })
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e))
+  }
+}
+
 
 function cmdRun(args: Args): void {
   const dir = args._[1]

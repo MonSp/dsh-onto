@@ -18,6 +18,7 @@ export const ID_TYPES = [
   'TOOL',
   'FM',
   'SRC',
+  'SM',
   'AGT',
   'AUD',
 ] as const

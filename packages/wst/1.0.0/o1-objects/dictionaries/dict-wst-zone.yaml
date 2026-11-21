@@ -1,0 +1,10 @@
+kind: O1Dictionary
+id: dict-wst-zone
+name: 桶位区域
+values:
+  - canteen
+  - dorm
+  - lab
+  - teaching
+  - office
+  - sport
