@@ -1,0 +1,23 @@
+kind: O2ScoreRules
+rules:
+  - id: RULE-WST-SCORE-FILL
+    name: 满溢风险
+    description: 桶位填充率接近满溢，存在溢出与滞留风险。
+    weight: 0.4
+    expression: "min(1, fillRatio)"
+    threshold: 0.8
+    evidenceTemplate: 桶位满溢度 {fillRatio}
+  - id: RULE-WST-SCORE-MIX
+    name: 危险混投
+    description: 危险废物混投事件次数累积。
+    weight: 0.35
+    expression: "min(1, mixCount / 2)"
+    threshold: 0.5
+    evidenceTemplate: 危险混投次数 {mixCount}
+  - id: RULE-WST-SCORE-HAZARD
+    name: 危废标记
+    description: 上游危险废物标记命中。
+    weight: 0.25
+    expression: "min(1, hazardFlag)"
+    threshold: 1
+    evidenceTemplate: 危废标记 {hazardFlag}

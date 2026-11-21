@@ -1,0 +1,61 @@
+kind: DerivedAgentDuties
+duties:
+  - id: AGT-WST-HAZARD-MIX-s1
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs: &a1
+      - TOOL-WST-BIN
+      - TOOL-WST-ROUTE
+      - TOOL-WST-COVERS
+    llm: allowed
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s2
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s3
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 排除段（before-scoring，drop/downweight）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s4
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 打分段（加权汇总 riskScore）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s5
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s6
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-WST-HAZARD-MIX-s7
+    scenario: SCN-WST-HAZARD-MIX
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs: []
+    llm: forbidden
+    humanGate: true

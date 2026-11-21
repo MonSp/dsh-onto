@@ -1,0 +1,8 @@
+kind: O1RelationTypes
+relations:
+  - id: REL-WST-COVERS
+    name: 路线覆盖桶位
+    from: OBJ-WST-ROUTE
+    to: OBJ-WST-BIN
+    attributes: []
+    description: 清运路线对垃圾桶的覆盖关系（来源 routes.covers 数组外键）

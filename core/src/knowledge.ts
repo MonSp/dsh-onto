@@ -904,6 +904,7 @@ function nextId(pkg: OntologyPackage, prefix: string, tag: string): string {
   for (const s of pkg.scenarios) taken.add(s.id)
   for (const f of pkg.fieldMaps) taken.add(f.id)
   for (const s of pkg.apiSources) taken.add(s.id)
+  for (const m of pkg.sourceMaps ?? []) taken.add(m.id)
   for (let i = 1; i < MAX_ID_SEQ; i++) {
     const id = `${prefix}-${tag}-${i}`
     if (!taken.has(id)) return id
@@ -931,6 +932,7 @@ const UPDATABLE: Record<string, string[]> = {
   ScenarioCard: ['name', 'goal', 'boundary', 'inputs', 'outputs', 'pipeline', 'behaviorRefs', 'exclusionRefs', 'scoreRefs', 'prep', 'outputContract', 'reviewGate', 'auditChecks'],
   FieldMap: ['name', 'source', 'target'],
   ApiSource: ['name', 'sourceType', 'endpoint'],
+  SourceMap: ['description', 'collection', 'objectType', 'idTemplate', 'timeField', 'fields', 'relationType', 'from', 'to', 'targetCollection', 'idField', 'objectRefField', 'features', 'tagsField', 'behaviorType', 'objectRefTemplate', 'attrMap', 'eventsPath'],
 }
 
 const clamp01 = (w: number): number => Math.min(1, Math.max(0, w))
@@ -1048,6 +1050,7 @@ function applyUpdateToPackage(pkg: OntologyPackage, c: DraftCandidate): string {
     ScenarioCard: pkg.scenarios,
     FieldMap: pkg.fieldMaps,
     ApiSource: pkg.apiSources,
+    SourceMap: pkg.sourceMaps,
   }
   const table = tables[c.targetKind]
   const el = table?.find((x) => x.id === targetId || (x.name !== undefined && x.name === targetId))
@@ -1351,6 +1354,14 @@ export function applyDraftToPackage(
       })
       return id
     }
+    case 'SourceMap': {
+      const id = pickId(p, 'SM', tag, pkg)
+      // kind 形态（object/relation/candidate/behavior…）按 payload 原样落，错型由 validate SM_* 拦
+      const { id: _drop, ...rest } = p as Record<string, unknown>
+      if (pkg.sourceMaps === undefined) pkg.sourceMaps = []
+      pkg.sourceMaps.push({ ...(rest as object), id } as (typeof pkg.sourceMaps)[number])
+      return id
+    }
     default:
       throw new KnowledgeError('BAD_TARGET_KIND', `unknown targetKind ${String(c.targetKind)}`)
   }
@@ -1367,7 +1378,8 @@ function idTaken(pkg: OntologyPackage, id: string): boolean {
     pkg.skillTemplates.some((x) => x.id === id) ||
     pkg.scenarios.some((x) => x.id === id) ||
     pkg.fieldMaps.some((x) => x.id === id) ||
-    pkg.apiSources.some((x) => x.id === id)
+    pkg.apiSources.some((x) => x.id === id) ||
+    (pkg.sourceMaps ?? []).some((x) => x.id === id)
   )
 }
 

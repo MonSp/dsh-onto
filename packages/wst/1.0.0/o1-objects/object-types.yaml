@@ -1,0 +1,45 @@
+kind: O1ObjectTypes
+objects:
+  - id: OBJ-WST-BIN
+    name: 垃圾桶
+    idRule: "<bin_id>"
+    attributes:
+      - name: binId
+        type: string
+        required: true
+      - name: binNo
+        type: string
+        required: true
+      - name: zone
+        type: enum
+        enumValuesRef: dict-wst-zone
+      - name: wasteType
+        type: enum
+        enumValuesRef: dict-wst-waste-type
+      - name: fillLevel
+        type: float
+      - name: lastEmptiedAt
+        type: date
+    lifecycle:
+      - 在用
+      - 停用
+      - 报废
+    description: 校园废弃物收集点（桶位）登记对象
+  - id: OBJ-WST-ROUTE
+    name: 清运路线
+    idRule: "<route_id>"
+    attributes:
+      - name: routeId
+        type: string
+        required: true
+      - name: routeNo
+        type: string
+        required: true
+      - name: stopCount
+        type: int
+      - name: plannedMinutes
+        type: int
+    lifecycle:
+      - 在用
+      - 停用
+    description: 清运路线（按覆盖桶位组织清运作业）

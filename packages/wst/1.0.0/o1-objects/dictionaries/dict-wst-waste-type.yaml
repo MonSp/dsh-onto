@@ -1,0 +1,9 @@
+kind: O1Dictionary
+id: dict-wst-waste-type
+name: 废物类型
+values:
+  - kitchen
+  - recyclable
+  - hazardous
+  - general
+  - organic
