@@ -162,8 +162,11 @@ Full AML workbench: `scripts\setup-profile.ps1` → `dump-config.ps1` → `dev-w
 |---|---|---|
 | **Page** | `runScenario({ name, version, scenarioId, sourceId })` | Candidates, riskScore, hit rules, evidence |
 | **Agent** | `run_scenario` same args | Same rule IDs, same scores, zero forbidden phrases |
+| **Chat report** | `show_run_report(runId, surface?)` | In-conversation interactive report (summary / candidates / evidence; filter / expand / navigate) |
 
-Scores never depend on the entry point — computed once in the rule engine.
+Scores never depend on the entry point — computed once in the rule engine; page and chat report
+share the same `getRunReport` projection. A view used in chat can be saved via `save_report_page`
+as a reusable plugin report page and re-applied to another runId.
 
 ---
 
@@ -218,6 +221,8 @@ No UI required first — ask in a dsh session that has the RUN tool face.
 | Score a risk question | `run_scenario` | Fetch + exclude + score + evidence + audit |
 | Batch | `run_scenarios` | Same contract per item |
 | Expand graph neighborhood | `expand_entity` | Data prep only — **does not score** |
+| View interactive report | `show_run_report` | Renders one run in chat (optional surface organizes the view) |
+| Save report page | `save_report_page` / `list_report_pages` | Persist a used view as a reusable plugin page |
 | Read package | `get_package` etc. | Read-only |
 | Change criteria | `apply_draft` | Draft queue — **never writes ISSUED** |
 
