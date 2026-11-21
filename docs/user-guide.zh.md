@@ -161,18 +161,20 @@ AML 完整工作台：`scripts\setup-profile.ps1` → `dump-config.ps1` → `dev
 
 ## 4. 路径 A：构建业务应用
 
-### 4.1 最小应用模板（照抄 TAX）
+### 4.1 最小应用（自助路径：配置只读 API → 生成插件）
 
-适合「一个场景 + 一个数据源 + 一个运行页」：
+适合「一个只读 JSON API + 一个场景 + 一张结果页 + 一个 Agent 入口」——**不手写连接器、不改引擎**：
 
-1. 复制 `apps/tax` → `apps/<domain>`，改包名、场景 ID、`sourceId`、对象类型。
-2. 写 `DataConnector`：业务 API → `RuntimeDataset`（对象 id 符合 idRule、关系两端闭合、候选 `objectRef` 命中）。
-3. 改 `bindings/` → `validate` / `derive` / `gate` → 人工 `issue`。
-4. 部署侧 env 登记 `dataSources.register('SRC-XXX', connector)`。
-5. 页面只调 `runScenario`（与 Agent 同源）；侧栏注册 panel。
-6. 测试：mock 单测 + connector→场景 e2e（参考 `apps/tax/tests`）。
+1. 业务口径包（对象/规则/场景）`validate`/`derive` 通过（DRAFT 即可开始接数）。
+2. `bindings/api-sources.yaml` 声明逻辑源 + `shape`（信封/分页）→ `source probe` 采样探字段。
+3. `bindings/source-maps.yaml` 映射对象 id/属性/关系/候选/行为 → `source map preview`
+   诊断缺字段/类型不符/断引用，并看证据就绪度（够用/待补）。
+4. 回放基线：`fixtures/replay-<SCN>.json` + `replay --write-expected`；升级前 `replay --check`。
+5. 人工 `issue`（签发 = 人审）→ `plugin generate` 生成最小插件（结果页 + Agent 入口 + 部署模板）。
+6. 生成物 `pnpm install/build/test` → `setup-profile` → `seed-release`（导入≠激活）→ `dump-config` 断言 → env 启动。
+7. 双入口验收：页面与 Agent `run_scenario` 同场景同 sourceId，候选/分数/ruleId 一致。
 
-边界：页面与 Agent 同场景同 sourceId；连接器/UI 不改分；RUN-only 不 import backend/workbench；文案 `ctx.locale.register` 内联。
+边界：页面与 Agent 同场景同 sourceId；连接器/UI 不改分；生成物 RUN-only 不 import backend/workbench；凭据只在部署 env。
 
 完整步骤：[plugin-authoring.zh.md](plugin-authoring.zh.md)。
 
@@ -285,10 +287,9 @@ AML 示例场景：`SCN-AML-FIND-CLUES`（包 `aml-analysis`）。
 
 **想做业务应用：**
 
-1. 按 [plugin-authoring.zh.md](plugin-authoring.zh.md)：建包 → bindings → validate/issue。  
-2. 写连接器 + env 登记 `sourceId`。  
-3. 页面只调 `runScenario`（与 Agent 同源）。  
-4. 输出恒带 `humanReviewRequired=true`；正式动作走批准卡。
+1. 按 [plugin-authoring.zh.md](plugin-authoring.zh.md)：建包 → shape/映射 → 预览 → issue → 回放基线 → `plugin generate`。  
+2. 生成物装配（setup-profile / seed-release / dump-config）+ env 登记 `sourceId`。  
+3. 页面与 Agent 同源（同一 `runScenario`）；输出恒带 `humanReviewRequired=true`；正式动作走批准卡。
 
 **想持续迭代口径：**
 
@@ -303,7 +304,7 @@ AML 示例场景：`SCN-AML-FIND-CLUES`（包 `aml-analysis`）。
 | 文档 | 内容 |
 |---|---|
 | [architecture.md](architecture.md) | 概念、三层本体、校验/派生/引擎规则（自包含） |
-| [plugin-authoring.zh.md](plugin-authoring.zh.md) | 第二业务插件冷启动装配（卡点 C1–C7） |
+| [plugin-authoring.zh.md](plugin-authoring.zh.md) | 自助装配：配置只读 API → 映射预览 → 回放 → 生成插件 |
 | [ops-manual.md](ops-manual.md) | 正式动作启用门槛、对账与停用 |
 | [../README.zh.md](../README.zh.md) | 快速开始与 CLI |
 | [user-guide.en.md](user-guide.en.md) | 本指南英文版 |

@@ -4,9 +4,9 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 以 dsh plugin bundle 形态承载：`backend/`（@dsh-onto/backend 统一后端 wire 服务）、
 `workbench/`（@dsh-onto/workbench Web UI）、`core/`（@dsh-onto/core 纯引擎库 + CLI，零 harness 依赖）、
 业务插件 `apps/aml`（@dsh-aml/app 治理工作台）、`apps/tax`（@dsh-tax/app 第二域只读运行）、
-只读 mock `mock-services/tax-api`。
-示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0、tax/1.0.0），场景样例在 `examples/`。
-插件冷启动装配步骤见 [docs/plugin-authoring.zh.md](docs/plugin-authoring.zh.md)。
+只读 mock `mock-services/tax-api`、`mock-services/wst-api`（自助接入验收 API）。
+示例业务本体包在 `packages/`（aml/1.0.0、med/1.0.0、tax/1.0.0、wst/1.0.0），场景样例在 `examples/`。
+插件自助装配（配置只读 API → 映射预览 → 回放 → 生成插件）见 [docs/plugin-authoring.zh.md](docs/plugin-authoring.zh.md)。
 
 ## 不可违背
 
@@ -43,7 +43,11 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
    场景运行 tab 运行记录/两轮对比/导出 locator 可见。
 6. 第二业务插件（`apps/tax` / `mock-services/tax-api`）：`node --test mock-services/tax-api/tax-api.test.mjs`
    + `cd apps/tax && pnpm run build && node --test tests/*.test.mjs`（含 connector→场景 e2e）；
-   `scripts/dump-tax-config.ps1` 断言 TAX 在、backend/workbench 不在；零改 `core runtime backend workbench`。
+   `scripts/dump-tax-config.ps1` 断言 TAX 在、backend/workbench 不在（TAX 手写连接器保持零改动）。
+7. 自助接入链（api-to-plugin）：`node --test mock-services/wst-api/wst-api.test.mjs` +
+   `node core/dist/cli.js source map preview --dir packages/wst/1.0.0 --data <样本> --strict` +
+   `replay --check` + `plugin generate` 生成插件 `pnpm run build && node --test tests/*.test.mjs`
+   （夹具→场景 e2e 同分幂等）；工作台「接入」tab 面板转发 wire 可见。
 
 ## 核心模块地图（core/src/）
 
@@ -62,7 +66,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 | `graph.ts` | 图谱构建（画布数据源）、issue 节点定位（I3）、场景 refs 全链路边（v0.2.1） |
 | `subgraph.ts` | 子图扩展 `expandEntity`：种子 BFS 邻域闭包 / 诱导子图 / truncated（subgraph-expansion S3） |
 | `features.ts` | 特征投影 `projectFeatures` + 派生 `deriveFeatures`（since/count/ratio，now 注入确定性，S4） |
-| `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/knowledge/exp` |
+| `sourcemap.ts` | 源映射纯转换（api-to-plugin）：shape 取样/行→RuntimeDataset/预览诊断/证据就绪度 |
+| `replay.ts` | 发布前回放（api-to-plugin）：随包夹具→映射→场景→基线对照/缺数/越权/版本切换 |
+| `scaffold.ts` | 插件脚手架（api-to-plugin）：已签发包→最小 DSH 插件（模板树 `core/templates/plugin/`） |
+| `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/source/replay/plugin/knowledge/exp` |
 
 ## 常见故障
 

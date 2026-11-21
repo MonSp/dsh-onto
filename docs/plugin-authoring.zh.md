@@ -1,27 +1,32 @@
-# 业务插件冷启动装配指南（第二插件验证）
+# 业务插件自助装配指南（配置只读 API → 发布页面与 Agent 同源插件）
 
-> 目标读者：**未参与 `core` / `runtime` 开发**的人。按本文走完「接数 → 映射 → 签发 → 部署 → 双入口验收」，
-> 全程**不改** `core/**`、`runtime/**` 与 harness。卡住的地方填文末卡点表——那就是下一步要补的产品能力。
+> 目标读者：**未参与 `core` / `runtime` 开发**的人。按本文走完「接数 → 映射 → 签发 → 回放 → 生成插件 → 部署 → 双入口验收」，
+> 全程**不手写连接器、不改** `core/**`、`runtime/**` 与 harness。卡住的地方填文末卡点表——那就是产品缺口。
 >
-> 参考实现：`apps/tax`（`@dsh-tax/app`）+ `mock-services/tax-api` + 已签发 `packages/tax`（tax-risk@1.0.0）。
-> AML 复核工作台（`apps/aml`）是参考应用，不要求复刻其工单/批准面。
+> 你带来的材料：① 一个**只读 JSON HTTP API**；② 一套**业务口径**（对象/规则/一个场景的本体包，建模路径见
+> [user-guide.zh.md](user-guide.zh.md)，本文从「已有 DRAFT 包」开始）。默认路径支持一个只读 JSON API、
+> 一个场景、一张结果页、一个 Agent 入口。
+>
+> 参考素材：`mock-services/wst-api`（结构不同于 TAX 的示例 API）+ `packages/wst/1.0.0`（示例口径包）。
+> `apps/tax` 是手写连接器的历史参照，**不必**再照抄。
 
 ## 0. 边界（先读）
 
 | 必须 | 禁止 |
 |---|---|
 | 页面与 Agent 调**同一场景、同一 `sourceId`** | 页面/Agent 各写一套判分逻辑 |
-| 打分只在 `core/src/rules.ts` | 在连接器或 UI 里改分 |
+| 打分只在 `core/src/rules.ts`（经 `runScenario`） | 在连接器或 UI 里改分 |
 | ISSUED 只读；改动 fork 新版本 | 直接改已签发包 |
-| 数据源地址/凭证只来自**部署配置** | 把真实 URL/密钥写进本体包 |
+| 数据源地址/凭证只来自**部署配置**（env） | 把真实 URL/密钥写进本体包 |
 | `humanReviewRequired=true` 恒真 | 把机器分当业务认定 |
+| 生成 ≠ 签发，导入 ≠ 激活 | 让生成器/播种脚本冒充人审 |
 | 模拟数据标 `simulated` | 把 mock 验收写成真实业务验收 |
 
 ## 1. 前置
 
 ```powershell
 # Node ≥ 24.9；harness 为兄弟目录（仓库根旁 ../deepseek-harness；worktree 经 .worktrees/deepseek-harness junction）
-# 验证：必须是独立 Node，**不能**是带 electron 指纹的嵌入式构建
+# 验证：必须是独立 Node，不能是带 electron 指纹的嵌入式构建
 node -e "console.log(process.version, process.versions.electron ?? 'ok')"
 # 期望：v24.x ok；若打印 electron 版本号，dsh web 启动会失败（见卡点 C6）
 Test-Path ..\deepseek-harness\package.json   # 从仓库根（或 worktree 根）出发
@@ -35,156 +40,263 @@ $env:PATH = "node目录;D:\trunk\Inv\deepseek-harness\node_modules\.bin;$env:PAT
 pnpm -v
 ```
 
-构建引擎与运行库（一次性）：
+构建引擎（一次性）：
 
 ```powershell
 cd core;     pnpm install; pnpm run build; cd ..
 cd runtime;  pnpm install; pnpm run build; cd ..
 ```
 
-## 2. 接数：起只读 tax-api
+以下命令均从**仓库根**执行，`<pkg>` 指你的包版本目录（如 `packages/wst/1.0.0`）。
+构建侧工作台（backend/workbench 组合）另有「接入」tab，与下述 CLI 同一口径（采样/预览/生成/回放按钮转发），
+可选用；本文以 CLI 为准。
 
-```powershell
-node mock-services\tax-api\server.mjs --port 3911
-# 期望输出一行 JSON：{"event":"listening","port":3911,...}
-# 自测：
-node --test mock-services\tax-api\tax-api.test.mjs
+## 2. 形态声明：api-sources 的 `shape`
+
+编辑 `<pkg>/bindings/api-sources.yaml`，给逻辑源声明 **API 形态**（信封/分页）。地址仍不进包：
+
+```yaml
+kind: O1ApiSources
+sources:
+  - id: SRC-WST-CORE
+    name: 废物清运查询服务
+    sourceType: SCHEMA_API
+    endpoint: "api://wst-snapshot"        # 逻辑名，不写真实 URL
+    shape:
+      mode: snapshot                      # snapshot=单请求多集合；collections=每集合一次 GET
+      path: /api/v1/bin-snapshot          # snapshot 模式：单请求路径
+      collectionPaths:                    # 集合键 → 响应体点路径
+        bins: bins
+        routes: routes
+        dumps: dumps
+        alerts: alerts
+      pagination: { mode: none }
 ```
 
-API 只读：`GET /admin/health`、`GET /api/v1/data/:collection`
-（`taxpayers|invoices|bankFlows|taxReturns|benchmarks|riskCandidates`）。
-非 GET → 405。
+collections 模式（每集合一次 GET，分页可配）：
 
-## 3. 映射：bindings 与校验
-
-编辑 `packages/tax/1.0.0/bindings/`：
-
-- `api-sources.yaml` — 逻辑源 `SRC-TAX-CORE`（`endpoint: api://tax-query`，**不写真实 URL**）
-- `field-maps.yaml` — 源字段 → `OBJ-*.attr`（target 必须闭合）
-
-```powershell
-cd core
-node dist\cli.js validate ..\packages\tax\1.0.0     # errors 必须为 []；ID_UNREFERENCED 警告可放行
-node dist\cli.js derive   ..\packages\tax\1.0.0
-node dist\cli.js gate     ..\packages\tax\1.0.0
-cd ..
+```yaml
+    shape:
+      mode: collections
+      collectionPath: "/api/v1/data/{collection}"   # 模板须含 {collection}
+      itemsPath: items                              # 响应行字段路径（缺省 items）
+      pagination:
+        mode: cursor                                # cursor | offset | none
+        cursorParam: cursor                         # 可选（缺省 cursor）
+        nextField: nextCursor                       # 可选（缺省 nextCursor；空/缺=无下一页）
+        # mode: offset 时可配 limitParam/offsetParam/pageSize（缺省 limit/offset/100）
+        # completeField: complete                   # 可选；显式 false → 不完整
 ```
 
-> **质量分说明**：`quality-report.json` 的 `score = 100 − 2×warnings`。字段映射 `FM-*` 与数据源 `SRC-*`
-> 是叶子 ID（无其它元素按 ID 引用它们），core 的 `UNREFERENCED_EXEMPT_PREFIXES` 只豁免
-> `AGT-/AUD-/TOOL-/SCN-`，故 48 条 field-map + 1 条 api-source 会各记一条 `ID_UNREFERENCED`，
-> score 可低至个位数（本包约 2）而 `passed=true`（签发门禁只拦 errors）。AML 包同类警告 score≈54。
-> 这是校验器计分口径问题，**不代表映射未闭合**；target 闭合以 `validate` 无 error + 连接器 e2e 为准。
+## 3. 接数与映射
 
-## 4. 签发（人工步骤）
+### 3.1 采样探字段
+
+```powershell
+node core\dist\cli.js source probe --dir <pkg> --url http://127.0.0.1:3912 --samples 50
+# 也可离线：--data <样本响应体.json>（snapshot=整包响应体；collections=各集合响应体的键值对象）
+# 输出：每集合行数 + 字段名/推断类型/样例值
+```
+
+### 3.2 映射（bindings/source-maps.yaml）
+
+```powershell
+node core\dist\cli.js source map init --dir <pkg> --url http://127.0.0.1:3912   # 启发式草稿（对象映射）
+# 然后手补关系/候选/行为映射，再预览
+```
+
+映射语法（`kind: O1SourceMaps`，每条 `id: SM-<TAG>-<NAME>`）：
+
+```yaml
+kind: O1SourceMaps
+maps:
+  # 对象：行 → 对象实例
+  - id: SM-WST-BIN
+    collection: bins                  # shape 里的集合键
+    objectType: OBJ-WST-BIN
+    idTemplate: "<binId>"             # <字段> 占位 + 字面分隔（复合 id："<code>:<no>"）
+    timeField: lastEmptiedAt          # 可选：业务记录时间（业务窗/时效门）
+    fields:                           # 可选：源字段→属性名（缺省同名全映）
+      - { source: binNo, target: binNo }
+  # 关系：FK 式（数组字段 → 多条关系）
+  - id: SM-WST-COVERS
+    kind: relation
+    collection: routes
+    relationType: REL-WST-COVERS
+    from: self                        # self=本行对象 id
+    to: { field: covers }             # 字段值即对端对象 id
+    targetCollection: bins            # 对端集合（断引用定位用）
+  # 候选：上游风险信号
+  - id: SM-WST-ALERT
+    kind: candidate
+    collection: alerts
+    idField: alertId
+    objectRefField: binId             # 须命中同批对象 id
+    objectType: OBJ-WST-BIN
+    features:                         # 特征名 → 源字段（点路径支持嵌套）
+      fillRatio: features.fillRatio
+      mixCount: features.mixCount
+    tagsField: tags
+  # 行为：独立集合即事件行
+  - id: SM-WST-DUMP
+    kind: behavior
+    collection: dumps
+    behaviorType: BHV-WST-DUMP
+    objectRefTemplate: "<binId>"      # 归属对象 id 模板
+    timeField: at
+  # 行为：行内嵌套事件数组
+  - id: SM-WST-MIX
+    kind: behavior-list
+    collection: bins
+    behaviorType: BHV-WST-MIX
+    objectRefTemplate: "<binId>"
+    eventsPath: mixEvents
+    timeField: at
+```
+
+规则速记：`idTemplate` 与对象 `idRule` 必须同构（占位序列一致，大小写/下划线归一比较）；
+关系两端必须同批闭合（对端集合未取数报「待补」，取了没命中报「断引用」）；值连接（按值 join）暂不支持。
+
+### 3.3 映射预览（缺字段 / 类型不符 / 断引用 / 证据够不够）
+
+```powershell
+node core\dist\cli.js source map preview --dir <pkg> --url http://127.0.0.1:3912
+# --json 输出机器报告；--strict 有 error 级诊断时退出码 2（可入 CI）
+```
+
+诊断码：`SM_FIELD_MISSING` 缺字段、`SM_TYPE_MISMATCH` 类型不符（含枚举不在字典）、
+`SM_REF_BROKEN` 断引用、`SM_REF_PENDING` 对端未取数、`SM_ID_EMPTY`/`SM_ID_CONFLICT` id 问题、
+`SM_REQUIRED_UNMAPPED` 必填属性未覆盖、`SM_OBJECT_UNKNOWN`/`SM_FIELD_UNKNOWN`/`SM_IDRULE_MISMATCH`
+等静态闭合错误。报告还含**证据就绪度**：逐特征标注可复算（object-fact/derived/connector，够用）
+还是 unverified-caller（待补）。
+
+## 4. 发布前回放（随包验收样例）
+
+```powershell
+# 4.1 冻结数据快照（原始响应体）到 <pkg>/fixtures/replay-<SCN>.json
+# 4.2 生成基线（候选/分数/命中规则/证据/排除/人审/审计，写 fixtures/replay-<SCN>.expected.json 并重派生）
+node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --fixture <快照.json> --write-expected
+# 4.3 之后每次改口径/升级前：对照基线
+node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --check
+# 覆盖用例：
+#   缺数：--fixture <删字段变体>（映射诊断可见 + 基线 diff）
+#   越权：--scope-types OBJ-A,OBJ-B（范围外对象不出数，scopedOut 留痕）
+#   版本切换：--against <另一版本目录>（同快照双跑，出候选增删/分数 delta/命中变化）
+```
+
+`--check` 有差异退出码 2，可入 CI。
+
+## 5. 签发（人工步骤）
 
 签发 = 人审通过；`issuedBy` **不得**为 agent/llm/ai/bot/system。
 
 ```powershell
 cd core
-# workspace 根 = 仓库根（packages/ 在 root 下；目录名 tax ≠ meta.name tax-risk 时靠扫描回退）
-# 从 core 出发用 --root ..（勿写 ..\..：那会指到仓库外）
-node dist\cli.js package review --name tax-risk --version 1.0.0 --root ..
-node dist\cli.js package issue  --name tax-risk --version 1.0.0 --by "张三（人工）" --root ..
+node dist\cli.js package review --name <包名> --version 1.0.0 --root ..
+node dist\cli.js package issue  --name <包名> --version 1.0.0 --by "张三（人工）" --root ..
 cd ..
 ```
 
-issue 会内置再派生；再跑一次 `gate` 应仍 `ok: true`。
+> issue 会内置再派生；再跑一次 `gate` 应仍 `ok: true`。ISSUED 后改动须 `package fork` 出新版本。
+> 回放基线（fixtures/**）随包进派生指纹——签发后手改夹具会被 `DERIVED_DRIFT` 拒载。
 
-> 本仓库当前 `packages/tax` 已是 ISSUED（本轮冷启动产物）。改内容须 `package fork` 出新版本。
-
-## 5. 插件装配：profile + release
+## 6. 插件生成与装配
 
 ```powershell
-# 5.1 安装 @dsh-tax/app 到独立 profile（无 backend/workbench）
-scripts\setup-tax-profile.ps1
+# 6.1 生成最小插件（结果页 + Agent 入口 + 部署模板；生成 ≠ 签发，不落凭据）
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out ..\<domain>-app
+# 产物：src/index.ts（配置驱动连接器装配）、src/client.ts（结果页）、src/bindings.ts（契约冻结）、
+#       .env.example、scripts/{setup-profile,dump-config}.ps1、scripts/seed-release.mjs、tests/
 
-# 5.2 播种已签发包并激活（strict 模式要求 active release）
-node scripts\m-tax-seed-release.mjs
+# 6.2 构建与自检（对着回放夹具的 e2e）
+cd ..\<domain>-app
+pnpm install; pnpm run build; node --test tests\*.test.mjs
 
-# 5.3 组合断言
-scripts\dump-tax-config.ps1
-# 必须：OK: @dsh-tax/app present / backend absent / workbench absent
+# 6.3 装进独立 profile（无 backend/workbench）
+powershell -ExecutionPolicy Bypass -File scripts\setup-profile.ps1
+# 6.4 播种已签发包并激活（受控导入 ≠ 激活是两步）
+node scripts\seed-release.mjs
+# 6.5 组合断言
+powershell -ExecutionPolicy Bypass -File scripts\dump-config.ps1
+# 必须：OK: @dsh-<domain>/app present / backend absent / workbench absent
 ```
 
-环境变量（启动前）：
+环境变量（启动前；见生成物 `.env.example`）：
 
 ```powershell
-$env:DSH_TAX_API_URL      = 'http://127.0.0.1:3911'   # 不设则 SRC-TAX-CORE 不登记，sourceId 运行拒绝
-$env:DSH_BIZ_USER_ID      = 'user-tax-1'
-$env:DSH_BIZ_TENANT       = 'tenant-tax'
+$env:DSH_<TAG>_API_URL    = 'http://127.0.0.1:3912'   # 不设则数据源不登记，sourceId 运行拒绝
+$env:DSH_BIZ_USER_ID      = 'user-1'
+$env:DSH_BIZ_TENANT       = 'tenant-1'
 $env:DSH_BIZ_ROLES        = 'analyst'
-$env:DSH_BIZ_SCOPE_TYPES  = 'OBJ-TAX-TAXPAYER,OBJ-TAX-INVOICE,OBJ-TAX-BANK-FLOW,OBJ-TAX-TAX-RETURN,OBJ-TAX-INDUSTRY-BENCHMARK'
-# 正式动作本轮未接线；DSH_FORMAL_ACTION_ENABLED 保持未设
+$env:DSH_BIZ_SCOPE_TYPES  = 'OBJ-WST-BIN,OBJ-WST-ROUTE'   # 你的对象类型清单
 ```
 
 启动：
 
 ```powershell
-# 先杀占用端口的旧监听；Tabbit/浏览器用 localhost 而非 127.0.0.1（项目惯例）
-# 从仓库根或 worktree 根：harness 均在上一级（worktree 下为 .worktrees/deepseek-harness junction）
 cd ..\deepseek-harness
-pnpm dsh --profile dsh-tax --no-open
+pnpm dsh --profile dsh-<domain> --no-open
+# 浏览器用 localhost（项目惯例）；重启前先杀旧监听
 ```
 
-## 6. 双入口验收（同一场景）
-
-场景：`SCN-TAX-BURDEN-ANOMALY`；数据源：`SRC-TAX-CORE`。
+## 7. 双入口验收（同一场景）
 
 | 入口 | 操作 | 通过标准 |
 |---|---|---|
-| **页面** | 侧栏「TAX 运行」→ 选场景 → 运行 | 候选表出现；`riskScore` 数字；`hitRuleIds` 非空（至少高风险户）；`humanReviewRequired=true`；dataStatus 显示 |
-| **Agent** | 新会话调 `run_scenario`：`name=tax-risk, version=1.0.0, scenarioId=SCN-TAX-BURDEN-ANOMALY, sourceId=SRC-TAX-CORE` | 工具结果含 ruleId/证据链/`humanReviewRequired=true`；禁语零命中 |
+| **页面** | 侧栏「<域> 运行」→ 选场景 → 运行 | 候选表出现；riskScore 数字；hitRuleIds 非空（至少高风险户）；humanReviewRequired=true；dataStatus 显示 |
+| **Agent** | 新会话调 `run_scenario`：`name=<包名>, version=1.0.0, scenarioId=<SCN>, sourceId=<SRC>` | 工具结果含 ruleId/证据链/`humanReviewRequired=true`；禁语零命中 |
 
-对照：同一 `sourceId` 下两边 **ruleId 集合一致**（分数由 core 规则引擎给出，不因入口而异）。
+对照：同一 `sourceId` 下两边 **ruleId 集合与分数一致**（只在规则引擎算一次）。
 
-无浏览器时的等价冒烟（CI/冷启动自查）：
+无浏览器时的等价冒烟：`cd ..\<domain>-app; node --test tests\*.test.mjs`（含夹具→场景 e2e）。
 
-```powershell
-cd apps\tax
-node --test tests\*.test.mjs
-# 含 connector→场景 e2e：打分、审计、禁语
-```
+## 8. 卡点记录表
 
-## 7. 卡点记录表
-
-每完成一步或卡住时填一行。**卡点 = 产品缺口**，按类归并到字段映射 / 连接器配置 / 插件装配 / 发布激活 / 其他。
+每完成一步或卡住时填一行。**卡点 = 产品缺口**。
 
 | # | 步骤 | 现象（报错原文/截图要点） | 分类 | 本轮是否绕过 | 备注 |
 |---|---|---|---|---|---|
 | 1 | | | 字段映射 / 连接器配置 / 插件装配 / 发布激活 / 其他 | | |
 
-### 7.1 本轮（实现者）已知卡点预填
+### 8.1 早期实现者预填卡点（TAX 时代）与现状
 
-| # | 步骤 | 现象 | 分类 | 备注 |
-|---|---|---|---|---|
-| C1 | 插件构建 | pnpm 11 默认拒跑 esbuild postinstall → `install` 退出码 1，`setup-tax-profile` 当场失败 | 插件装配 | 需在插件包提供 `pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true`；指南模板应预置 |
-| C2 | 连接器类型 | `createExtDataConnector` 的 collection/typeMap 写死 AML 三类，TAX 五类 collection 无法复用 | 连接器配置 | 本插件自写 `DataConnector`（不改 runtime）；runtime 可考虑通用「collection→类型映射」配置面 |
-| C3 | 签发 CLI 工作区 | `--root packages` 会拼成 `packages/packages/...`；目录 `tax` ≠ `meta.name tax-risk` 时必须 `--root <仓库根>` 靠扫描回退 | 字段映射（流程文档） | 指南已写明从 `core` 用 `--root ..`；CLI 报错未提示扫描回退 |
-| C4 | 特征依据 | TAX 包无 `featureSources`/`featureRecipes`，候选特征来自 API 切片 → explore=`conditional`、formal=`insufficient` | 字段映射 | 业务上特征是上游风险信号；若要 formal=verified，需在包内声明投影契约或配方 |
-| C5 | 工作树依赖 | harness 依赖相对路径在 `.worktrees/<feat>/` 下依赖 `.worktrees/deepseek-harness` junction | 插件装配 | 本环境已有 junction；全新机器需文档说明或改 link 解析 |
-| C6 | 启动宿主 | MiMo 自带 node 的 V8 带 `electron` 指纹，`pnpm dsh` 起宿主时报 `node-addon-require-builtin unsupported` | 插件装配 | 需用独立 Node（如 `D:\nvm\v24.22.1`）；dump-config 可过但 web boot 不过，指南应写「验证 node 非 Electron 构建」 |
-| C7 | 页面冒烟 | 欢迎层/遮罩拦截 composer 点击；`新会话` 可访问名是「新建会话」 | 其他 | Tabbit 用 `data-composer-input` force/focus + 键盘；不影响业务能力 |
+| # | 现象 | 分类 | 自助路径现状 |
+|---|---|---|---|
+| C1 | pnpm 拒跑 esbuild postinstall | 插件装配 | 已消——脚手架模板预置 `pnpm-workspace.yaml` allowBuilds |
+| C2 | 连接器 typeMap 写死、转换手写 | 连接器配置 | 已消——`shape`+`source-maps` 配置驱动（runtime `createMappedDataConnector`） |
+| C3 | 签发 CLI `--root` 拼路径 | 流程文档 | 文档已写明从 `core` 用 `--root ..` |
+| C4 | 上游特征≠可核验依据 | 字段映射 | 预览含证据就绪度（够用/待补）；formal=verified 仍需包内 featureSources/配方 |
+| C5 | worktree 依赖 junction | 插件装配 | 环境已有 junction；全新机器需文档说明 |
+| C6 | Electron 指纹 Node 起不了宿主 | 插件装配 | 前置已写「验证 node 非 Electron 构建」 |
+| C7 | 页面冒烟点击拦截 | 其他 | Tabbit 工程问题，不影响业务能力 |
 
-## 8. 故障速查
+## 9. 故障速查
 
 | 症状 | 排查 |
 |---|---|
-| `数据源未登记: SRC-TAX-CORE` | `DSH_TAX_API_URL` 未设或 host 未重启 |
+| `数据源未登记: SRC-*` | `DSH_<TAG>_API_URL` 未设或 host 未重启 |
+| `source ... 未声明 shape` | api-sources.yaml 缺 shape 块（见 §2） |
+| `SM_REF_BROKEN` / `SM_REF_PENDING` | 映射 FK 对不上对象 id / 对端集合没取（§3.3） |
+| `SM_IDRULE_MISMATCH` | idTemplate 与对象 idRule 占位序列不一致 |
+| `生成要求已签发包` | plugin generate 只对 ISSUED 包；先人工 issue（§5） |
+| 回放 `DERIVED_DRIFT: ... fixtures/` | 签发后手改夹具/基线；须 fork 新版本或恢复原样 |
+| `--check` 退出码 2 | 基线有 diff——看 comparison.diffs（业务口径变了） |
 | `Business identity is unavailable` | `DSH_BIZ_USER_ID/TENANT/ROLES` 不全 |
-| `RELEASE_NOT_ACTIVE` | 未跑 `m-tax-seed-release.mjs` 或 profile 不对 |
-| `DERIVED_DRIFT` | 改了源没 derive，或手改了 `derived/**` |
-| 页面 `remote.ontoRuntime missing` | `$mount` 失败 / 描述符未加载，看浏览器 console `[dsh-tax]` |
-| dump 断言失败 | 确认装的是 `apps/tax` 而非误装 backend |
+| `RELEASE_NOT_ACTIVE` | 未跑 seed-release.mjs 或 profile 不对 |
+| 页面 `remote.ontoRuntime missing` | `$mount` 失败，看浏览器 console `[dsh-<domain>]` |
+| dump 断言失败 | 确认装的是生成插件而非 backend |
 
-## 9. 验收命令速查
+## 10. 验收命令速查
 
 ```powershell
-# 全量（实现者回归）
-node --test mock-services\tax-api\tax-api.test.mjs
-cd apps\tax; pnpm run build; node --test tests\*.test.mjs; cd ..\..
-scripts\dump-tax-config.ps1
-# 零改引擎
-git diff --stat -- core runtime backend workbench   # 本 feature 应为空
-# 质量分：score 低（FM-/SRC- 记 ID_UNREFERENCED）不代表映射坏——看 errors=[] 与 gate ok
+# 引擎
+cd core;    pnpm run build; node --test tests\*.test.mjs; cd ..
+cd runtime; pnpm run build; node --test tests\*.test.mjs; cd ..
+# 示例 API 与生成插件
+node --test mock-services\wst-api\wst-api.test.mjs
+node core\dist\cli.js source probe   --dir packages\wst\1.0.0 --url http://127.0.0.1:3912
+node core\dist\cli.js source map preview --dir packages\wst\1.0.0 --url http://127.0.0.1:3912 --strict
+node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --check
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out <out>
+# 双入口同分：生成插件 tests（夹具→场景→同分幂等）+ 会话 run_scenario 对照
 ```
