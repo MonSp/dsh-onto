@@ -725,3 +725,49 @@ export function extractSnapshotRows(body: unknown, shape: ApiShape): SourceRows 
   }
   return out
 }
+
+/**
+ * 按 shape 取样（HTTP 由调用方注入 request，core 不发网络请求）：
+ * snapshot 一次 GET；collections 按分页模式取到 samples 上限/页尽。
+ * CLI 采样、backend probe、预览共用同一取行口径。
+ */
+export async function fetchShapeRows(opts: {
+  shape: ApiShape
+  collections: string[]
+  /** 每集合行数上限（缺省 50；0 = 不限，跟分页走完）。 */
+  samples?: number
+  /** 注入 HTTP GET：返回响应体（解析后的 JSON）。路径含 query。 */
+  request: (pathWithQuery: string) => Promise<unknown>
+  maxPages?: number
+}): Promise<SourceRows> {
+  const { shape } = opts
+  const samples = opts.samples ?? 50
+  const maxPages = opts.maxPages ?? 20
+  if (shape.mode === 'snapshot') {
+    return extractSnapshotRows(await opts.request(shape.path ?? ''), shape)
+  }
+  const tpl = shape.collectionPath ?? '/api/v1/data/{collection}'
+  const page = shape.pagination
+  const out: SourceRows = {}
+  for (const c of opts.collections) {
+    const rows: SourceRow[] = []
+    let cursor: string | null = null
+    for (let i = 0; i < maxPages && (samples === 0 || rows.length < samples); i++) {
+      const params = new URLSearchParams()
+      if (page.mode === 'cursor' && cursor !== null) params.set(page.cursorParam ?? 'cursor', cursor)
+      if (page.mode === 'offset') {
+        params.set(page.limitParam ?? 'limit', String(page.pageSize ?? 100))
+        params.set(page.offsetParam ?? 'offset', String(rows.length))
+      }
+      const qs = params.toString()
+      const body = await opts.request(`${tpl.replace('{collection}', c)}${qs ? `?${qs}` : ''}`)
+      rows.push(...extractPageItems(body, shape.itemsPath))
+      if (page.mode !== 'cursor') break
+      const next = readPath(body, page.nextField ?? 'nextCursor')
+      cursor = typeof next === 'string' && next !== '' ? next : null
+      if (cursor === null) break
+    }
+    out[c] = samples === 0 ? rows : rows.slice(0, samples)
+  }
+  return out
+}

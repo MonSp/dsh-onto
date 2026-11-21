@@ -58,6 +58,7 @@ import { runScenario } from './scenario.js'
 import {
   extractPageItems,
   extractSnapshotRows,
+  fetchShapeRows,
   previewSourceMaps,
   readPath,
   shapeCollectionKeys,
@@ -342,34 +343,12 @@ async function sampleRows(args: Args, shape: ApiShape, collections: string[], sa
   }
   const baseUrl = flagStr(args, 'url').replace(/\/$/, '')
   const timeoutMs = Number(args.flags['timeout'] ?? 8000)
-  if (shape.mode === 'snapshot') {
-    const body = await fetchJson(`${baseUrl}${shape.path ?? ''}`, timeoutMs)
-    return { rows: extractSnapshotRows(body, shape), origin: `url:${baseUrl}${shape.path ?? ''}` }
-  }
-  const rows: SampleRows['rows'] = {}
-  for (const c of collections) {
-    const tpl = shape.collectionPath ?? '/api/v1/data/{collection}'
-    const out: Array<Record<string, unknown>> = []
-    let cursor: string | null = null
-    const page = shape.pagination
-    for (let i = 0; i < 20 && out.length < samples; i++) {
-      const params = new URLSearchParams()
-      if (page.mode === 'cursor' && cursor !== null) params.set(page.cursorParam ?? 'cursor', cursor)
-      if (page.mode === 'offset') {
-        params.set(page.limitParam ?? 'limit', String(page.pageSize ?? 100))
-        params.set(page.offsetParam ?? 'offset', String(out.length))
-      }
-      const qs = params.toString()
-      const url = `${baseUrl}${tpl.replace('{collection}', c)}${qs ? `?${qs}` : ''}`
-      const body = await fetchJson(url, timeoutMs)
-      out.push(...extractPageItems(body, shape.itemsPath))
-      if (page.mode !== 'cursor') break
-      const next = readPath(body, page.nextField ?? 'nextCursor')
-      cursor = typeof next === 'string' && next !== '' ? next : null
-      if (cursor === null) break
-    }
-    rows[c] = out.slice(0, samples)
-  }
+  const rows = await fetchShapeRows({
+    shape,
+    collections,
+    samples,
+    request: (pathWithQuery) => fetchJson(`${baseUrl}${pathWithQuery}`, timeoutMs),
+  })
   return { rows, origin: `url:${baseUrl}` }
 }
 

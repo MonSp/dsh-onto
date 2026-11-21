@@ -8,6 +8,7 @@
  * - `ontoDerive`    — 派生链 + 加载门禁（DERIVED_DRIFT）
  * - `ontoKnowledge` — 知识库（原料/解析/人审队列/物化）
  * - `ontoRuntime`   — 场景执行（排除→打分→叙述→三层审计→人审字段）
+ * - `ontoSource`    — 接入面（采样/映射预览/生成插件/回放；纯逻辑在 source-face.ts）
  *
  * Persistence: 业务本体包是文件系统一等交付物，工作区在
  * `<profileDir>/onto/workspace/packages/<name>/<version>/`；
@@ -37,6 +38,7 @@ import {
   compareRunRecords,
   derivePackage,
   exportRunArchive,
+  generatePlugin,
   isInsideDir,
   isSafeRelPath,
   isSafeRunId,
@@ -47,6 +49,7 @@ import {
   listRunRecords,
   readPackageMeta,
   reviewExperienceNote,
+  runReplay,
   runScenario,
   savePackage,
   saveRunRecord,
@@ -58,15 +61,29 @@ import {
   type OntologyPackage,
   type PackageMeta,
   type QualityReport,
+  type ReplayReport,
   type RunDiff,
   type RunRecord,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SkeletonRecord,
+  type SourceMapPreviewResult,
   type SourceType,
 } from '@dsh-onto/core'
 import { invalidateSkillCatalog } from './agent-hooks.js'
 import { buildGraphForTool } from './model-face.js'
+import {
+  generateRequestToInput,
+  previewRowsFor,
+  probeRowsReport,
+  replayRequestToInput,
+  requireInsideFence,
+  sampleRowsFor,
+  type GenerateWireRequest,
+  type ProbeReport,
+  type ReplayWireRequest,
+  type SourceProbeRequest,
+} from './source-face.js'
 import { AgentToolError } from './agent-policy.js'
 import { dataSources } from './data-sources.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
@@ -146,6 +163,7 @@ declare module '@deepseek-ai/cordis' {
     ontoDerive: OntoDerive
     ontoKnowledge: OntoKnowledge
     ontoRuntime: OntoRuntime
+    ontoSource: OntoSource
   }
 }
 
@@ -600,6 +618,61 @@ export class OntoKnowledge extends RuntimeRemoteService {
       invalidateSkillCatalog()
       return out
     })
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ontoSource —— 接入面（api-to-plugin S2.6）：采样 / 映射预览 / 生成 / 回放
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export class OntoSource extends RuntimeRemoteService {
+  /** 路径围栏根 = profile 数据目录（含 workspace/ 与生成输出区）：防任意路径读写盘。 */
+  private readonly fence: string
+
+  constructor(ctx: Context) {
+    super(ctx, 'ontoSource')
+    this.fence = resolveDataDir(ctx)
+  }
+
+  @Remote('probe')
+  async remoteExportProbe(request: { dir: string } & SourceProbeRequest): Promise<{
+    origin: string
+    probe: ProbeReport
+  }> {
+    return guardAsync(async () => {
+      const dir = requireInsideFence(this.fence, 'dir', request?.dir)
+      const pkg = loadPackage(dir)
+      const { origin, rows } = await sampleRowsFor(pkg, request)
+      return { origin, probe: probeRowsReport(rows) }
+    })
+  }
+
+  @Remote('preview')
+  async remoteExportPreview(request: { dir: string } & SourceProbeRequest): Promise<
+    { origin: string } & SourceMapPreviewResult
+  > {
+    return guardAsync(async () => {
+      const dir = requireInsideFence(this.fence, 'dir', request?.dir)
+      const pkg = loadPackage(dir)
+      return previewRowsFor(pkg, request)
+    })
+  }
+
+  @Remote('generate')
+  async remoteExportGenerate(request: GenerateWireRequest): Promise<{
+    outDir: string
+    files: string[]
+    warnings: string[]
+  }> {
+    return guard(() => {
+      const result = generatePlugin(generateRequestToInput(this.fence, request))
+      return { outDir: result.outDir, files: result.files, warnings: result.warnings }
+    })
+  }
+
+  @Remote('replay')
+  async remoteExportReplay(request: ReplayWireRequest): Promise<{ report: ReplayReport }> {
+    return guard(() => ({ report: runReplay(replayRequestToInput(this.fence, request)) }))
   }
 }
 

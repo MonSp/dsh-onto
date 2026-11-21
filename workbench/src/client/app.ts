@@ -12,6 +12,7 @@ import { ModelPanel } from './panels/model'
 import { KnowledgePanel } from './panels/knowledge'
 import { ValidatePanel } from './panels/validate'
 import { RunPanel } from './panels/run'
+import { SourcePanel } from './panels/source'
 import { ExperiencePanel } from './panels/experience'
 import { GraphWorkbench } from './workbench'
 
@@ -34,6 +35,7 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       'remote.ontoDerive',
       'remote.ontoKnowledge',
       'remote.ontoRuntime',
+      'remote.ontoSource',
       'sidebarRightTabs',
     ],
     apply(ctx: Ctx) {
@@ -114,6 +116,7 @@ export function createPlugin(React: typeof import('react')): PluginModule {
           ['knowledge', t('tabKnowledge'), '▤'],
           ['validate', t('tabValidate'), '✓'],
           ['run', t('tabRun'), '▶'],
+          ['source', t('tabSource'), '⇄'],
           ['experience', t('tabExperience'), '◎'],
         ]
 
@@ -172,9 +175,11 @@ export function createPlugin(React: typeof import('react')): PluginModule {
                       ? h(KnowledgePanel, { t, apis, selected })
                       : tab === 'validate'
                         ? h(ValidatePanel, { t, apis, selected })
-                        : tab === 'experience'
-                          ? h(ExperiencePanel, { t, apis })
-                          : h(RunPanel, { t, apis, selected }),
+                        : tab === 'source'
+                          ? h(SourcePanel, { t, apis, selected })
+                          : tab === 'experience'
+                            ? h(ExperiencePanel, { t, apis })
+                            : h(RunPanel, { t, apis, selected }),
                 ),
           ),
         )
