@@ -33,6 +33,7 @@ export const SURFACE_COMPONENT_TYPES = [
   'Progress',
   'Timeline',
   'Tabs',
+  'Chart',
 ] as const
 export type SurfaceComponentType = (typeof SURFACE_COMPONENT_TYPES)[number]
 
@@ -66,12 +67,13 @@ export type SurfaceValidation =
   | { ok: false; errors: SurfaceDiagnostic[] }
 
 const LEAF_TYPES = new Set<SurfaceComponentType>([
-  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs',
+  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs', 'Chart',
 ])
 const NAVIGATE_TARGETS = new Set(['result-page'])
 const FILTER_OPS = new Set(['eq', 'ne', 'gte', 'lte', 'contains'])
 const BADGE_TONES = new Set(['success', 'warn', 'danger', 'accent', 'info', 'muted'])
 const CALLOUT_TONES = new Set(['info', 'success', 'warning', 'error'])
+const CHART_KINDS = new Set(['bars', 'line', 'donut'])
 /** Accordion 可绑定的明细列表（候选表行内展开之外的整体绑定面）。 */
 const ACCORDION_LIST_REFS = new Set([
   'candidates[].evidenceChains',
@@ -79,12 +81,18 @@ const ACCORDION_LIST_REFS = new Set([
   'candidates[].narrative',
   'candidates[].hitRuleIds',
 ])
-/** Timeline 行字段映射面（对象列表的元素字段；纯字符串列表不接受字段映射）。 */
-const TIMELINE_ITEM_FIELDS: Record<string, readonly string[]> = {
+/** 列表元素字段表（Timeline/Chart 共用；同一投影的唯一映射白名单，防两表漂移）。 */
+const LIST_ITEM_FIELDS: Record<string, readonly string[]> = {
   candidates: CANDIDATE_ROW_FIELDS,
   'candidates[].evidenceChains': ['ruleId', 'score', 'evidence'],
   'candidates[].pendingChecks': ['ruleId', 'missing', 'note'],
   ruleHitLog: ['ruleId', 'candidateId', 'score', 'ts'],
+}
+/** 各列表元素的数值字段（Chart.valueField 白名单）。 */
+const LIST_NUMERIC_FIELDS: Record<string, readonly string[]> = {
+  candidates: ['riskScore'],
+  'candidates[].evidenceChains': ['score'],
+  ruleHitLog: ['score'],
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -436,7 +444,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
             err('SF_FIELD_INVALID', `${where}.props.${key}`, `${key} 必须是非空字段名`)
             continue
           }
-          const allowed = tRef !== null ? TIMELINE_ITEM_FIELDS[tRef] : undefined
+          const allowed = tRef !== null ? LIST_ITEM_FIELDS[tRef] : undefined
           if (allowed === undefined || !allowed.includes(f)) {
             err('SF_FIELD_INVALID', `${where}.props.${key}`, `${key} 不是该列表元素字段: ${f}`)
           }
@@ -468,6 +476,58 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
             items.forEach((c, j) => walk(c, `${tw}.items[${j}]`, depth + 1))
           }
         })
+        break
+      }
+      case 'Chart': {
+        // 绑定红线的图表延伸：点值只能经 valueField 从绑定列表取数，数据数组字面量整体拒
+        if ('data' in props || 'values' in props || 'series' in props || 'points' in props) {
+          err('SF_SLOT_LITERAL', where, 'Chart 只接受序列绑定（rowsBind+labelField+valueField），拒绝字面量数据')
+        }
+        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height'], where, err)
+        if (typeof props.kind !== 'string' || !CHART_KINDS.has(props.kind)) {
+          err('SF_SHAPE', `${where}.props.kind`, `kind 只能是 ${[...CHART_KINDS].join('|')}`)
+        }
+        const cRows = bindPointer(props.rowsBind)
+        let cRef: string | null = null
+        if (cRows === null || !isReportListPointer(cRows)) {
+          err('SF_BIND_INVALID', `${where}.props.rowsBind`, `rowsBind 不是报表列表引用: ${String(props.rowsBind)}`)
+        } else {
+          cRef = reportPointerToRef(cRows)
+        }
+        const labelField = props.labelField
+        if (!isNonEmptyString(labelField)) {
+          err('SF_FIELD_INVALID', `${where}.props.labelField`, 'labelField 必填')
+        } else {
+          const allowedLabels = cRef !== null ? LIST_ITEM_FIELDS[cRef] : undefined
+          if (allowedLabels === undefined || !allowedLabels.includes(labelField)) {
+            err('SF_FIELD_INVALID', `${where}.props.labelField`, `labelField 不是该列表元素字段: ${labelField}`)
+          }
+        }
+        const valueField = props.valueField
+        if (!isNonEmptyString(valueField)) {
+          err('SF_FIELD_INVALID', `${where}.props.valueField`, 'valueField 必填')
+        } else {
+          const allowedValues = cRef !== null ? LIST_NUMERIC_FIELDS[cRef] : undefined
+          if (allowedValues === undefined || !allowedValues.includes(valueField)) {
+            err('SF_FIELD_INVALID', `${where}.props.valueField`, `valueField 不是该列表数值字段: ${valueField}`)
+          }
+        }
+        if (props.title !== undefined && !isNonEmptyString(props.title)) {
+          err('SF_SHAPE', `${where}.props.title`, 'title 必须是非空字符串')
+        }
+        if (props.horizontal !== undefined) {
+          if (typeof props.horizontal !== 'boolean') {
+            err('SF_SHAPE', `${where}.props.horizontal`, 'horizontal 必须是布尔')
+          } else if (props.horizontal === true && props.kind !== 'bars') {
+            err('SF_SHAPE', `${where}.props.horizontal`, 'horizontal 仅 bars 支持')
+          }
+        }
+        if (
+          props.height !== undefined &&
+          (typeof props.height !== 'number' || !Number.isFinite(props.height) || props.height < 80 || props.height > 400)
+        ) {
+          err('SF_SHAPE', `${where}.props.height`, 'height 必须是 80–400 的有限数')
+        }
         break
       }
     }
@@ -536,6 +596,17 @@ export function buildDefaultReportSurface(opts: { title?: string; surfaceId?: st
             { id: 'stat-hit-rules', type: 'Stat', props: { label: '命中规则数', bind: '/summary/hitRuleCount' } },
             { id: 'stat-review', type: 'Stat', props: { label: '人审必需', bind: '/summary/humanReviewRequired' } },
           ],
+        },
+        {
+          id: 'risk-chart',
+          type: 'Chart',
+          props: {
+            kind: 'bars',
+            title: '风险分布',
+            rowsBind: '/candidates',
+            labelField: 'candidateId',
+            valueField: 'riskScore',
+          },
         },
         {
           id: 'candidate-table',

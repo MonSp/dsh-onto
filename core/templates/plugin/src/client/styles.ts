@@ -55,4 +55,6 @@ export const CSS = `
 .txri-gov .txri-timeline ul { list-style: none; margin: 6px 0; padding-left: 12px; border-left: 2px solid color-mix(in srgb, currentColor 20%, transparent); }
 .txri-gov .txri-timeline li { margin: 0 0 10px 8px; }
 .txri-gov .txri-tabs .txri-bar { margin-bottom: 6px; }
+.txri-gov .txri-chart { margin: 6px 0 10px; }
+.txri-gov .txri-chart svg { display: block; max-width: 100%; }
 `

@@ -303,3 +303,79 @@ test('批次 1：Progress / Timeline / Tabs', () => {
   assert.equal(v10.ok, false)
   assert.ok(codes(v10).includes('SF_DEPTH_EXCEEDED'))
 })
+
+test('批次 2：Chart 序列绑定（数据数组字面量拒、字段白名单）', () => {
+  const ok = msg(
+    node('ch', 'Chart', {
+      kind: 'bars',
+      title: '风险分布',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueField: 'riskScore',
+      horizontal: true,
+      height: 200,
+    }),
+  )
+  assert.equal(validateReportSurface(ok).ok, true)
+
+  for (const kind of ['line', 'donut']) {
+    const v = validateReportSurface(
+      msg(node('ch', 'Chart', { kind, rowsBind: '/ruleHitLog', labelField: 'ruleId', valueField: 'score' })),
+    )
+    assert.equal(v.ok, true, kind)
+  }
+
+  // 字面量数据数组整体拒（红线）
+  const lit = msg(
+    node('ch', 'Chart', {
+      kind: 'bars',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueField: 'riskScore',
+      data: [{ label: 'x', value: 1 }],
+    }),
+  )
+  const v1 = validateReportSurface(lit)
+  assert.equal(v1.ok, false)
+  assert.ok(codes(v1).includes('SF_SLOT_LITERAL'))
+
+  // valueField 非数值字段拒
+  const v2 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/candidates', labelField: 'candidateId', valueField: 'objectRef' })),
+  )
+  assert.equal(v2.ok, false)
+  assert.ok(codes(v2).includes('SF_FIELD_INVALID'))
+
+  // labelField 非该列表字段拒
+  const v3 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/ruleHitLog', labelField: 'nope', valueField: 'score' })),
+  )
+  assert.equal(v3.ok, false)
+  assert.ok(codes(v3).includes('SF_FIELD_INVALID'))
+
+  // rowsBind 非列表拒
+  const v4 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/summary/maxRiskScore', labelField: 'ruleId', valueField: 'score' })),
+  )
+  assert.equal(v4.ok, false)
+  assert.ok(codes(v4).includes('SF_BIND_INVALID'))
+
+  // horizontal 仅 bars；height 边界
+  const v5 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'donut', rowsBind: '/candidates', labelField: 'candidateId', valueField: 'riskScore', horizontal: true })),
+  )
+  assert.equal(v5.ok, false)
+  assert.equal(
+    validateReportSurface(
+      msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/candidates', labelField: 'candidateId', valueField: 'riskScore', height: 50 })),
+    ).ok,
+    false,
+  )
+
+  // 无数值字段的列表做图拒
+  const v6 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/candidates/0/pendingChecks', labelField: 'note', valueField: 'score' })),
+  )
+  assert.equal(v6.ok, false)
+  assert.ok(codes(v6).includes('SF_FIELD_INVALID'))
+})

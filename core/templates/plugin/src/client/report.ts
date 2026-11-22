@@ -421,9 +421,196 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
     }
     case 'Tabs':
       return h(TabsBox, { key, node, ctx })
+    case 'Chart':
+      return h('div', { key }, h(ChartBox, { node, ctx }))
     default:
       return h('p', { key, className: 'txri-err' }, `unknown component: ${String(node.type)}`)
   }
+}
+
+interface ChartPoint {
+  label: string
+  value: number
+}
+
+/** 图表取点（null-safe）：非有限值跳过（绝不补 0）并断线分段，行序即 x 序。 */
+function chartPoints(node: SurfaceNode, ctx: RenderCtx): { points: ChartPoint[]; segments: ChartPoint[][] } {
+  const p = (node.props ?? {}) as Record<string, unknown>
+  const rows = listItems(resolveReportPointer(ctx.report, bindPointer(p.rowsBind) ?? '/'))
+  const labelField = String(p.labelField ?? '')
+  const valueField = String(p.valueField ?? '')
+  const points: ChartPoint[] = []
+  const segments: ChartPoint[][] = []
+  let current: ChartPoint[] = []
+  for (const r of rows) {
+    const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+    const raw = rec === null ? undefined : rec[valueField]
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      const pt = { label: rec === null ? '' : fmtValue(rec[labelField]), value: raw }
+      points.push(pt)
+      current.push(pt)
+    } else if (current.length > 0) {
+      segments.push(current)
+      current = []
+    }
+  }
+  if (current.length > 0) segments.push(current)
+  return { points, segments }
+}
+
+function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
+  const { node, ctx } = props
+  const p = (node.props ?? {}) as Record<string, unknown>
+  const kind = String(p.kind ?? 'bars')
+  const height = typeof p.height === 'number' ? p.height : 160
+  const { points, segments } = chartPoints(node, ctx)
+  const title = props.node.props?.title !== undefined ? h('strong', null, String(props.node.props.title)) : null
+  if (points.length === 0) {
+    return h('div', { className: 'txri-stat' }, title, h('span', { className: 'v' }, '—'))
+  }
+  const max = Math.max(...points.map((pt) => pt.value), 0)
+  const min = Math.min(...points.map((pt) => pt.value), 0)
+  const span = max - min || 1
+
+  if (kind === 'donut') {
+    const total = points.reduce((s, pt) => s + Math.max(pt.value, 0), 0) || 1
+    let offset = 0
+    const shades = [1, 0.72, 0.5, 0.34, 0.22, 0.14]
+    return h(
+      'div',
+      { className: 'txri-row' },
+      title,
+      h(
+        'svg',
+        { viewBox: '0 0 36 36', width: 96, height: 96, 'aria-hidden': true },
+        ...points.map((pt, i) => {
+          const seg = (Math.max(pt.value, 0) / total) * 100
+          const el = h('circle', {
+            key: i,
+            cx: 18,
+            cy: 18,
+            r: 15.9,
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeOpacity: shades[i % shades.length],
+            strokeWidth: 5,
+            strokeDasharray: `${seg} ${100 - seg}`,
+            strokeDashoffset: -offset,
+            transform: 'rotate(-90 18 18)',
+          })
+          offset += seg
+          return el
+        }),
+      ),
+      h(
+        'ul',
+        { className: 'txri-note' },
+        ...points.map((pt, i) =>
+          h('li', { key: i }, `${pt.label} · ${fmtValue(pt.value)}（${Math.round((Math.max(pt.value, 0) / total) * 100)}%）`),
+        ),
+      ),
+    )
+  }
+
+  if (kind === 'line') {
+    const w = Math.max(points.length * 28, 120)
+    const pad = 12
+    const x = (i: number) => (points.length === 1 ? w / 2 : pad + (i * (w - pad * 2)) / (points.length - 1))
+    const y = (v: number) => height - pad - ((v - min) / span) * (height - pad * 2)
+    // 断线分段：缺断点两侧不连线（不补 0）
+    let idx = 0
+    const paths = segments.map((seg) => {
+      const d = seg
+        .map((pt, j) => `${j === 0 ? 'M' : 'L'}${x(idx + j).toFixed(1)},${y(pt.value).toFixed(1)}`)
+        .join(' ')
+      idx += seg.length
+      return d
+    })
+    return h(
+      'div',
+      { className: 'txri-chart' },
+      title,
+      h(
+        'svg',
+        { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
+        ...paths.map((d, i) =>
+          h('path', { key: i, d, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinejoin: 'round' }),
+        ),
+        ...points.map((pt, i) =>
+          h('circle', { key: i, cx: x(i).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.6, fill: 'currentColor' }),
+        ),
+        h('text', { x: x(0).toFixed(1), y: (y(points[0].value) - 6).toFixed(1), 'font-size': 9, fill: 'currentColor' }, fmtValue(points[0].value)),
+        h(
+          'text',
+          {
+            x: x(points.length - 1).toFixed(1),
+            y: (y(points[points.length - 1].value) - 6).toFixed(1),
+            'font-size': 9,
+            fill: 'currentColor',
+            'text-anchor': 'end',
+          },
+          fmtValue(points[points.length - 1].value),
+        ),
+      ),
+    )
+  }
+
+  // bars（vertical / horizontal）
+  const horizontal = p.horizontal === true
+  const labelOf = (s: string) => (s.length > 8 ? `${s.slice(0, 7)}…` : s)
+  if (horizontal) {
+    const w = 240
+    const rowH = 22
+    const h2 = Math.max(points.length * rowH, 60)
+    return h(
+      'div',
+      { className: 'txri-chart' },
+      title,
+      h(
+        'svg',
+        { viewBox: `0 0 ${w} ${h2}`, width: '100%', height: h2, role: 'img' },
+        ...points.map((pt, i) =>
+          h(
+            'g',
+            { key: i },
+            h('text', { x: 0, y: i * rowH + 13, 'font-size': 9, fill: 'currentColor' }, labelOf(pt.label)),
+            h('rect', {
+              x: 64,
+              y: i * rowH + 4,
+              width: Math.max(2, ((pt.value - min) / span) * (w - 110)),
+              height: 12,
+              rx: 2,
+              fill: 'currentColor',
+              fillOpacity: 0.75,
+            }),
+            h('text', { x: w - 2, y: i * rowH + 13, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'end' }, fmtValue(pt.value)),
+          ),
+        ),
+      ),
+    )
+  }
+  const w = Math.max(points.length * 28, 120)
+  const barW = 16
+  return h(
+    'div',
+    { className: 'txri-chart' },
+    title,
+    h(
+      'svg',
+      { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
+      ...points.map((pt, i) => {
+        const cx = (i + 0.5) * (w / points.length)
+        const bh = Math.max(2, ((pt.value - min) / span) * (height - 28))
+        return h(
+          'g',
+          { key: i },
+          h('rect', { x: cx - barW / 2, y: height - 18 - bh, width: barW, height: bh, rx: 2, fill: 'currentColor', fillOpacity: 0.75 }),
+          h('text', { x: cx, y: height - 22 - bh, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle' }, fmtValue(pt.value)),
+          h('text', { x: cx, y: height - 5, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle', opacity: 0.7 }, labelOf(pt.label)),
+        )
+      }),
+    ),
+  )
 }
 
 function AccordionBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string | number }): ReactNode {

@@ -127,6 +127,8 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     for (const comp of ['KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'TabsBox']) {
       assert.ok(reportTs.includes(comp), `report.ts 须渲染 ${comp}`)
     }
+    assert.ok(reportTs.includes('ChartBox'), 'report.ts 须渲染 ChartBox')
+    assert.ok(reportTs.includes("case 'Chart'"))
     // 契约冻结
     const bindings = readFileSync(join(outDir, 'src', 'bindings.ts'), 'utf8')
     assert.ok(bindings.includes('SRC-WST-CORE'))

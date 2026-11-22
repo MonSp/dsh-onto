@@ -262,11 +262,12 @@ pnpm dsh --profile dsh-<domain> --no-open
 
 - **打开**：会话里 `show_run_report(runId, surface?)`——摘要卡/候选表/证据展开直接渲染在对话中。
   `surface` 可按问题组织视图（白名单组件 Card/Stat/Row/Column/Text/Table/Accordion/Button/
-  KeyValue/Badge/Callout/Progress/Timeline/Tabs；**数值槽位只准字段绑定**（如
+  KeyValue/Badge/Callout/Progress/Timeline/Tabs/Chart；**数值槽位只准字段绑定**（如
   `{"@path":"/summary/maxRiskScore"}`、Table 列 field 用候选行字段、Timeline 绑
-  `/ruleHitLog` 等列表 + 行字段映射），字面量分数/证据会被 `INVALID_ARGS` 拒）；
-  省略 surface 用默认模板（KeyValue 状态块 + Badge + Stat 行 + 候选表）。组件事件只做
-  筛选（含表头排序）/展开/跳转（跳转到固定结果页），不接写操作。
+  `/ruleHitLog` 等列表 + 行字段映射；Chart 序列绑定 `rowsBind + labelField + valueField`
+  出 bars/line/donut，数据数组字面量拒），字面量分数/证据会被 `INVALID_ARGS` 拒）；
+  省略 surface 用默认模板（KeyValue 状态块 + Badge + Stat 行 + 风险分布图 + 候选表）。
+  组件事件只做筛选（含表头排序）/展开/跳转（跳转到固定结果页），不接写操作。
 - **同源**：页面与对话报表都经 `getRunReport(runId)` 取同一投影（core `buildRunReport`），数值
   一致由构造保证；展开详情经 wire 受权取数（strict 越权 run 拒绝）。meta 只携 runRef+布局
   引用（无数值、无短语）。
