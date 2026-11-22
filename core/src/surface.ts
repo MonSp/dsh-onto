@@ -9,6 +9,7 @@
  * @module @dsh-onto/core/surface
  */
 import {
+  CANDIDATE_ROW_FIELDS,
   isCandidateRowField,
   isReportListPointer,
   isReportPointer,
@@ -26,6 +27,12 @@ export const SURFACE_COMPONENT_TYPES = [
   'Table',
   'Accordion',
   'Button',
+  'KeyValue',
+  'Badge',
+  'Callout',
+  'Progress',
+  'Timeline',
+  'Tabs',
 ] as const
 export type SurfaceComponentType = (typeof SURFACE_COMPONENT_TYPES)[number]
 
@@ -58,9 +65,13 @@ export type SurfaceValidation =
   | { ok: true; value: A2uiSurfaceMessage }
   | { ok: false; errors: SurfaceDiagnostic[] }
 
-const LEAF_TYPES = new Set<SurfaceComponentType>(['Stat', 'Text', 'Table', 'Accordion', 'Button'])
+const LEAF_TYPES = new Set<SurfaceComponentType>([
+  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs',
+])
 const NAVIGATE_TARGETS = new Set(['result-page'])
 const FILTER_OPS = new Set(['eq', 'ne', 'gte', 'lte', 'contains'])
+const BADGE_TONES = new Set(['success', 'warn', 'danger', 'accent', 'info', 'muted'])
+const CALLOUT_TONES = new Set(['info', 'success', 'warning', 'error'])
 /** Accordion 可绑定的明细列表（候选表行内展开之外的整体绑定面）。 */
 const ACCORDION_LIST_REFS = new Set([
   'candidates[].evidenceChains',
@@ -68,6 +79,13 @@ const ACCORDION_LIST_REFS = new Set([
   'candidates[].narrative',
   'candidates[].hitRuleIds',
 ])
+/** Timeline 行字段映射面（对象列表的元素字段；纯字符串列表不接受字段映射）。 */
+const TIMELINE_ITEM_FIELDS: Record<string, readonly string[]> = {
+  candidates: CANDIDATE_ROW_FIELDS,
+  'candidates[].evidenceChains': ['ruleId', 'score', 'evidence'],
+  'candidates[].pendingChecks': ['ruleId', 'missing', 'note'],
+  ruleHitLog: ['ruleId', 'candidateId', 'score', 'ts'],
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -303,6 +321,155 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         }
         break
       }
+      case 'KeyValue': {
+        rejectUnknownKeys(props, ['pairs'], where, err)
+        const pairs = props.pairs
+        if (!Array.isArray(pairs) || pairs.length === 0) {
+          err('SF_SHAPE', `${where}.props.pairs`, 'pairs 必须是非空数组')
+          break
+        }
+        if (pairs.length > 20) err('SF_SHAPE', `${where}.props.pairs`, 'pairs 超过 20')
+        pairs.forEach((p, i) => {
+          const pw = `${where}.props.pairs[${i}]`
+          if (!isRecord(p)) {
+            err('SF_SHAPE', pw, 'pair 必须是对象')
+            return
+          }
+          rejectUnknownKeys(p, ['key', 'bind'], pw, err)
+          if (!isNonEmptyString(p.key)) err('SF_SHAPE', `${pw}.key`, 'key 必须是非空叙事文本')
+          const pBind = bindPointer(p.bind)
+          if (pBind === null) {
+            err('SF_SLOT_LITERAL', `${pw}.bind`, 'KeyValue 值槽位只允许字段绑定，拒绝字面量')
+          } else if (!isReportPointer(pBind)) {
+            err('SF_BIND_INVALID', `${pw}.bind`, `绑定不在报表契约内: ${pBind}`)
+          }
+        })
+        break
+      }
+      case 'Badge': {
+        rejectUnknownKeys(props, ['label', 'bind', 'tone'], where, err)
+        if (props.label === undefined && props.bind === undefined) {
+          err('SF_SHAPE', where, 'Badge 须给 label（叙事）或 bind（数据）')
+        }
+        if (props.label !== undefined && !isNonEmptyString(props.label)) {
+          err('SF_SHAPE', `${where}.props.label`, 'label 必须是非空字符串')
+        }
+        if (props.bind !== undefined) {
+          const bBind = bindPointer(props.bind)
+          if (bBind === null) {
+            err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Badge 值槽位只允许字段绑定，拒绝字面量')
+          } else if (!isReportPointer(bBind)) {
+            err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${bBind}`)
+          }
+        }
+        if (props.tone !== undefined && (typeof props.tone !== 'string' || !BADGE_TONES.has(props.tone))) {
+          err('SF_SHAPE', `${where}.props.tone`, `tone 只能是 ${[...BADGE_TONES].join('|')}`)
+        }
+        break
+      }
+      case 'Callout': {
+        rejectUnknownKeys(props, ['tone', 'title', 'content', 'bind'], where, err)
+        const hasContent = props.content !== undefined
+        const hasBind = props.bind !== undefined
+        if (hasContent === hasBind) {
+          err('SF_SHAPE', where, 'Callout 必须且只能给 content（叙事）或 bind（数据）之一')
+        }
+        if (hasContent && !isNonEmptyString(props.content)) {
+          err('SF_SHAPE', `${where}.props.content`, 'content 必须是非空字符串')
+        }
+        if (hasBind) {
+          const cBind = bindPointer(props.bind)
+          if (cBind === null) {
+            err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Callout 数据槽位只允许字段绑定，拒绝字面量')
+          } else if (!isReportPointer(cBind)) {
+            err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${cBind}`)
+          }
+        }
+        if (props.title !== undefined && !isNonEmptyString(props.title)) {
+          err('SF_SHAPE', `${where}.props.title`, 'title 必须是非空字符串')
+        }
+        if (props.tone !== undefined && (typeof props.tone !== 'string' || !CALLOUT_TONES.has(props.tone))) {
+          err('SF_SHAPE', `${where}.props.tone`, `tone 只能是 ${[...CALLOUT_TONES].join('|')}`)
+        }
+        break
+      }
+      case 'Progress': {
+        rejectUnknownKeys(props, ['label', 'bind', 'max', 'display'], where, err)
+        if ('value' in props) {
+          err('SF_SLOT_LITERAL', where, 'Progress 数值槽位只允许 bind 绑定，拒绝字面量')
+        }
+        const prBind = bindPointer(props.bind)
+        if (prBind === null) {
+          err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Progress 数值槽位只允许 bind 字段绑定')
+        } else if (!isReportPointer(prBind)) {
+          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${prBind}`)
+        }
+        if (props.max !== undefined && (typeof props.max !== 'number' || !Number.isFinite(props.max) || props.max <= 0)) {
+          err('SF_SHAPE', `${where}.props.max`, 'max 必须是正有限数（刻度配置）')
+        }
+        if (props.display !== undefined && props.display !== 'bar' && props.display !== 'ring') {
+          err('SF_SHAPE', `${where}.props.display`, "display 只能是 'bar'|'ring'")
+        }
+        if (props.label !== undefined && !isNonEmptyString(props.label)) {
+          err('SF_SHAPE', `${where}.props.label`, 'label 必须是非空字符串')
+        }
+        break
+      }
+      case 'Timeline': {
+        rejectUnknownKeys(props, ['title', 'bind', 'titleField', 'descField', 'timeField'], where, err)
+        if (props.title !== undefined && !isNonEmptyString(props.title)) {
+          err('SF_SHAPE', `${where}.props.title`, 'title 必须是非空字符串')
+        }
+        const tBind = bindPointer(props.bind)
+        let tRef: string | null = null
+        if (tBind === null) {
+          err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Timeline 列表槽位只允许字段绑定，拒绝字面量')
+        } else if (!isReportListPointer(tBind)) {
+          err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不是报表列表引用: ${tBind}`)
+        } else {
+          tRef = reportPointerToRef(tBind)
+        }
+        for (const key of ['titleField', 'descField', 'timeField'] as const) {
+          const f = props[key]
+          if (f === undefined) continue
+          if (!isNonEmptyString(f)) {
+            err('SF_FIELD_INVALID', `${where}.props.${key}`, `${key} 必须是非空字段名`)
+            continue
+          }
+          const allowed = tRef !== null ? TIMELINE_ITEM_FIELDS[tRef] : undefined
+          if (allowed === undefined || !allowed.includes(f)) {
+            err('SF_FIELD_INVALID', `${where}.props.${key}`, `${key} 不是该列表元素字段: ${f}`)
+          }
+        }
+        break
+      }
+      case 'Tabs': {
+        rejectUnknownKeys(props, ['tabs'], where, err)
+        const tabs = props.tabs
+        if (!Array.isArray(tabs) || tabs.length === 0) {
+          err('SF_SHAPE', `${where}.props.tabs`, 'tabs 必须是非空数组')
+          break
+        }
+        if (tabs.length > 10) err('SF_SHAPE', `${where}.props.tabs`, 'tabs 超过 10')
+        tabs.forEach((t, i) => {
+          const tw = `${where}.props.tabs[${i}]`
+          if (!isRecord(t)) {
+            err('SF_SHAPE', tw, 'tab 必须是对象')
+            return
+          }
+          rejectUnknownKeys(t, ['label', 'items'], tw, err)
+          if (!isNonEmptyString(t.label)) err('SF_SHAPE', `${tw}.label`, 'label 必填')
+          const items = t.items
+          if (items !== undefined) {
+            if (!Array.isArray(items)) {
+              err('SF_SHAPE', `${tw}.items`, 'items 必须是数组')
+              return
+            }
+            items.forEach((c, j) => walk(c, `${tw}.items[${j}]`, depth + 1))
+          }
+        })
+        break
+      }
     }
 
     if (Array.isArray(children)) {
@@ -342,6 +509,24 @@ export function buildDefaultReportSurface(opts: { title?: string; surfaceId?: st
       type: 'Card',
       props: { title: '运行报表' },
       children: [
+        {
+          id: 'meta',
+          type: 'KeyValue',
+          props: {
+            pairs: [
+              { key: 'runId', bind: '/runRef/runId' },
+              { key: '包', bind: '/runRef/package/name' },
+              { key: '场景', bind: '/runRef/scenarioId' },
+              { key: '数据集候选', bind: '/summary/datasetSummary/candidates' },
+              { key: '数据状态', bind: '/summary/dataStatus' },
+            ],
+          },
+        },
+        {
+          id: 'hr-badge',
+          type: 'Badge',
+          props: { label: 'humanReviewRequired', bind: '/summary/humanReviewRequired', tone: 'warn' },
+        },
         {
           id: 'summary',
           type: 'Row',

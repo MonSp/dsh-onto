@@ -322,6 +322,100 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         },
         String(props.label ?? ''),
       )
+    case 'KeyValue':
+      return h(
+        'table',
+        { key, className: 'txri-kv' },
+        h(
+          'tbody',
+          null,
+          ...(Array.isArray(props.pairs) ? props.pairs : []).map((pair, i) => {
+            const pr = (pair ?? {}) as Record<string, unknown>
+            return h(
+              'tr',
+              { key: i },
+              h('td', { className: 'txri-note' }, String(pr.key ?? '')),
+              h('td', { className: 'txri-mono' }, renderBound(pr, ctx)),
+            )
+          }),
+        ),
+      )
+    case 'Badge':
+      return h(
+        'span',
+        {
+          key,
+          className: `tag ${String(props.tone ?? '')}`,
+          title: props.label !== undefined ? String(props.label) : undefined,
+        },
+        props.bind !== undefined ? renderBound(props, ctx) : String(props.label ?? ''),
+      )
+    case 'Callout':
+      return h(
+        'div',
+        { key, className: `txri-callout txri-callout-${String(props.tone ?? 'info')}` },
+        props.title !== undefined ? h('strong', null, String(props.title)) : null,
+        h('div', null, props.bind !== undefined ? renderBound(props, ctx) : String(props.content ?? '')),
+      )
+    case 'Progress': {
+      const raw = Number(resolveReportPointer(ctx.report, bindPointer(props.bind) ?? '/'))
+      const max = typeof props.max === 'number' && props.max > 0 ? props.max : 100
+      const pct = Number.isFinite(raw) ? Math.max(0, Math.min(100, (raw / max) * 100)) : 0
+      return h(
+        'div',
+        { key, className: 'txri-stat' },
+        props.label !== undefined ? h('span', { className: 'k' }, String(props.label)) : null,
+        props.display === 'ring'
+          ? h(
+              'svg',
+              { viewBox: '0 0 36 36', width: 48, height: 48, 'aria-hidden': true },
+              h('circle', { cx: 18, cy: 18, r: 15.9, fill: 'none', stroke: 'currentColor', strokeOpacity: 0.2, strokeWidth: 3 }),
+              h('circle', {
+                cx: 18,
+                cy: 18,
+                r: 15.9,
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 3,
+                strokeDasharray: `${pct} 100`,
+                strokeLinecap: 'round',
+                transform: 'rotate(-90 18 18)',
+              }),
+            )
+          : h('div', { className: 'txri-pbar' }, h('div', { className: 'txri-pfill', style: { width: `${pct}%` } })),
+        h('span', { className: 'txri-note' }, fmtValue(raw)),
+      )
+    }
+    case 'Timeline': {
+      const items = listItems(resolveReportPointer(ctx.report, bindPointer(props.bind) ?? '/'))
+      const tf = typeof props.titleField === 'string' ? props.titleField : ''
+      const df = typeof props.descField === 'string' ? props.descField : ''
+      const timef = typeof props.timeField === 'string' ? props.timeField : ''
+      return h(
+        'div',
+        { key, className: 'txri-timeline' },
+        props.title !== undefined ? h('strong', null, String(props.title)) : null,
+        h(
+          'ul',
+          null,
+          ...items.map((it, i) => {
+            const rec = it !== null && typeof it === 'object' ? (it as Record<string, unknown>) : null
+            const time = rec !== null && timef !== '' ? fmtValue(rec[timef]) : ''
+            const title = rec !== null && tf !== '' ? fmtValue(rec[tf]) : fmtValue(it)
+            const desc = rec !== null && df !== '' ? fmtValue(rec[df]) : ''
+            return h(
+              'li',
+              { key: i },
+              time !== '' ? h('div', { className: 'txri-note txri-mono' }, time) : null,
+              h('div', null, title),
+              desc !== '' && desc !== '—' ? h('div', { className: 'txri-note' }, desc) : null,
+            )
+          }),
+        ),
+      )
+    }
+    case 'Tabs':
+      return h(TabsBox, { key, node, ctx })
     default:
       return h('p', { key, className: 'txri-err' }, `unknown component: ${String(node.type)}`)
   }
@@ -341,6 +435,37 @@ function AccordionBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string |
       `${isOpen ? ctx.t('collapse') : ctx.t('expand')} · ${String(p.title ?? '')}`,
     ),
     isOpen ? h('div', { className: 'txri-exp' }, renderListBlock(items, ctx.t)) : null,
+  )
+}
+
+/** Tabs：本地切换（同 expand 族本地状态，事件集仍为筛选/展开/跳转）。 */
+function TabsBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string | number }): ReactNode {
+  const { node, ctx } = props
+  const p = (node.props ?? {}) as Record<string, unknown>
+  const tabs = Array.isArray(p.tabs) ? (p.tabs as Array<Record<string, unknown>>) : []
+  const [sel, setSel] = useState(0)
+  const current = tabs[Math.min(sel, Math.max(tabs.length - 1, 0))]
+  const items =
+    current !== undefined && Array.isArray(current.items) ? (current.items as SurfaceNode[]) : []
+  return h(
+    'div',
+    { className: 'txri-tabs' },
+    h(
+      'div',
+      { className: 'txri-bar' },
+      ...tabs.map((t, i) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            className: i === sel ? 'txri-primary' : '',
+            onClick: () => setSel(i),
+          },
+          String(t.label ?? ''),
+        ),
+      ),
+    ),
+    ...items.map((c, i) => renderNode(c, ctx, `tab${sel}-${i}`)),
   )
 }
 

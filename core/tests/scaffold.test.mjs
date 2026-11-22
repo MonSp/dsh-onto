@@ -124,6 +124,9 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     const reportTs = readFileSync(join(outDir, 'src', 'client', 'report.ts'), 'utf8')
     assert.ok(reportTs.includes('@dsh-onto/core/surface'))
     assert.ok(reportTs.includes('@dsh-onto/core/report'))
+    for (const comp of ['KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'TabsBox']) {
+      assert.ok(reportTs.includes(comp), `report.ts 须渲染 ${comp}`)
+    }
     // 契约冻结
     const bindings = readFileSync(join(outDir, 'src', 'bindings.ts'), 'utf8')
     assert.ok(bindings.includes('SRC-WST-CORE'))

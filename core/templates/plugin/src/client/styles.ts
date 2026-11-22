@@ -38,4 +38,21 @@ export const CSS = `
 .txri-gov .txri-stat .v { font-size: 15px; font-weight: 600; }
 .txri-gov .txri-thbtn { cursor: pointer; border: none; background: transparent; color: inherit; font: inherit; font-weight: 600; padding: 0; opacity: 0.85; }
 .txri-gov .txri-exp { margin: 4px 0 8px; padding: 6px 8px; border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); }
+.txri-gov .txri-kv { width: auto; margin: 4px 0 8px; }
+.txri-gov .txri-kv td { border-bottom: none; padding: 2px 10px 2px 0; }
+.txri-gov .tag.success { border-color: #2f9e44; color: #2f9e44; }
+.txri-gov .tag.danger { border-color: #e03131; color: #e03131; }
+.txri-gov .tag.accent { border-color: #4c6ef5; color: #4c6ef5; }
+.txri-gov .tag.info { border-color: #4c6ef5; color: #4c6ef5; }
+.txri-gov .tag.muted { opacity: 0.7; }
+.txri-gov .txri-callout { border-left: 3px solid currentColor; border-radius: 6px; padding: 6px 10px; margin: 6px 0; opacity: 0.95; }
+.txri-gov .txri-callout-info { color: #4c6ef5; }
+.txri-gov .txri-callout-success { color: #2f9e44; }
+.txri-gov .txri-callout-warning { color: #e67700; }
+.txri-gov .txri-callout-error { color: #e03131; }
+.txri-gov .txri-pbar { width: 120px; height: 6px; border-radius: 999px; background: color-mix(in srgb, currentColor 15%, transparent); overflow: hidden; margin: 4px 0; }
+.txri-gov .txri-pfill { height: 100%; border-radius: 999px; background: currentColor; }
+.txri-gov .txri-timeline ul { list-style: none; margin: 6px 0; padding-left: 12px; border-left: 2px solid color-mix(in srgb, currentColor 20%, transparent); }
+.txri-gov .txri-timeline li { margin: 0 0 10px 8px; }
+.txri-gov .txri-tabs .txri-bar { margin-bottom: 6px; }
 `

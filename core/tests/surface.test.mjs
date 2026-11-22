@@ -33,7 +33,9 @@ test('默认模板 surface 通过校验', () => {
   const v = validateReportSurface(buildDefaultReportSurface())
   assert.equal(v.ok, true)
   assert.equal(v.value.catalogId, SURFACE_CATALOG_ID)
-  assert.equal(v.value.root.children[1].type, 'Table')
+  assert.ok(v.value.root.children.some((c) => c.type === 'Table'))
+  assert.ok(v.value.root.children.some((c) => c.type === 'KeyValue'))
+  assert.ok(v.value.root.children.some((c) => c.type === 'Badge'))
 })
 
 test('信封与 id：版本/目录/类型/重复 id', () => {
@@ -200,4 +202,81 @@ test('绑定信封：@path 形态与裸指针等价，数据字面量/残缺信�
     msg(node('x', 'Text', { bind: { '@path': '/summary/maxRiskScore' } })),
   )
   assert.equal(v6.ok, true)
+})
+
+test('批次 1：KeyValue / Badge / Callout', () => {
+  const kv = msg(
+    node('kv', 'KeyValue', { pairs: [{ key: 'runId', bind: '/runRef/runId' }, { key: '状态', bind: { '@path': '/summary/dataStatus' } }] }),
+  )
+  assert.equal(validateReportSurface(kv).ok, true)
+
+  const kvBad = msg(node('kv', 'KeyValue', { pairs: [{ key: '分', bind: 0.94 }] }))
+  const v1 = validateReportSurface(kvBad)
+  assert.equal(v1.ok, false)
+  assert.ok(codes(v1).includes('SF_SLOT_LITERAL'))
+
+  assert.equal(validateReportSurface(msg(node('b1', 'Badge', { label: 'humanReviewRequired', tone: 'warn' }))).ok, true)
+  assert.equal(validateReportSurface(msg(node('b2', 'Badge', { bind: '/summary/dataStatus', tone: 'danger' }))).ok, true)
+  assert.equal(validateReportSurface(msg(node('b3', 'Badge', {}))).ok, false)
+  const v2 = validateReportSurface(msg(node('b4', 'Badge', { bind: true })))
+  assert.equal(v2.ok, false)
+  assert.ok(codes(v2).includes('SF_SLOT_LITERAL'))
+  assert.equal(validateReportSurface(msg(node('b5', 'Badge', { label: 'x', tone: 'neon' }))).ok, false)
+
+  assert.equal(validateReportSurface(msg(node('c1', 'Callout', { tone: 'warning', title: '注意', content: '数据不完整' }))).ok, true)
+  assert.equal(validateReportSurface(msg(node('c2', 'Callout', { content: 'x', bind: '/summary/dataStatus' }))).ok, false)
+  assert.equal(validateReportSurface(msg(node('c3', 'Callout', {}))).ok, false)
+  assert.equal(validateReportSurface(msg(node('c4', 'Callout', { content: 'x', tone: 'neon' }))).ok, false)
+})
+
+test('批次 1：Progress / Timeline / Tabs', () => {
+  const p1 = msg(node('p', 'Progress', { label: '风险水位', bind: '/summary/maxRiskScore', max: 1, display: 'ring' }))
+  assert.equal(validateReportSurface(p1).ok, true)
+  const p2 = validateReportSurface(msg(node('p', 'Progress', { label: 'x', value: 50, bind: '/summary/maxRiskScore' })))
+  assert.equal(p2.ok, false)
+  assert.ok(codes(p2).includes('SF_SLOT_LITERAL'))
+  assert.equal(validateReportSurface(msg(node('p', 'Progress', { bind: '/summary/maxRiskScore', max: -1 }))).ok, false)
+
+  const t1 = msg(
+    node('tl', 'Timeline', {
+      title: '打分流水',
+      bind: '/ruleHitLog',
+      titleField: 'ruleId',
+      descField: 'candidateId',
+      timeField: 'ts',
+    }),
+  )
+  assert.equal(validateReportSurface(t1).ok, true)
+  const t2 = validateReportSurface(
+    msg(node('tl', 'Timeline', { bind: '/ruleHitLog', titleField: 'nope' })),
+  )
+  assert.equal(t2.ok, false)
+  assert.ok(codes(t2).includes('SF_FIELD_INVALID'))
+  const t3 = validateReportSurface(msg(node('tl', 'Timeline', { bind: '/summary/maxRiskScore' })))
+  assert.equal(t3.ok, false)
+  assert.ok(codes(t3).includes('SF_BIND_INVALID'))
+  // 纯字符串列表不接受字段映射
+  const t4 = validateReportSurface(
+    msg(node('tl', 'Timeline', { bind: '/candidates/0/narrative', titleField: 'ruleId' })),
+  )
+  assert.equal(t4.ok, false)
+  assert.ok(codes(t4).includes('SF_FIELD_INVALID'))
+
+  const tabs = msg(
+    node('tb', 'Tabs', {
+      tabs: [
+        { label: '候选', items: [node('t1', 'Text', { text: 'a' })] },
+        { label: '审计', items: [] },
+      ],
+    }),
+  )
+  assert.equal(validateReportSurface(tabs).ok, true)
+  const tabsBad = msg(node('tb', 'Tabs', { tabs: [{ label: 'x', items: [node('z', 'Nope')] }] }))
+  const v5 = validateReportSurface(tabsBad)
+  assert.equal(v5.ok, false)
+  assert.ok(codes(v5).includes('SF_TYPE_UNKNOWN'))
+  const many = { tabs: [] }
+  for (let i = 0; i < 11; i++) many.tabs.push({ label: `t${i}`, items: [] })
+  const v6 = validateReportSurface(msg(node('tb', 'Tabs', many)))
+  assert.equal(v6.ok, false)
 })
