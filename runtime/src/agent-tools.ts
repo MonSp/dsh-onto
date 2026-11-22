@@ -40,6 +40,7 @@ import {
   listRunRecords,
   loadExperienceNote,
   loadPackage,
+  loadReportPage,
   loadRunRecord,
   loadRunRedlines,
   MAX_EXPAND_HOPS,
@@ -130,7 +131,7 @@ import { actionStoreFor } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError } from './release.js'
 import {
-  assertBusinessDataset, assertBusinessRun, businessPolicy, parseTargetRef,
+  assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, businessPolicy, parseTargetRef,
   requireBusinessIdentity, requireBizAuth, runAccessBinding, scopeDataQuery, type ExistenceChecks,
 } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
@@ -2283,6 +2284,14 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             typeof args.pageId === 'string' && args.pageId.trim() !== ''
               ? args.pageId.trim()
               : `rp-${createHash('sha256').update(name).digest('hex').slice(0, 12)}`
+          // 写目标同权（strict）：既有页按 accessBinding 收权，防跨身份覆写/改绑
+          // （缺页放行新建；损坏页 fail-loud，不静默覆盖现场）
+          try {
+            const existing = loadReportPage(ws.root, pageId)
+            if (identity) assertBusinessReportPage(identity, existing)
+          } catch (e) {
+            if (!(e instanceof PackageStoreError) || e.code !== 'NOT_FOUND') throw e
+          }
           const savedAt = new Date().toISOString()
           saveReportPage(ws.root, {
             pageId,

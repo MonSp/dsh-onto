@@ -150,3 +150,24 @@ test('读盘闸：手改 surface 的报表页拒载、列表跳过', () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('读盘闸：内嵌 pageId 与文件名不符拒载', () => {
+  const root = mkRoot()
+  try {
+    saveReportPage(root, {
+      pageId: 'rp-mismatch0001',
+      name: 'x',
+      surface: buildDefaultReportSurface(),
+      createdFrom: runRef(),
+      savedAt: '2026-11-22T00:02:00.000Z',
+    })
+    const file = join(root, 'reports', 'rp-mismatch0001.json')
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    raw.pageId = 'rp-evil00000001'
+    writeFileSync(file, JSON.stringify(raw), 'utf8')
+    assert.throws(() => loadReportPage(root, 'rp-mismatch0001'), (e) => e.code === 'PACKAGE_MALFORMED')
+    assert.equal(listReportPages(root).length, 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

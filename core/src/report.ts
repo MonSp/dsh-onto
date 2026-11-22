@@ -127,16 +127,13 @@ export const CANDIDATE_ROW_FIELDS = [
   'pendingVerification',
 ] as const
 
-/** 可整体绑定的列表容器（Table.rowsBind / Accordion.bind 的目标面）。 */
+/** 可整体绑定的列表容器（v1 实际绑定面：Table.rowsBind=/candidates；Accordion=行级明细四列表）。 */
 export const REPORT_LIST_REFS = [
   'candidates',
   'candidates[].evidenceChains',
   'candidates[].pendingChecks',
   'candidates[].narrative',
   'candidates[].hitRuleIds',
-  'excluded',
-  'ruleHitLog',
-  'audit.checks',
 ] as const
 
 /** RunRecord → RunReport 纯投影。 */

@@ -433,3 +433,58 @@ test('wire 报表页：列表/读取与 store 一致；strict 越权拒、同身
     configurePhraseStore(null)
   }
 })
+
+test('save_report_page：strict 写目标收权——跨身份覆写拒、同身份覆盖放行', async () => {
+  const host = fixture()
+  try {
+    const root = join(host.dir, 'dsh-onto', 'workspace')
+    for (const [runId, who] of [
+      ['run-a0000001', 'a'],
+      ['run-b0000001', 'b'],
+    ]) {
+      saveRunRecord(
+        root,
+        buildRunRecord({
+          package: { name: 'aml-analysis', version: '1.0.0' },
+          dataset: fakeDataset(),
+          result: fakeResult(runId),
+          redlines: [],
+          accessBinding: runAccessBinding(identity(who)),
+        }),
+      )
+    }
+    host.runtime.run(() => {
+      enableStrictReleaseMode()
+      businessPolicy.setIdentityProvider(() => identity('a'))
+    })
+    applyTools(host.ctx)
+    const surface = buildDefaultReportSurface()
+    const first = await host.tools
+      .get('save_report_page')
+      .execute({ name: 'shared-page', runId: 'run-a0000001', surface }, {})
+    // 同身份覆盖放行
+    const again = await host.tools
+      .get('save_report_page')
+      .execute({ name: 'shared-page', runId: 'run-a0000001', surface }, {})
+    assert.equal(again.pageId, first.pageId)
+    // 跨身份覆写拒（即使持有自己的 run——写目标另过 accessBinding）
+    host.runtime.run(() => {
+      businessPolicy.setIdentityProvider(() => identity('b'))
+    })
+    await assert.rejects(
+      () =>
+        host.tools
+          .get('save_report_page')
+          .execute({ name: 'shared-page', runId: 'run-b0000001', surface }, {}),
+      (e) => e.code === 'OBJECT_NOT_GRANTED',
+    )
+    // B 沉淀自己的页（不同 pageId）不受影响
+    const bPage = await host.tools
+      .get('save_report_page')
+      .execute({ name: 'b-page', runId: 'run-b0000001', surface }, {})
+    assert.notEqual(bPage.pageId, first.pageId)
+  } finally {
+    host.dispose()
+    configurePhraseStore(null)
+  }
+})
