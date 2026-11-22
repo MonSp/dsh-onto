@@ -82,14 +82,14 @@ const ACCORDION_LIST_REFS = new Set([
   'candidates[].hitRuleIds',
 ])
 /** 列表元素字段表（Timeline/Chart 共用；同一投影的唯一映射白名单，防两表漂移）。 */
-const LIST_ITEM_FIELDS: Record<string, readonly string[]> = {
+export const LIST_ITEM_FIELDS: Record<string, readonly string[]> = {
   candidates: CANDIDATE_ROW_FIELDS,
   'candidates[].evidenceChains': ['ruleId', 'score', 'evidence'],
   'candidates[].pendingChecks': ['ruleId', 'missing', 'note'],
   ruleHitLog: ['ruleId', 'candidateId', 'score', 'ts'],
 }
-/** 各列表元素的数值字段（Chart.valueField 白名单）。 */
-const LIST_NUMERIC_FIELDS: Record<string, readonly string[]> = {
+/** 各列表元素的数值字段（Chart.valueField 白名单；恒为 LIST_ITEM_FIELDS 子集）。 */
+export const LIST_NUMERIC_FIELDS: Record<string, readonly string[]> = {
   candidates: ['riskScore'],
   'candidates[].evidenceChains': ['score'],
   ruleHitLog: ['score'],
@@ -489,8 +489,10 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         }
         const cRows = bindPointer(props.rowsBind)
         let cRef: string | null = null
-        if (cRows === null || !isReportListPointer(cRows)) {
-          err('SF_BIND_INVALID', `${where}.props.rowsBind`, `rowsBind 不是报表列表引用: ${String(props.rowsBind)}`)
+        if (cRows === null) {
+          err('SF_SLOT_LITERAL', `${where}.props.rowsBind`, 'Chart 数据槽位只允许列表绑定，拒绝字面量')
+        } else if (!isReportListPointer(cRows)) {
+          err('SF_BIND_INVALID', `${where}.props.rowsBind`, `rowsBind 不是报表列表引用: ${cRows}`)
         } else {
           cRef = reportPointerToRef(cRows)
         }
@@ -507,8 +509,15 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         if (!isNonEmptyString(valueField)) {
           err('SF_FIELD_INVALID', `${where}.props.valueField`, 'valueField 必填')
         } else {
+          // 双命中（S2.2）：既是元素字段、又在数值白名单——两表同闸，防漂移
+          const allowedItems = cRef !== null ? LIST_ITEM_FIELDS[cRef] : undefined
           const allowedValues = cRef !== null ? LIST_NUMERIC_FIELDS[cRef] : undefined
-          if (allowedValues === undefined || !allowedValues.includes(valueField)) {
+          if (
+            allowedItems === undefined ||
+            allowedValues === undefined ||
+            !allowedItems.includes(valueField) ||
+            !allowedValues.includes(valueField)
+          ) {
             err('SF_FIELD_INVALID', `${where}.props.valueField`, `valueField 不是该列表数值字段: ${valueField}`)
           }
         }

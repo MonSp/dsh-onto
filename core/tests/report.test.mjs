@@ -8,6 +8,7 @@ import {
   isCandidateRowField,
   isReportFieldRef,
   isReportPointer,
+  projectChartPoints,
   reportPointerToRef,
   resolveReportPointer,
 } from '../dist/index.js'
@@ -175,4 +176,35 @@ test('引用闭包：满配报表上每个稳定引用均可解析', () => {
   assert.equal(resolveReportPointer(report, '/candidates/1/riskScore'), 0.368)
   assert.equal(resolveReportPointer(report, '/candidates/9/riskScore'), undefined)
   assert.equal(resolveReportPointer(report, '/nope'), undefined)
+})
+
+test('projectChartPoints：null-safe 取点、断线分段、绝不补 0', () => {
+  const record = fullRecord()
+  // 中间插入不可数值化行 → 跳过并断线（两侧各成一段）
+  record.result.candidates.splice(1, 0, {
+    ...record.result.candidates[1],
+    candidateId: 'ALERT-BIN-99',
+    riskScore: Number.NaN,
+  })
+  const report = buildRunReport(record)
+  const { points, segments } = projectChartPoints(report, '/candidates', 'candidateId', 'riskScore')
+  assert.equal(points.length, 2)
+  assert.deepEqual(points.map((p) => p.label), ['ALERT-BIN-03', 'ALERT-BIN-01'])
+  assert.deepEqual(points.map((p) => p.value), [0.94, 0.368])
+  assert.equal(segments.length, 2, '缺断点断线分段')
+  assert.equal(segments[0].length, 1)
+  assert.equal(segments[1].length, 1)
+
+  // 空候选 → 空点空段（渲染显 '—'，不得画 0）
+  const empty = fullRecord()
+  empty.result.candidates = []
+  const emptyReport = buildRunReport(empty)
+  const none = projectChartPoints(emptyReport, '/candidates', 'candidateId', 'riskScore')
+  assert.equal(none.points.length, 0)
+  assert.equal(none.segments.length, 0)
+
+  // 全有效 → 单段
+  const ok = projectChartPoints(buildRunReport(fullRecord()), '/candidates', 'candidateId', 'riskScore')
+  assert.equal(ok.segments.length, 1)
+  assert.equal(ok.points.length, 2)
 })

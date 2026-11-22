@@ -280,6 +280,9 @@ pnpm dsh --profile dsh-<domain> --no-open
 对照：同一次运行的固定页数值 = 对话报表数值 = `show_run_report` 文字面数值（同一投影 + 同一
 渲染器组件）。
 
+> 升级 `@dsh-onto/core` 后请**重新生成插件**：旧生成物对新 surface 组件会显示
+> `unknown component` 并回退文字（生成时烘焙渲染器，不随 link 依赖自动更新）。
+
 ## 8. 卡点记录表
 
 每完成一步或卡住时填一行。**卡点 = 产品缺口**。

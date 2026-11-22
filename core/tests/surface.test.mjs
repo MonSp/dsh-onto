@@ -2,6 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  LIST_ITEM_FIELDS,
+  LIST_NUMERIC_FIELDS,
   SURFACE_CATALOG_ID,
   buildDefaultReportSurface,
   validateReportSurface,
@@ -36,6 +38,7 @@ test('默认模板 surface 通过校验', () => {
   assert.ok(v.value.root.children.some((c) => c.type === 'Table'))
   assert.ok(v.value.root.children.some((c) => c.type === 'KeyValue'))
   assert.ok(v.value.root.children.some((c) => c.type === 'Badge'))
+  assert.ok(v.value.root.children.some((c) => c.type === 'Chart'))
 })
 
 test('信封与 id：版本/目录/类型/重复 id', () => {
@@ -378,4 +381,14 @@ test('批次 2：Chart 序列绑定（数据数组字面量拒、字段白名单
   )
   assert.equal(v6.ok, false)
   assert.ok(codes(v6).includes('SF_FIELD_INVALID'))
+})
+
+test('字段表不变量：LIST_NUMERIC_FIELDS 恒为 LIST_ITEM_FIELDS 子集（防两表漂移）', () => {
+  for (const [ref, numeric] of Object.entries(LIST_NUMERIC_FIELDS)) {
+    const items = LIST_ITEM_FIELDS[ref]
+    assert.ok(items, `LIST_ITEM_FIELDS 缺 ${ref}`)
+    for (const f of numeric) {
+      assert.ok(items.includes(f), `${ref}.${f} 须同时在 LIST_ITEM_FIELDS`)
+    }
+  }
 })

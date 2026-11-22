@@ -13,7 +13,7 @@ import {
   type A2uiSurfaceMessage,
   type SurfaceNode,
 } from '@dsh-onto/core/surface'
-import { resolveReportPointer, type RunReport } from '@dsh-onto/core/report'
+import { projectChartPoints, resolveReportPointer, type RunReport } from '@dsh-onto/core/report'
 
 type T = (key: string) => string
 
@@ -428,42 +428,17 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
   }
 }
 
-interface ChartPoint {
-  label: string
-  value: number
-}
-
-/** 图表取点（null-safe）：非有限值跳过（绝不补 0）并断线分段，行序即 x 序。 */
-function chartPoints(node: SurfaceNode, ctx: RenderCtx): { points: ChartPoint[]; segments: ChartPoint[][] } {
-  const p = (node.props ?? {}) as Record<string, unknown>
-  const rows = listItems(resolveReportPointer(ctx.report, bindPointer(p.rowsBind) ?? '/'))
-  const labelField = String(p.labelField ?? '')
-  const valueField = String(p.valueField ?? '')
-  const points: ChartPoint[] = []
-  const segments: ChartPoint[][] = []
-  let current: ChartPoint[] = []
-  for (const r of rows) {
-    const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
-    const raw = rec === null ? undefined : rec[valueField]
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      const pt = { label: rec === null ? '' : fmtValue(rec[labelField]), value: raw }
-      points.push(pt)
-      current.push(pt)
-    } else if (current.length > 0) {
-      segments.push(current)
-      current = []
-    }
-  }
-  if (current.length > 0) segments.push(current)
-  return { points, segments }
-}
-
 function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   const { node, ctx } = props
   const p = (node.props ?? {}) as Record<string, unknown>
   const kind = String(p.kind ?? 'bars')
   const height = typeof p.height === 'number' ? p.height : 160
-  const { points, segments } = chartPoints(node, ctx)
+  const { points, segments } = projectChartPoints(
+    ctx.report,
+    bindPointer(p.rowsBind) ?? '/',
+    String(p.labelField ?? ''),
+    String(p.valueField ?? ''),
+  )
   const title = props.node.props?.title !== undefined ? h('strong', null, String(props.node.props.title)) : null
   if (points.length === 0) {
     return h('div', { className: 'txri-stat' }, title, h('span', { className: 'v' }, '—'))
@@ -540,17 +515,19 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
           h('circle', { key: i, cx: x(i).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.6, fill: 'currentColor' }),
         ),
         h('text', { x: x(0).toFixed(1), y: (y(points[0].value) - 6).toFixed(1), 'font-size': 9, fill: 'currentColor' }, fmtValue(points[0].value)),
-        h(
-          'text',
-          {
-            x: x(points.length - 1).toFixed(1),
-            y: (y(points[points.length - 1].value) - 6).toFixed(1),
-            'font-size': 9,
-            fill: 'currentColor',
-            'text-anchor': 'end',
-          },
-          fmtValue(points[points.length - 1].value),
-        ),
+        points.length > 1
+          ? h(
+              'text',
+              {
+                x: x(points.length - 1).toFixed(1),
+                y: (y(points[points.length - 1].value) - 6).toFixed(1),
+                'font-size': 9,
+                fill: 'currentColor',
+                'text-anchor': 'end',
+              },
+              fmtValue(points[points.length - 1].value),
+            )
+          : null,
       ),
     )
   }
@@ -561,7 +538,7 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   if (horizontal) {
     const w = 240
     const rowH = 22
-    const h2 = Math.max(points.length * rowH, 60)
+    const h2 = Math.max(points.length * rowH, 60, height)
     return h(
       'div',
       { className: 'txri-chart' },

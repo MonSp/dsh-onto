@@ -294,3 +294,50 @@ export function resolveReportPointer(report: RunReport, pointer: string): unknow
   }
   return cur
 }
+
+export interface ChartPoint {
+  label: string
+  value: number
+}
+
+/**
+ * 图表取点（null-safe，渲染层共用）：非有限值跳过并断线分段（绝不补 0），
+ * 行序即 x 序；全空返回空段（渲染显 `—`）。
+ */
+export function projectChartPoints(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  valueField: string,
+): { points: ChartPoint[]; segments: ChartPoint[][] } {
+  const rows = resolveReportPointer(report, rowsBind)
+  const points: ChartPoint[] = []
+  const segments: ChartPoint[][] = []
+  let current: ChartPoint[] = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const raw = rec === null ? undefined : rec[valueField]
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        const pt: ChartPoint = {
+          label: rec === null ? '' : fmtChartLabel(rec[labelField]),
+          value: raw,
+        }
+        points.push(pt)
+        current.push(pt)
+      } else if (current.length > 0) {
+        segments.push(current)
+        current = []
+      }
+    }
+  }
+  if (current.length > 0) segments.push(current)
+  return { points, segments }
+}
+
+function fmtChartLabel(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (Array.isArray(v)) return v.map((x) => fmtChartLabel(x)).join(', ')
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
