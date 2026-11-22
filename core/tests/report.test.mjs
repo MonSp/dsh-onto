@@ -231,11 +231,21 @@ test('evalWhen：数据驱动谓词（各 op / 不可求值不满足）', () => 
   assert.equal(evalWhen(report, score('lt', 1)), true)
   assert.equal(evalWhen(report, score('lte', 0.94)), true)
 
-  // 不可求值（null 比较 / 缺字段）→ 不满足
+  // 不可求值（null 比较 / 缺字段）→ 不满足（含 neq/not-in 取反侧）
   const emptyRec = fullRecord()
   emptyRec.result.candidates = []
   const emptyReport = buildRunReport(emptyRec)
   assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'gt', value: 0 }), false)
   assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'empty' }), true)
   assert.equal(evalWhen(report, { bind: '/nope', op: 'eq', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'neq', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'not-in', value: [1] }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'gte', value: 0 }), false)
+  // null 分数不得当 0 分（Number(null)=0 陷阱）
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'eq', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'gte', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'lte', value: 0 }), false)
+  // 布尔严格等（false 不得等于 0）
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: true }), true)
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: 1 }), false)
 })

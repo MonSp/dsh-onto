@@ -431,6 +431,19 @@ test('批次 3：when 谓词槽（全组件通用）', () => {
     msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', op: 'gt' } })),
   )
   assert.equal(v4.ok, false)
+
+  // empty/not-empty 不接受多余 value
+  const v5 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', op: 'empty', value: 1 } })),
+  )
+  assert.equal(v5.ok, false)
+
+  // 嵌套对象（pair/column/spark/tab）不接受 when——防静默无效
+  const v6 = validateReportSurface(
+    msg(node('kv', 'KeyValue', { pairs: [{ key: 'x', bind: '/runRef/runId', when: { bind: '/summary/dataStatus', op: 'empty' } }] })),
+  )
+  assert.equal(v6.ok, false)
+  assert.ok(codes(v6).includes('SF_PROPS_UNKNOWN'))
 })
 
 test('批次 3：Table 列类型 / Stat.spark / Chart.palette', () => {

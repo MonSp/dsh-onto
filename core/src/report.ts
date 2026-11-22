@@ -359,19 +359,25 @@ function isEmptyValue(raw: unknown): boolean {
   )
 }
 
+/**
+ * 可判定性：缺失指针/空投影/空白串一律不可判定（比较族谓词全部不满足——
+ * 含 neq/not-in 取反侧，防「不可求值反而出真」；也堵 Number(null)=0 陷阱）。
+ */
+function isEvaluableValue(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return false
+  if (typeof raw === 'string' && raw.trim() === '') return false
+  return true
+}
+
 function looseEq(a: unknown, b: unknown): boolean {
   if (a === b) return true
   // 布尔只严格等（false 不得等于 0/'false'）
   if (typeof a === 'boolean' || typeof b === 'boolean') return false
-  if (typeof a === 'number' || typeof b === 'number') {
-    const x = Number(a)
-    const y = Number(b)
-    return Number.isFinite(x) && Number.isFinite(y) && x === y
-  }
+  if (typeof a === 'number' && typeof b === 'number') return a === b
   return String(a) === String(b)
 }
 
-/** 条件谓词求值：不可求值（含比较两侧非有限）一律不满足；显隐缺省（无 when）由调用方视为恒渲染。 */
+/** 条件谓词求值：比较族不可判定一律不满足；empty/not-empty 专责空语义。 */
 export function evalWhen(report: RunReport, when: ReportWhen): boolean {
   const raw = resolveReportPointer(report, when.bind)
   switch (when.op) {
@@ -380,17 +386,18 @@ export function evalWhen(report: RunReport, when: ReportWhen): boolean {
     case 'not-empty':
       return !isEmptyValue(raw)
     case 'eq':
-      return looseEq(raw, when.value)
     case 'neq':
-      return !looseEq(raw, when.value)
     case 'in':
-      return Array.isArray(when.value) && when.value.some((v) => looseEq(raw, v))
     case 'not-in':
-      return Array.isArray(when.value) && !when.value.some((v) => looseEq(raw, v))
     case 'gt':
     case 'gte':
     case 'lt':
     case 'lte': {
+      if (!isEvaluableValue(raw)) return false
+      if (when.op === 'eq') return looseEq(raw, when.value)
+      if (when.op === 'neq') return !looseEq(raw, when.value)
+      if (when.op === 'in') return Array.isArray(when.value) && when.value.some((v) => looseEq(raw, v))
+      if (when.op === 'not-in') return Array.isArray(when.value) && !when.value.some((v) => looseEq(raw, v))
       const a = Number(raw)
       const b = Number(when.value)
       if (!Number.isFinite(a) || !Number.isFinite(b)) return false

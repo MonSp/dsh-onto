@@ -113,6 +113,7 @@ function renderCell(value: unknown, type: unknown): ReactNode {
   const t = String(type ?? 'text')
   if (t === 'bar') {
     const n = typeof value === 'number' && Number.isFinite(value) ? value : null
+    // 约定：≤1 视为比例（1 = 100%），>1 视为百分数
     const pct = n === null ? 0 : Math.max(0, Math.min(100, n <= 1 ? n * 100 : n))
     return h(
       'div',
@@ -134,9 +135,9 @@ function renderCell(value: unknown, type: unknown): ReactNode {
   return fmtValue(value)
 }
 
-/** Stat 微趋势（report-extras S2.3）：序列绑定旁路小折线，语义同图表取点。 */
+/** Stat 微趋势（report-extras S2.3）：序列绑定旁路小折线，断线语义同图表。 */
 function renderSpark(spark: Record<string, unknown>, ctx: RenderCtx): ReactNode {
-  const { points } = projectChartPoints(
+  const { points, segments } = projectChartPoints(
     ctx.report,
     bindPointer(spark.rowsBind) ?? '/',
     '',
@@ -150,9 +151,19 @@ function renderSpark(spark: Record<string, unknown>, ctx: RenderCtx): ReactNode 
   const span = max - min || 1
   const x = (i: number) => (i * w) / (points.length - 1)
   const y = (v: number) => h2 - 1 - ((v - min) / span) * (h2 - 2)
-  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')
-  return h('svg', { className: 'txri-spark', viewBox: `0 0 ${w} ${h2}`, width: w, height: h2, 'aria-hidden': true },
-    h('path', { d, fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round' }))
+  let idx = 0
+  const ds = segments.map((seg) => {
+    const d = seg
+      .map((p, j) => `${j === 0 ? 'M' : 'L'}${x(idx + j).toFixed(1)},${y(p.value).toFixed(1)}`)
+      .join(' ')
+    idx += seg.length
+    return d
+  })
+  return h(
+    'svg',
+    { className: 'txri-spark', viewBox: `0 0 ${w} ${h2}`, width: w, height: h2, 'aria-hidden': true },
+    ...ds.map((d, i) => h('path', { key: i, d, fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round' })),
+  )
 }
 
 interface RenderCtx {
@@ -665,7 +676,7 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
           'g',
           { key: i },
           h('title', null, `${pt.label} · ${fmtValue(pt.value)}`),
-          h('rect', { x: cx - barW / 2, y: height - 18 - bh, width: barW, height: bh, rx: 2, fill: strokeOf(i), fillOpacity: opacityOf(i) }),
+          h('rect', { x: cx - barW / 2, y: height - 18 - bh, width: barW, height: bh, rx: 2, fill: strokeOf(i), fillOpacity: palette.length > 0 ? 1 : 0.75 }),
           h('text', { x: cx, y: height - 22 - bh, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle' }, fmtValue(pt.value)),
           h('text', { x: cx, y: height - 5, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle', opacity: 0.7 }, labelOf(pt.label)),
         )

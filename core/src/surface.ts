@@ -190,7 +190,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
 
     switch (t) {
       case 'Card': {
-        rejectUnknownKeys(props, ['title'], where, err)
+        rejectUnknownKeys(props, ['title', 'when'], where, err)
         if (props.title !== undefined && typeof props.title !== 'string') {
           err('SF_SHAPE', `${where}.props.title`, 'title 必须是字符串')
         }
@@ -198,11 +198,11 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       }
       case 'Row':
       case 'Column': {
-        rejectUnknownKeys(props, [], where, err)
+        rejectUnknownKeys(props, ['when'], where, err)
         break
       }
       case 'Stat': {
-        rejectUnknownKeys(props, ['label', 'bind', 'spark'], where, err)
+        rejectUnknownKeys(props, ['label', 'bind', 'spark', 'when'], where, err)
         if ('value' in props || 'text' in props) {
           err('SF_SLOT_LITERAL', where, 'Stat 数值槽位只允许 bind 绑定，拒绝字面量')
         }
@@ -238,7 +238,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Text': {
-        rejectUnknownKeys(props, ['text', 'bind'], where, err)
+        rejectUnknownKeys(props, ['text', 'bind', 'when'], where, err)
         const hasText = props.text !== undefined
         const hasBind = props.bind !== undefined
         if (hasText === hasBind) {
@@ -258,7 +258,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Table': {
-        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter'], where, err)
+        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'when'], where, err)
         const rowsBind = bindPointer(props.rowsBind)
         if (rowsBind === null || reportPointerToRef(rowsBind) !== 'candidates') {
           err('SF_BIND_INVALID', `${where}.props.rowsBind`, "v1 候选表 rowsBind 必须绑定 '/candidates'（{\"@path\":\"/candidates\"} 或指针字符串）")
@@ -328,7 +328,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Accordion': {
-        rejectUnknownKeys(props, ['title', 'bind', 'defaultExpanded'], where, err)
+        rejectUnknownKeys(props, ['title', 'bind', 'defaultExpanded', 'when'], where, err)
         if (!isNonEmptyString(props.title)) err('SF_SHAPE', `${where}.props.title`, 'title 必填')
         const bind = bindPointer(props.bind)
         if (bind === null) {
@@ -347,7 +347,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Button': {
-        rejectUnknownKeys(props, ['label', 'action', 'target'], where, err)
+        rejectUnknownKeys(props, ['label', 'action', 'target', 'when'], where, err)
         if (!isNonEmptyString(props.label)) err('SF_SHAPE', `${where}.props.label`, 'label 必填')
         if (props.action !== 'navigate') {
           err('SF_ACTION_INVALID', `${where}.props.action`, "v1 action 只支持 'navigate'")
@@ -358,7 +358,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'KeyValue': {
-        rejectUnknownKeys(props, ['pairs'], where, err)
+        rejectUnknownKeys(props, ['pairs', 'when'], where, err)
         const pairs = props.pairs
         if (!Array.isArray(pairs) || pairs.length === 0) {
           err('SF_SHAPE', `${where}.props.pairs`, 'pairs 必须是非空数组')
@@ -383,7 +383,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Badge': {
-        rejectUnknownKeys(props, ['label', 'bind', 'tone'], where, err)
+        rejectUnknownKeys(props, ['label', 'bind', 'tone', 'when'], where, err)
         if (props.label === undefined && props.bind === undefined) {
           err('SF_SHAPE', where, 'Badge 须给 label（叙事）或 bind（数据）')
         }
@@ -404,7 +404,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Callout': {
-        rejectUnknownKeys(props, ['tone', 'title', 'content', 'bind'], where, err)
+        rejectUnknownKeys(props, ['tone', 'title', 'content', 'bind', 'when'], where, err)
         const hasContent = props.content !== undefined
         const hasBind = props.bind !== undefined
         if (hasContent === hasBind) {
@@ -430,7 +430,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Progress': {
-        rejectUnknownKeys(props, ['label', 'bind', 'max', 'display'], where, err)
+        rejectUnknownKeys(props, ['label', 'bind', 'max', 'display', 'when'], where, err)
         if ('value' in props) {
           err('SF_SLOT_LITERAL', where, 'Progress 数值槽位只允许 bind 绑定，拒绝字面量')
         }
@@ -452,7 +452,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Timeline': {
-        rejectUnknownKeys(props, ['title', 'bind', 'titleField', 'descField', 'timeField'], where, err)
+        rejectUnknownKeys(props, ['title', 'bind', 'titleField', 'descField', 'timeField', 'when'], where, err)
         if (props.title !== undefined && !isNonEmptyString(props.title)) {
           err('SF_SHAPE', `${where}.props.title`, 'title 必须是非空字符串')
         }
@@ -480,7 +480,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Tabs': {
-        rejectUnknownKeys(props, ['tabs'], where, err)
+        rejectUnknownKeys(props, ['tabs', 'when'], where, err)
         const tabs = props.tabs
         if (!Array.isArray(tabs) || tabs.length === 0) {
           err('SF_SHAPE', `${where}.props.tabs`, 'tabs 必须是非空数组')
@@ -511,7 +511,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         if ('data' in props || 'values' in props || 'series' in props || 'points' in props) {
           err('SF_SLOT_LITERAL', where, 'Chart 只接受序列绑定（rowsBind+labelField+valueField），拒绝字面量数据')
         }
-        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height', 'palette'], where, err)
+        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height', 'palette', 'when'], where, err)
         if (typeof props.kind !== 'string' || !CHART_KINDS.has(props.kind)) {
           err('SF_SHAPE', `${where}.props.kind`, `kind 只能是 ${[...CHART_KINDS].join('|')}`)
         }
@@ -599,8 +599,6 @@ function rejectUnknownKeys(
   err: (code: string, where: string, message: string) => void,
 ): void {
   for (const key of Object.keys(props)) {
-    // `when` 是全组件通用谓词槽（walk 中央校验），不入各组件白名单
-    if (key === 'when') continue
     if (!allowed.includes(key)) {
       err('SF_PROPS_UNKNOWN', `${where}.props.${key}`, `未知属性: ${key}`)
     }
@@ -632,7 +630,11 @@ function validateWhen(
     return
   }
   const op = String(when.op)
-  if (op === 'in' || op === 'not-in') {
+  if (op === 'empty' || op === 'not-empty') {
+    if ('value' in when) {
+      err('SF_SHAPE', `${where}.value`, `${op} 不接受 value`)
+    }
+  } else if (op === 'in' || op === 'not-in') {
     if (
       !Array.isArray(when.value) ||
       when.value.length === 0 ||
@@ -640,7 +642,7 @@ function validateWhen(
     ) {
       err('SF_SHAPE', `${where}.value`, `${op} 的 value 必须是非空原语数组`)
     }
-  } else if (op !== 'empty' && op !== 'not-empty') {
+  } else {
     if (!(typeof when.value === 'string' || typeof when.value === 'number' || typeof when.value === 'boolean')) {
       err('SF_SHAPE', `${where}.value`, `${op} 需要字符串/数字/布尔 value`)
     }
