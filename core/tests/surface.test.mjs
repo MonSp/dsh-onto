@@ -392,3 +392,111 @@ test('字段表不变量：LIST_NUMERIC_FIELDS 恒为 LIST_ITEM_FIELDS 子集（
     }
   }
 })
+
+test('批次 3：when 谓词槽（全组件通用）', () => {
+  const ok = msg(
+    node('c', 'Callout', {
+      content: '数据不完整',
+      tone: 'warning',
+      when: { bind: '/summary/dataStatus', op: 'eq', value: 'insufficient' },
+    }),
+  )
+  assert.equal(validateReportSurface(ok).ok, true)
+
+  const okEnvelope = msg(
+    node('b', 'Badge', {
+      label: 'x',
+      when: { bind: { '@path': '/summary/auditPassed' }, op: 'eq', value: false },
+    }),
+  )
+  assert.equal(validateReportSurface(okEnvelope).ok, true)
+
+  const v1 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: 42, op: 'eq', value: 1 } })),
+  )
+  assert.equal(v1.ok, false)
+  assert.ok(codes(v1).includes('SF_SLOT_LITERAL'))
+
+  const v2 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', op: 'explode', value: 1 } })),
+  )
+  assert.equal(v2.ok, false)
+
+  const v3 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', op: 'in', value: 'x' } })),
+  )
+  assert.equal(v3.ok, false)
+
+  const v4 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', op: 'gt' } })),
+  )
+  assert.equal(v4.ok, false)
+})
+
+test('批次 3：Table 列类型 / Stat.spark / Chart.palette', () => {
+  const tbl = msg(
+    node('t', 'Table', {
+      rowsBind: '/candidates',
+      columns: [
+        { field: 'riskScore', header: '分', type: 'bar' },
+        { field: 'riskLevel', header: '级', type: 'badge' },
+        { field: 'candidateId', header: 'ID', type: 'delta' },
+        { field: 'objectRef', header: '对象', type: 'num' },
+      ],
+    }),
+  )
+  assert.equal(validateReportSurface(tbl).ok, true)
+
+  const v1 = validateReportSurface(
+    msg(node('t', 'Table', { rowsBind: '/candidates', columns: [{ field: 'riskScore', header: 'x', type: 'sparkline' }] })),
+  )
+  assert.equal(v1.ok, false)
+
+  const spark = msg(
+    node('s', 'Stat', {
+      label: '最高风险',
+      bind: '/summary/maxRiskScore',
+      spark: { rowsBind: '/ruleHitLog', valueField: 'score' },
+    }),
+  )
+  assert.equal(validateReportSurface(spark).ok, true)
+
+  const v2 = validateReportSurface(
+    msg(node('s', 'Stat', { label: 'x', bind: '/summary/maxRiskScore', spark: { rowsBind: '/ruleHitLog', valueField: 'ruleId' } })),
+  )
+  assert.equal(v2.ok, false)
+  assert.ok(codes(v2).includes('SF_FIELD_INVALID'))
+
+  const pal = msg(
+    node('ch', 'Chart', {
+      kind: 'donut',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueField: 'riskScore',
+      palette: ['#f00', '#0f0'],
+    }),
+  )
+  assert.equal(validateReportSurface(pal).ok, true)
+
+  const v3 = validateReportSurface(
+    msg(node('ch', 'Chart', {
+      kind: 'donut',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueField: 'riskScore',
+      palette: ['red'],
+    })),
+  )
+  assert.equal(v3.ok, false)
+
+  const v4 = validateReportSurface(
+    msg(node('ch', 'Chart', {
+      kind: 'donut',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueField: 'riskScore',
+      palette: ['#fff', '#fff', '#fff', '#fff', '#fff', '#fff', '#fff', '#fff', '#fff'],
+    })),
+  )
+  assert.equal(v4.ok, false)
+})

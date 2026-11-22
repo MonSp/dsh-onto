@@ -13,7 +13,13 @@ import {
   type A2uiSurfaceMessage,
   type SurfaceNode,
 } from '@dsh-onto/core/surface'
-import { projectChartPoints, resolveReportPointer, type RunReport } from '@dsh-onto/core/report'
+import {
+  evalWhen,
+  projectChartPoints,
+  resolveReportPointer,
+  type ReportWhen,
+  type RunReport,
+} from '@dsh-onto/core/report'
 
 type T = (key: string) => string
 
@@ -100,6 +106,53 @@ function fmtValue(v: unknown): string {
 
 function listItems(v: unknown): unknown[] {
   return Array.isArray(v) ? v : []
+}
+
+/** 表格单元格按列类型渲染（report-extras S2.2）：bar/badge/delta/num/text。 */
+function renderCell(value: unknown, type: unknown): ReactNode {
+  const t = String(type ?? 'text')
+  if (t === 'bar') {
+    const n = typeof value === 'number' && Number.isFinite(value) ? value : null
+    const pct = n === null ? 0 : Math.max(0, Math.min(100, n <= 1 ? n * 100 : n))
+    return h(
+      'div',
+      { className: 'txri-cellbar' },
+      h('div', { className: 'txri-pfill', style: { width: `${pct}%` } }),
+      h('span', { className: 'txri-note' }, fmtValue(value)),
+    )
+  }
+  if (t === 'badge') {
+    return h('span', { className: 'tag' }, fmtValue(value))
+  }
+  if (t === 'delta') {
+    const s = fmtValue(value)
+    const trimmed = s.trim()
+    const neg = trimmed.startsWith('-')
+    const pos = trimmed.startsWith('+') || (typeof value === 'number' && value > 0)
+    return h('span', { className: neg ? 'txri-err' : pos ? 'txri-ok' : undefined }, s)
+  }
+  return fmtValue(value)
+}
+
+/** Stat 微趋势（report-extras S2.3）：序列绑定旁路小折线，语义同图表取点。 */
+function renderSpark(spark: Record<string, unknown>, ctx: RenderCtx): ReactNode {
+  const { points } = projectChartPoints(
+    ctx.report,
+    bindPointer(spark.rowsBind) ?? '/',
+    '',
+    String(spark.valueField ?? ''),
+  )
+  if (points.length < 2) return null
+  const w = 56
+  const h2 = 16
+  const max = Math.max(...points.map((p) => p.value))
+  const min = Math.min(...points.map((p) => p.value))
+  const span = max - min || 1
+  const x = (i: number) => (i * w) / (points.length - 1)
+  const y = (v: number) => h2 - 1 - ((v - min) / span) * (h2 - 2)
+  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')
+  return h('svg', { className: 'txri-spark', viewBox: `0 0 ${w} ${h2}`, width: w, height: h2, 'aria-hidden': true },
+    h('path', { d, fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round' }))
 }
 
 interface RenderCtx {
@@ -243,7 +296,14 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
                 'tr',
                 { key: i },
                 ...columns.map((c) =>
-                  h('td', { key: String(c.field), className: 'txri-mono' }, fmtValue(r[String(c.field)])),
+                  h(
+                    'td',
+                    {
+                      key: String(c.field),
+                      className: `txri-mono${c.type === 'num' || c.type === 'bar' ? ' txri-num' : ''}`,
+                    },
+                    renderCell(r[String(c.field)], c.type),
+                  ),
                 ),
               ),
             ),
@@ -279,6 +339,17 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
 
 function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): ReactNode {
   const props = (node.props ?? {}) as Record<string, unknown>
+  // 数据驱动条件显隐（report-extras S2.1）：不满足整棵子树不渲染
+  if (props.when !== undefined) {
+    const w = (props.when ?? {}) as Record<string, unknown>
+    const ptr = bindPointer(w.bind)
+    const pred: ReportWhen = {
+      bind: ptr ?? '/',
+      op: String(w.op) as ReportWhen['op'],
+      ...(w.value === undefined ? {} : { value: w.value as ReportWhen['value'] }),
+    }
+    if (ptr === null || !evalWhen(ctx.report, pred)) return null
+  }
   const children = Array.isArray(node.children) ? node.children : []
   switch (node.type) {
     case 'Card':
@@ -298,6 +369,7 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         { key, className: 'txri-stat' },
         h('span', { className: 'k' }, String(props.label ?? '')),
         h('span', { className: 'v' }, renderBound(props, ctx)),
+        props.spark !== undefined ? renderSpark(props.spark as Record<string, unknown>, ctx) : null,
       )
     case 'Text':
       return h(
@@ -446,11 +518,13 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   const max = Math.max(...points.map((pt) => pt.value), 0)
   const min = Math.min(...points.map((pt) => pt.value), 0)
   const span = max - min || 1
+  const palette = Array.isArray(p.palette) ? (p.palette as unknown[]).filter((c): c is string => typeof c === 'string') : []
+  const strokeOf = (i: number) => (palette.length > 0 ? palette[i % palette.length] : 'currentColor')
+  const opacityOf = (i: number) => (palette.length > 0 ? 1 : [1, 0.72, 0.5, 0.34, 0.22, 0.14][i % 6])
 
   if (kind === 'donut') {
     const total = points.reduce((s, pt) => s + Math.max(pt.value, 0), 0) || 1
     let offset = 0
-    const shades = [1, 0.72, 0.5, 0.34, 0.22, 0.14]
     return h(
       'div',
       { className: 'txri-row' },
@@ -460,19 +534,23 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
         { viewBox: '0 0 36 36', width: 96, height: 96, 'aria-hidden': true },
         ...points.map((pt, i) => {
           const seg = (Math.max(pt.value, 0) / total) * 100
-          const el = h('circle', {
-            key: i,
-            cx: 18,
-            cy: 18,
-            r: 15.9,
-            fill: 'none',
-            stroke: 'currentColor',
-            strokeOpacity: shades[i % shades.length],
-            strokeWidth: 5,
-            strokeDasharray: `${seg} ${100 - seg}`,
-            strokeDashoffset: -offset,
-            transform: 'rotate(-90 18 18)',
-          })
+          const el = h(
+            'circle',
+            {
+              key: i,
+              cx: 18,
+              cy: 18,
+              r: 15.9,
+              fill: 'none',
+              stroke: strokeOf(i),
+              strokeOpacity: opacityOf(i),
+              strokeWidth: 5,
+              strokeDasharray: `${seg} ${100 - seg}`,
+              strokeDashoffset: -offset,
+              transform: 'rotate(-90 18 18)',
+            },
+            h('title', null, `${pt.label} · ${fmtValue(pt.value)}`),
+          )
           offset += seg
           return el
         }),
@@ -509,10 +587,14 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
         'svg',
         { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
         ...paths.map((d, i) =>
-          h('path', { key: i, d, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinejoin: 'round' }),
+          h('path', { key: i, d, fill: 'none', stroke: strokeOf(0), strokeWidth: 1.6, strokeLinejoin: 'round' }),
         ),
         ...points.map((pt, i) =>
-          h('circle', { key: i, cx: x(i).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.6, fill: 'currentColor' }),
+          h(
+            'circle',
+            { key: i, cx: x(i).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.6, fill: strokeOf(0) },
+            h('title', null, `${pt.label} · ${fmtValue(pt.value)}`),
+          ),
         ),
         h('text', { x: x(0).toFixed(1), y: (y(points[0].value) - 6).toFixed(1), 'font-size': 9, fill: 'currentColor' }, fmtValue(points[0].value)),
         points.length > 1
@@ -550,6 +632,7 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
           h(
             'g',
             { key: i },
+            h('title', null, `${pt.label} · ${fmtValue(pt.value)}`),
             h('text', { x: 0, y: i * rowH + 13, 'font-size': 9, fill: 'currentColor' }, labelOf(pt.label)),
             h('rect', {
               x: 64,
@@ -557,8 +640,8 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
               width: Math.max(2, ((pt.value - min) / span) * (w - 110)),
               height: 12,
               rx: 2,
-              fill: 'currentColor',
-              fillOpacity: 0.75,
+              fill: strokeOf(i),
+              fillOpacity: opacityOf(i),
             }),
             h('text', { x: w - 2, y: i * rowH + 13, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'end' }, fmtValue(pt.value)),
           ),
@@ -581,7 +664,8 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
         return h(
           'g',
           { key: i },
-          h('rect', { x: cx - barW / 2, y: height - 18 - bh, width: barW, height: bh, rx: 2, fill: 'currentColor', fillOpacity: 0.75 }),
+          h('title', null, `${pt.label} · ${fmtValue(pt.value)}`),
+          h('rect', { x: cx - barW / 2, y: height - 18 - bh, width: barW, height: bh, rx: 2, fill: strokeOf(i), fillOpacity: opacityOf(i) }),
           h('text', { x: cx, y: height - 22 - bh, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle' }, fmtValue(pt.value)),
           h('text', { x: cx, y: height - 5, 'font-size': 9, fill: 'currentColor', 'text-anchor': 'middle', opacity: 0.7 }, labelOf(pt.label)),
         )

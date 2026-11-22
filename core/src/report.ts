@@ -341,3 +341,65 @@ function fmtChartLabel(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
+
+/** `when` 条件显隐谓词（数据驱动，渲染期本地求值；report-extras S2.1）。 */
+export interface ReportWhen {
+  /** 报表指针（调用方经 bindPointer 归一后传入）。 */
+  bind: string
+  op: 'eq' | 'neq' | 'in' | 'not-in' | 'gt' | 'gte' | 'lt' | 'lte' | 'empty' | 'not-empty'
+  value?: string | number | boolean | Array<string | number | boolean>
+}
+
+function isEmptyValue(raw: unknown): boolean {
+  return (
+    raw === null ||
+    raw === undefined ||
+    raw === '' ||
+    (Array.isArray(raw) && raw.length === 0)
+  )
+}
+
+function looseEq(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  // 布尔只严格等（false 不得等于 0/'false'）
+  if (typeof a === 'boolean' || typeof b === 'boolean') return false
+  if (typeof a === 'number' || typeof b === 'number') {
+    const x = Number(a)
+    const y = Number(b)
+    return Number.isFinite(x) && Number.isFinite(y) && x === y
+  }
+  return String(a) === String(b)
+}
+
+/** 条件谓词求值：不可求值（含比较两侧非有限）一律不满足；显隐缺省（无 when）由调用方视为恒渲染。 */
+export function evalWhen(report: RunReport, when: ReportWhen): boolean {
+  const raw = resolveReportPointer(report, when.bind)
+  switch (when.op) {
+    case 'empty':
+      return isEmptyValue(raw)
+    case 'not-empty':
+      return !isEmptyValue(raw)
+    case 'eq':
+      return looseEq(raw, when.value)
+    case 'neq':
+      return !looseEq(raw, when.value)
+    case 'in':
+      return Array.isArray(when.value) && when.value.some((v) => looseEq(raw, v))
+    case 'not-in':
+      return Array.isArray(when.value) && !when.value.some((v) => looseEq(raw, v))
+    case 'gt':
+    case 'gte':
+    case 'lt':
+    case 'lte': {
+      const a = Number(raw)
+      const b = Number(when.value)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false
+      if (when.op === 'gt') return a > b
+      if (when.op === 'gte') return a >= b
+      if (when.op === 'lt') return a < b
+      return a <= b
+    }
+    default:
+      return false
+  }
+}

@@ -57,4 +57,8 @@ export const CSS = `
 .txri-gov .txri-tabs .txri-bar { margin-bottom: 6px; }
 .txri-gov .txri-chart { margin: 6px 0 10px; }
 .txri-gov .txri-chart svg { display: block; max-width: 100%; }
+.txri-gov .txri-num { text-align: right; }
+.txri-gov .txri-cellbar { display: flex; align-items: center; gap: 6px; min-width: 90px; }
+.txri-gov .txri-cellbar .txri-pfill { flex: 0 0 auto; min-width: 2px; }
+.txri-gov .txri-spark { display: inline-block; vertical-align: middle; margin-left: 8px; opacity: 0.8; }
 `

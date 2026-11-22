@@ -175,6 +175,9 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       err('SF_SHAPE', `${where}.props`, 'props 必须是对象')
       return
     }
+    if ('when' in props) {
+      validateWhen(props.when, `${where}.props.when`, err)
+    }
     const children = node.children
     if (children !== undefined && !Array.isArray(children)) {
       err('SF_SHAPE', `${where}.children`, 'children 必须是数组')
@@ -199,7 +202,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Stat': {
-        rejectUnknownKeys(props, ['label', 'bind'], where, err)
+        rejectUnknownKeys(props, ['label', 'bind', 'spark'], where, err)
         if ('value' in props || 'text' in props) {
           err('SF_SLOT_LITERAL', where, 'Stat 数值槽位只允许 bind 绑定，拒绝字面量')
         }
@@ -209,6 +212,28 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
           err('SF_SLOT_LITERAL', `${where}.props.bind`, 'Stat 数值槽位只允许 bind 字段绑定（{"@path":"/…"} 或指针字符串）')
         } else if (!isReportPointer(statBind)) {
           err('SF_BIND_INVALID', `${where}.props.bind`, `绑定不在报表契约内: ${statBind}`)
+        }
+        if (props.spark !== undefined) {
+          const sparkWhere = `${where}.props.spark`
+          if (!isRecord(props.spark)) {
+            err('SF_SHAPE', sparkWhere, 'spark 必须是对象')
+          } else {
+            rejectUnknownKeys(props.spark, ['rowsBind', 'valueField'], sparkWhere, err)
+            const sRows = bindPointer(props.spark.rowsBind)
+            let sRef: string | null = null
+            if (sRows === null) {
+              err('SF_SLOT_LITERAL', `${sparkWhere}.rowsBind`, 'spark 数据槽位只允许列表绑定，拒绝字面量')
+            } else if (!isReportListPointer(sRows)) {
+              err('SF_BIND_INVALID', `${sparkWhere}.rowsBind`, `rowsBind 不是报表列表引用: ${sRows}`)
+            } else {
+              sRef = reportPointerToRef(sRows)
+            }
+            const sVal = props.spark.valueField
+            const sAllowed = sRef !== null ? LIST_NUMERIC_FIELDS[sRef] : undefined
+            if (!isNonEmptyString(sVal) || sAllowed === undefined || !sAllowed.includes(sVal)) {
+              err('SF_FIELD_INVALID', `${sparkWhere}.valueField`, `valueField 不是该列表数值字段: ${String(sVal)}`)
+            }
+          }
         }
         break
       }
@@ -252,13 +277,16 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
             err('SF_COLUMNS_INVALID', cw, '列声明必须是对象')
             return
           }
-          rejectUnknownKeys(col, ['field', 'header', 'align'], cw, err)
+          rejectUnknownKeys(col, ['field', 'header', 'align', 'type'], cw, err)
           if (!isNonEmptyString(col.field) || !isCandidateRowField(col.field)) {
             err('SF_FIELD_INVALID', `${cw}.field`, `列字段不是候选行字段: ${String(col.field)}`)
           }
           if (!isNonEmptyString(col.header)) err('SF_SHAPE', `${cw}.header`, 'header 必填')
           if (col.align !== undefined && col.align !== 'left' && col.align !== 'right') {
             err('SF_SHAPE', `${cw}.align`, "align 只能是 'left'|'right'")
+          }
+          if (col.type !== undefined && (typeof col.type !== 'string' || !COLUMN_TYPES.has(col.type))) {
+            err('SF_SHAPE', `${cw}.type`, `type 只能是 ${[...COLUMN_TYPES].join('|')}`)
           }
         })
         if (props.expandField !== undefined) {
@@ -483,7 +511,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         if ('data' in props || 'values' in props || 'series' in props || 'points' in props) {
           err('SF_SLOT_LITERAL', where, 'Chart 只接受序列绑定（rowsBind+labelField+valueField），拒绝字面量数据')
         }
-        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height'], where, err)
+        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height', 'palette'], where, err)
         if (typeof props.kind !== 'string' || !CHART_KINDS.has(props.kind)) {
           err('SF_SHAPE', `${where}.props.kind`, `kind 只能是 ${[...CHART_KINDS].join('|')}`)
         }
@@ -537,6 +565,18 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         ) {
           err('SF_SHAPE', `${where}.props.height`, 'height 必须是 80–400 的有限数')
         }
+        if (props.palette !== undefined) {
+          const pal = props.palette
+          if (!Array.isArray(pal) || pal.length === 0 || pal.length > 8) {
+            err('SF_SHAPE', `${where}.props.palette`, 'palette 必须是 1–8 个颜色的数组')
+          } else {
+            for (const [i, c] of pal.entries()) {
+              if (typeof c !== 'string' || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c)) {
+                err('SF_SHAPE', `${where}.props.palette[${i}]`, 'palette 项须为 #rgb 或 #rrggbb')
+              }
+            }
+          }
+        }
         break
       }
     }
@@ -559,8 +599,50 @@ function rejectUnknownKeys(
   err: (code: string, where: string, message: string) => void,
 ): void {
   for (const key of Object.keys(props)) {
+    // `when` 是全组件通用谓词槽（walk 中央校验），不入各组件白名单
+    if (key === 'when') continue
     if (!allowed.includes(key)) {
       err('SF_PROPS_UNKNOWN', `${where}.props.${key}`, `未知属性: ${key}`)
+    }
+  }
+}
+
+const WHEN_OPS = new Set(['eq', 'neq', 'in', 'not-in', 'gt', 'gte', 'lt', 'lte', 'empty', 'not-empty'])
+const COLUMN_TYPES = new Set(['text', 'num', 'bar', 'badge', 'delta'])
+
+/** `when` 谓词槽校验（全组件通用；report-extras S2.1）。 */
+function validateWhen(
+  when: unknown,
+  where: string,
+  err: (code: string, where: string, message: string) => void,
+): void {
+  if (!isRecord(when)) {
+    err('SF_SHAPE', where, 'when 必须是对象')
+    return
+  }
+  rejectUnknownKeys(when, ['bind', 'op', 'value'], where, err)
+  const bind = bindPointer(when.bind)
+  if (bind === null) {
+    err('SF_SLOT_LITERAL', `${where}.bind`, 'when.bind 只允许字段绑定，拒绝字面量')
+  } else if (!isReportPointer(bind)) {
+    err('SF_BIND_INVALID', `${where}.bind`, `绑定不在报表契约内: ${bind}`)
+  }
+  if (typeof when.op !== 'string' || !WHEN_OPS.has(when.op)) {
+    err('SF_SHAPE', `${where}.op`, `op 只能是 ${[...WHEN_OPS].join('|')}`)
+    return
+  }
+  const op = String(when.op)
+  if (op === 'in' || op === 'not-in') {
+    if (
+      !Array.isArray(when.value) ||
+      when.value.length === 0 ||
+      when.value.some((v) => !(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+    ) {
+      err('SF_SHAPE', `${where}.value`, `${op} 的 value 必须是非空原语数组`)
+    }
+  } else if (op !== 'empty' && op !== 'not-empty') {
+    if (!(typeof when.value === 'string' || typeof when.value === 'number' || typeof when.value === 'boolean')) {
+      err('SF_SHAPE', `${where}.value`, `${op} 需要字符串/数字/布尔 value`)
     }
   }
 }

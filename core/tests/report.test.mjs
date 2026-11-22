@@ -5,6 +5,7 @@ import {
   CANDIDATE_ROW_FIELDS,
   REPORT_FIELD_REFS,
   buildRunReport,
+  evalWhen,
   isCandidateRowField,
   isReportFieldRef,
   isReportPointer,
@@ -207,4 +208,34 @@ test('projectChartPoints：null-safe 取点、断线分段、绝不补 0', () =>
   const ok = projectChartPoints(buildRunReport(fullRecord()), '/candidates', 'candidateId', 'riskScore')
   assert.equal(ok.segments.length, 1)
   assert.equal(ok.points.length, 2)
+})
+
+test('evalWhen：数据驱动谓词（各 op / 不可求值不满足）', () => {
+  const report = buildRunReport(fullRecord())
+  const at = (op, value) => ({ bind: '/summary/dataStatus', op, ...(value === undefined ? {} : { value }) })
+
+  // fullRecord 带 dataStatus: 'verified'
+  assert.equal(evalWhen(report, at('eq', 'verified')), true)
+  assert.equal(evalWhen(report, at('eq', 'insufficient')), false)
+  assert.equal(evalWhen(report, at('neq', 'insufficient')), true)
+  assert.equal(evalWhen(report, at('in', ['verified', 'conditional'])), true)
+  assert.equal(evalWhen(report, at('not-in', ['insufficient'])), true)
+  assert.equal(evalWhen(report, at('empty')), false)
+  assert.equal(evalWhen(report, at('not-empty')), true)
+
+  // 数值比较
+  const score = (op, value) => ({ bind: '/summary/maxRiskScore', op, value })
+  assert.equal(evalWhen(report, score('gt', 0.5)), true)
+  assert.equal(evalWhen(report, score('gt', 0.94)), false)
+  assert.equal(evalWhen(report, score('gte', 0.94)), true)
+  assert.equal(evalWhen(report, score('lt', 1)), true)
+  assert.equal(evalWhen(report, score('lte', 0.94)), true)
+
+  // 不可求值（null 比较 / 缺字段）→ 不满足
+  const emptyRec = fullRecord()
+  emptyRec.result.candidates = []
+  const emptyReport = buildRunReport(emptyRec)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'gt', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'eq', value: 1 }), false)
 })
