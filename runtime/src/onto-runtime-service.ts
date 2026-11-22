@@ -11,12 +11,15 @@ import { join } from 'node:path'
 import {
   PackageWorkspace,
   buildRunRecord,
+  buildRunReport,
   compareRunRecords,
   exportRunArchive,
   isSafeRunId,
   listExperienceNotes,
+  listReportPages,
   loadExperienceNote,
   loadPackage,
+  loadReportPage,
   loadRunRecord,
   listRunRecords,
   readPackageMeta,
@@ -24,8 +27,10 @@ import {
   runScenario,
   saveRunRecord,
   type DataBasisInput,
+  type ReportPage,
   type RunDiff,
   type RunRecord,
+  type RunReport,
   type RuntimeDataset,
   type ScenarioRunResult,
 } from '@dsh-onto/core'
@@ -36,7 +41,7 @@ import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredAc
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError } from './release.js'
 import {
-  assertBusinessDataset, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
+  assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
 } from './business-policy.js'
 import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
 
@@ -387,6 +392,36 @@ export class OntoRuntime extends RuntimeRemoteService {
   @Remote('showRun')
   async remoteExportShowRun(request: { runId: string }): Promise<{ record: RunRecord }> {
     return guard(() => ({ record: this.readRun(request.runId) }))
+  }
+
+  /**
+   * 运行报表投影（chat-run-report S2.4）：固定结果页与对话报表共用的唯一投影源，
+   * 数值一致由构造保证。人审面（完整证据/叙述），鉴权同 showRun。
+   */
+  @Remote('getRunReport')
+  async remoteExportGetRunReport(request: { runId: string }): Promise<{ report: RunReport }> {
+    return guard(() => ({ report: buildRunReport(this.readRun(request.runId)) }))
+  }
+
+  /** 报表页列表（chat-run-report S2.7；人审面完整 surface，供插件「报表页」渲染）。 */
+  @Remote('listReportPages')
+  async remoteExportListReportPages(): Promise<{ pages: ReportPage[] }> {
+    return guard(() => {
+      const binding = this.strict ? runAccessBinding(requireBusinessIdentity('history')) : undefined
+      return {
+        pages: listReportPages(this.ws.root).filter((p) => !this.strict || p.accessBinding === binding),
+      }
+    })
+  }
+
+  /** 单个报表页（越权 strict 拒绝，RunRecord 同口径）。 */
+  @Remote('getReportPage')
+  async remoteExportGetReportPage(request: { pageId: string }): Promise<{ page: ReportPage }> {
+    return guard(() => {
+      const page = loadReportPage(this.ws.root, request.pageId)
+      if (this.strict) assertBusinessReportPage(requireBusinessIdentity('history'), page)
+      return { page }
+    })
   }
 
   /** 两轮对比（人审面完整；工具面同语义经 compare_runs 投影）。 */

@@ -984,6 +984,9 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   // I5/A-1：新工具必须登记 ONTOOL_NAMES（否则 guard 静默跳过）
   assert.ok(ONTOOL_NAMES.has('expand_entity'), 'expand_entity 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('project_features'), 'project_features 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('show_run_report'), 'show_run_report 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('list_report_pages'), 'list_report_pages 须入 ONTOOL_NAMES')
 })
 
 test('A-2 参数校验：hops 超界、seedIds 空/超限/错型、坏 direction、recipes 超限 → INVALID_ARGS', () => {

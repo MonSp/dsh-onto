@@ -154,8 +154,10 @@ AML 完整工作台：`scripts\setup-profile.ps1` → `dump-config.ps1` → `dev
 |---|---|---|
 | **页面** | `runScenario({ name, version, scenarioId, sourceId })` | 候选表、riskScore、命中规则、证据链 |
 | **Agent** | `run_scenario` 同参 | 同一 ruleId 集合、同分、禁语 0 |
+| **对话报表** | `show_run_report(runId, surface?)` | 对话内交互报表（摘要卡/候选表/证据展开；筛选/展开/跳转） |
 
-分数不因入口而异——只在规则引擎算一次。
+分数不因入口而异——只在规则引擎算一次；页面与对话报表共用 `getRunReport` 同一投影。
+对话里用过的视图可用 `save_report_page` 沉淀为插件「报表页」，换 runId 复用同一视图。
 
 ---
 
@@ -210,6 +212,8 @@ AML 完整工作台：`scripts\setup-profile.ps1` → `dump-config.ps1` → `dev
 | 查某类风险 | `run_scenario` | 取数 + 排除 + 打分 + 证据 + 审计 |
 | 批量跑 | `run_scenarios` | 多场景同一契约 |
 | 图上扩邻域 | `expand_entity` | 只准备数据，**不打分** |
+| 看交互报表 | `show_run_report` | 对话内渲染同一次运行（可带 surface 组织视图） |
+| 沉淀报表页 | `save_report_page` / `list_report_pages` | 把用过的视图存成可复用插件页 |
 | 包内容 | `get_package` 等 | 只读 |
 | 改口径 | `apply_draft` | 草案队列，**不直写 ISSUED** |
 

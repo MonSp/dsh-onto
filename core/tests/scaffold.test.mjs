@@ -97,6 +97,7 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
       'src/index.ts',
       'src/client.ts',
       'src/client/app.ts',
+      'src/client/report.ts',
       'src/client/locale.ts',
       'src/bindings.ts',
       'plugin.config.json',
@@ -113,6 +114,16 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
       const text = readFileSync(join(outDir, rel), 'utf8')
       assert.ok(!/__[A-Z][A-Z0-9_]*__/.test(text), `${rel} 残留占位`)
     }
+    // chat-run-report：对话报表面（toolview keyed show_run_report + getRunReport 描述符 + 共享校验）
+    assert.ok(readFileSync(join(outDir, 'src', 'client.ts'), 'utf8').includes('getRunReport'))
+    const appTs = readFileSync(join(outDir, 'src', 'client', 'app.ts'), 'utf8')
+    assert.ok(appTs.includes('tool.call.toolview'))
+    assert.ok(appTs.includes('show_run_report'))
+    assert.ok(appTs.includes('getRunReport'))
+    assert.ok(appTs.includes('listReportPages'))
+    const reportTs = readFileSync(join(outDir, 'src', 'client', 'report.ts'), 'utf8')
+    assert.ok(reportTs.includes('@dsh-onto/core/surface'))
+    assert.ok(reportTs.includes('@dsh-onto/core/report'))
     // 契约冻结
     const bindings = readFileSync(join(outDir, 'src', 'bindings.ts'), 'utf8')
     assert.ok(bindings.includes('SRC-WST-CORE'))

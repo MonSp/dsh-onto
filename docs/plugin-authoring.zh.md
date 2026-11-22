@@ -256,6 +256,27 @@ pnpm dsh --profile dsh-<domain> --no-open
 
 无浏览器时的等价冒烟：`cd ..\<domain>-app; node --test tests\*.test.mjs`（含夹具→场景 e2e）。
 
+### 7.1 对话报表与报表页（chat-run-report）
+
+页面与 Agent 之外，同一次运行还有**对话内交互报表**（A2UI 1.0 子集，catalog `dsh-onto/report/v1`）：
+
+- **打开**：会话里 `show_run_report(runId, surface?)`——摘要卡/候选表/证据展开直接渲染在对话中。
+  `surface` 可按问题组织视图（白名单组件 Card/Stat/Row/Column/Text/Table/Accordion/Button；
+  **数值槽位只准字段绑定**（如 `{"@path":"/summary/maxRiskScore"}`、Table 列 field 用候选行字段），
+  字面量分数/证据会被 `INVALID_ARGS` 拒）；省略 surface 用默认模板。组件事件只做筛选（含表头
+  排序）/展开/跳转（跳转到固定结果页），不接写操作。
+- **同源**：页面与对话报表都经 `getRunReport(runId)` 取同一投影（core `buildRunReport`），数值
+  一致由构造保证；展开详情经 wire 受权取数（strict 越权 run 拒绝）。meta 只携 runRef+布局
+  引用（无数值、无短语）。
+- **回退**：surface 非法、取数失败或渲染异常 → 回退工具文字结果（宿主按原文渲染）。
+- **沉淀**：会话里用过的 surface 用 `save_report_page(name, runId, surface)` 沉淀为**报表页**
+  （同名覆盖；写面仅工作区 `reports/` 工件，不进包、不触发激活、ISSUED 不动）；插件页
+  「报表页」列出已沉淀视图，**换 runId 复用同一视图**（绑定按稳定字段引用对新 run 的投影
+  重新解析）。`list_report_pages` 列摘要，`listReportPages`/`getReportPage` wire 供页面取全量。
+
+对照：同一次运行的固定页数值 = 对话报表数值 = `show_run_report` 文字面数值（同一投影 + 同一
+渲染器组件）。
+
 ## 8. 卡点记录表
 
 每完成一步或卡住时填一行。**卡点 = 产品缺口**。
@@ -307,4 +328,5 @@ node core\dist\cli.js source map preview --dir packages\wst\1.0.0 --url http://1
 node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --check
 node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out <out>
 # 双入口同分：生成插件 tests（夹具→场景→同分幂等）+ 会话 run_scenario 对照
+# 对话报表/报表页：backend tests/chat-run-report.test.mjs（工具面/投影/meta/越权）+ §7.1
 ```
