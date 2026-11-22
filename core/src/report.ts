@@ -103,6 +103,7 @@ export const REPORT_FIELD_REFS = [
   'candidates[].evidenceChains[].evidence',
   'candidates[].narrative[]',
   'candidates[].pendingChecks[].ruleId',
+  'candidates[].pendingChecks[].missing[]',
   'candidates[].pendingChecks[].note',
   'candidates[].pendingVerification',
   'excluded[].candidateId',
@@ -110,6 +111,7 @@ export const REPORT_FIELD_REFS = [
   'ruleHitLog[].ruleId',
   'ruleHitLog[].candidateId',
   'ruleHitLog[].score',
+  'ruleHitLog[].ts',
   'audit.passed',
   'audit.checks[].detail',
 ] as const

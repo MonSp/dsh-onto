@@ -358,32 +358,37 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         h('div', null, props.bind !== undefined ? renderBound(props, ctx) : String(props.content ?? '')),
       )
     case 'Progress': {
-      const raw = Number(resolveReportPointer(ctx.report, bindPointer(props.bind) ?? '/'))
+      const resolved = resolveReportPointer(ctx.report, bindPointer(props.bind) ?? '/')
+      const raw = typeof resolved === 'number' ? resolved : Number.NaN
+      const valid = Number.isFinite(raw)
       const max = typeof props.max === 'number' && props.max > 0 ? props.max : 100
-      const pct = Number.isFinite(raw) ? Math.max(0, Math.min(100, (raw / max) * 100)) : 0
+      const pct = valid ? Math.max(0, Math.min(100, (raw / max) * 100)) : 0
       return h(
         'div',
         { key, className: 'txri-stat' },
         props.label !== undefined ? h('span', { className: 'k' }, String(props.label)) : null,
-        props.display === 'ring'
-          ? h(
-              'svg',
-              { viewBox: '0 0 36 36', width: 48, height: 48, 'aria-hidden': true },
-              h('circle', { cx: 18, cy: 18, r: 15.9, fill: 'none', stroke: 'currentColor', strokeOpacity: 0.2, strokeWidth: 3 }),
-              h('circle', {
-                cx: 18,
-                cy: 18,
-                r: 15.9,
-                fill: 'none',
-                stroke: 'currentColor',
-                strokeWidth: 3,
-                strokeDasharray: `${pct} 100`,
-                strokeLinecap: 'round',
-                transform: 'rotate(-90 18 18)',
-              }),
-            )
-          : h('div', { className: 'txri-pbar' }, h('div', { className: 'txri-pfill', style: { width: `${pct}%` } })),
-        h('span', { className: 'txri-note' }, fmtValue(raw)),
+        // 无候选 null 等不可数值化：只显 '—'，不画 0 水位（不得展示为 0 分低风险）
+        !valid
+          ? h('span', { className: 'v' }, '—')
+          : props.display === 'ring'
+            ? h(
+                'svg',
+                { viewBox: '0 0 36 36', width: 48, height: 48, 'aria-hidden': true },
+                h('circle', { cx: 18, cy: 18, r: 15.9, fill: 'none', stroke: 'currentColor', strokeOpacity: 0.2, strokeWidth: 3 }),
+                h('circle', {
+                  cx: 18,
+                  cy: 18,
+                  r: 15.9,
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  strokeWidth: 3,
+                  strokeDasharray: `${pct} 100`,
+                  strokeLinecap: 'round',
+                  transform: 'rotate(-90 18 18)',
+                }),
+              )
+            : h('div', { className: 'txri-pbar' }, h('div', { className: 'txri-pfill', style: { width: `${pct}%` } })),
+        valid ? h('span', { className: 'txri-note' }, fmtValue(raw)) : null,
       )
     }
     case 'Timeline': {
@@ -465,7 +470,7 @@ function TabsBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string | numb
         ),
       ),
     ),
-    ...items.map((c, i) => renderNode(c, ctx, `tab${sel}-${i}`)),
+    ...items.map((c, i) => renderNode(c, ctx, c.id ?? i)),
   )
 }
 

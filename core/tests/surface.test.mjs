@@ -279,4 +279,27 @@ test('批次 1：Progress / Timeline / Tabs', () => {
   for (let i = 0; i < 11; i++) many.tabs.push({ label: `t${i}`, items: [] })
   const v6 = validateReportSurface(msg(node('tb', 'Tabs', many)))
   assert.equal(v6.ok, false)
+
+  // 字面量绑定红线对 Callout/Timeline 同样成立
+  const v7 = validateReportSurface(msg(node('c', 'Callout', { bind: 0.94 })))
+  assert.equal(v7.ok, false)
+  assert.ok(codes(v7).includes('SF_SLOT_LITERAL'))
+  const v8 = validateReportSurface(msg(node('tl', 'Timeline', { bind: 42 })))
+  assert.equal(v8.ok, false)
+  assert.ok(codes(v8).includes('SF_SLOT_LITERAL'))
+
+  // pairs / tabs 配额
+  const manyPairs = []
+  for (let i = 0; i < 21; i++) manyPairs.push({ key: `k${i}`, bind: '/runRef/runId' })
+  const v9 = validateReportSurface(msg(node('kv', 'KeyValue', { pairs: manyPairs })))
+  assert.equal(v9.ok, false)
+
+  // Tabs 嵌套吃同一深度配额
+  let nested = node('leaf', 'Text', { text: 'x' })
+  for (let i = 0; i < 8; i++) {
+    nested = node(`tb${i}`, 'Tabs', { tabs: [{ label: 'x', items: [nested] }] })
+  }
+  const v10 = validateReportSurface(msg(nested))
+  assert.equal(v10.ok, false)
+  assert.ok(codes(v10).includes('SF_DEPTH_EXCEEDED'))
 })
