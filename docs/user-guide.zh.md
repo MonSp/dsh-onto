@@ -196,6 +196,7 @@ AML 完整工作台：`scripts\setup-profile.ps1` → `dump-config.ps1` → `dev
   → 候选表：riskScore / hitRuleIds / 证据链 / 缺数
   → 人工认定（恒 humanReviewRequired=true）
   → （可选）复核决定 / 动作提案 —— AI 不代点批准
+  → （可选）会话里 show_run_report 打开同一次运行的交互报表，save_report_page 沉淀为报表页
 ```
 
 ---
@@ -251,7 +252,8 @@ AML 示例场景：`SCN-AML-FIND-CLUES`（包 `aml-analysis`）。
   dataStatus · contractStatus · audit
 ```
 
-与页面表格是同一执行路径的两种呈现。
+与页面表格是同一执行路径的两种呈现；对话里还可用 `show_run_report` 打开同一投影的
+交互报表（摘要卡/候选表/证据展开），用过的视图能沉淀为可复用报表页换 run 复用。
 
 ### 5.4 问答前环境检查
 

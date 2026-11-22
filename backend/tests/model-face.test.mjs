@@ -557,7 +557,7 @@ test('P1 修复源断言：wire save/writeSource 自动重派生 + create_packag
 
   for (const pkg of ['core', 'backend', 'workbench']) {
     const pj = JSON.parse(readFileSync(join(REPO, pkg, 'package.json'), 'utf8'))
-    assert.equal(pj.version, '0.2.1', `${pkg} package.json version 须 0.2.1`)
+    assert.equal(pj.version, '0.2.2', `${pkg} package.json version 须 0.2.2`)
   }
 })
 

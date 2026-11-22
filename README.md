@@ -67,6 +67,10 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
 - **Rule engine** — exclusions then weighted scoring; every score points back to a rule ID · core
 - **Scenario runs** — pipeline dispatch, three-layer audit, run history A/B compare, audit
   export · `dsh-onto run` / `runs *` · Web
+- **Conversational run reports** — in-chat interactive report for any run (summary card,
+  candidate table, evidence expand; filter · expand · navigate) via `show_run_report`, values
+  from the same `getRunReport` projection as the page; save a used view as a reusable report
+  page and re-apply it to another run (`save_report_page`) · main chat · Web
 - **Trusted business execution** — three-state data status, six-tuple authorization,
   decision→proposal ledger, external receipts + reconciliation (no receipt ⇒ `unknown`),
   ticket-sim & test adapters · lives in **`@dsh-onto/runtime`** · `record_review_decision` /

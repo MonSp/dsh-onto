@@ -205,6 +205,8 @@ Open “TAX Run” → pick SCN-TAX-BURDEN-ANOMALY → Run (sourceId=SRC-TAX-COR
   → candidate table: riskScore / hitRuleIds / evidence / pending checks
   → human determination (always humanReviewRequired=true)
   → optional review decision / action proposal — AI never clicks approve
+  → optional: open the same run's interactive report in chat via show_run_report,
+    save it as a reusable report page via save_report_page
 ```
 
 ---
@@ -260,7 +262,10 @@ Candidate TAX-CAND-001 (object 91110000T001)
   dataStatus · contractStatus · audit
 ```
 
-Same execution path as the page table, different presentation.
+Same execution path as the page table, different presentation; `show_run_report` also opens
+an interactive report over the same projection in chat (summary card / candidate table /
+evidence expand), and a used view can be saved as a reusable report page and re-applied to
+another run.
 
 ### 5.4 Pre-flight checks
 

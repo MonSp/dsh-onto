@@ -37,6 +37,9 @@
   `dsh-onto validate` / `derive` / `gate`
 - **规则引擎** —— 先排除后加权打分，每一分都回指规则 ID · core
 - **场景运行** —— pipeline 派发、三层审计、运行历史 A/B 对比、审计导出 · `dsh-onto run` / `runs *` · Web
+- **对话报表** —— 会话内交互报表（摘要卡/候选表/证据展开；筛选·展开·跳转），`show_run_report`
+  与固定页共用 `getRunReport` 同一投影；用过的视图沉淀为可复用报表页，换 run 复用
+  （`save_report_page`）· 主对话 · Web
 - **可信业务执行** —— 三状态数据面、六元组鉴权、决定→提案台账、外部回执与对账（无回执 ⇒ `unknown`）、
   ticket-sim 与测试适配器 · 实现在 **`@dsh-onto/runtime`** · `record_review_decision` /
   `create_action_proposal` / `execute_behavior_action` / `reconcile_action`

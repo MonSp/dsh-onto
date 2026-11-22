@@ -24,7 +24,7 @@ if (extra.length > 0 || !(command === 'import' && authorizedBy === undefined
 const releases = new ReleaseStore({
   root: releasesRoot,
   workspace: new PackageWorkspace(wsRoot),
-  versions: { core: '0.2.1', runtime: '0.2.1', plugin: '__PKG_ID__@0.1.0' },
+  versions: { core: '0.2.2', runtime: '0.2.2', plugin: '__PKG_ID__@0.1.0' },
   capabilities: () => ['dryrun'],
 })
 if (command === 'activate') {
