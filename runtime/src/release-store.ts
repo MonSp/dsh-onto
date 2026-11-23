@@ -24,7 +24,7 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { runtimeState } from './context.js'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type { PackageWorkspace } from '@dsh-onto/core'
 import {
   assertAuthorizedActor,
@@ -307,8 +307,8 @@ export class ReleaseStore {
       mkdirSync(staging, { recursive: true })
       for (const f of bundle.files) {
         const full = join(staging, f.path)
-        // 二次围栏（join 后）
-        if (!full.startsWith(staging)) {
+        // 二次围栏（join 后；dir+sep 前缀防 sibling 目录名前缀误判，如 /pkg-1.0.0 与 /pkg-1.0.0-evil）
+        if (!full.startsWith(staging + sep)) {
           throw new ReleaseError('RELEASE_UNSAFE_PATH', `path escapes staging: ${f.path}`)
         }
         mkdirSync(dirname(full), { recursive: true })
@@ -338,7 +338,7 @@ export class ReleaseStore {
             mkdirSync(dir, { recursive: true })
             for (const f of bundle.files) {
               const full = join(dir, f.path)
-              if (!full.startsWith(dir)) {
+              if (!full.startsWith(dir + sep)) {
                 throw new ReleaseError('RELEASE_UNSAFE_PATH', `path escapes package dir: ${f.path}`)
               }
               mkdirSync(dirname(full), { recursive: true })

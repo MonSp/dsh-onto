@@ -188,6 +188,7 @@ export class OntoRuntime extends RuntimeRemoteService {
             ? 'onto/conflict'
             : 'onto/bad-request',
           e.message,
+          e.code,
         )
       }
       throw e

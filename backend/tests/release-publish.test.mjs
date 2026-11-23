@@ -6,14 +6,19 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Context } from '@deepseek-ai/cordis'
 import { apply } from '../dist/agent-tools.js'
-import { dataSources } from '../dist/data-sources.js'
+import { apply as applyBackend } from '../dist/index.js'
+import { dataSources, registerDataSourceForTest } from '../dist/data-sources.js'
 import { businessPolicy } from '../dist/business-policy.js'
-import { currentRuntimeContext, provideRuntimeContext } from '@dsh-onto/runtime'
+import {
+  currentRuntimeContext, provideRuntimeContext, runtimeContextForHost,
+  OntoRuntime, loadSourceConfigs, restoreManagedDataSources, upsertSourceConfig, sourceConfigsPath,
+} from '@dsh-onto/runtime'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const WST_SRC = join(REPO, 'packages', 'wst', '1.0.0')
@@ -242,6 +247,150 @@ test('发布业务 v1：受控数据源配置与意图声明校验', async () =>
       (e) => e.code === 'INVALID_ARGS' && /humanApproved/.test(e.message),
     )
     assert.equal(chain.approvalCount(), 0, '校验不过不得弹批准卡')
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('受管闸 wire 面（业务页 runScenario 入口）：未激活拒（onto/conflict + origCode）→ activate 后放行', async () => {
+  const chain = setupPublish()
+  const wireCtx = new Context()
+  wireCtx.reflect.provide('profileContext', { dir: chain.root })
+  const wireRuntime = runtimeContextForHost(wireCtx.root)
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    await chain.tools.get('publish_business').execute(
+      {
+        name: 'wst-ops',
+        version: '1.0.0',
+        sourceId: 'SRC-WST-CORE',
+        sourceKind: 'simulated',
+        apiBaseUrl: 'http://127.0.0.1:3912',
+        humanApproved: true,
+      },
+      EXEC,
+    )
+
+    const service = new OntoRuntime(wireCtx)
+    const runArgs = { name: 'wst-ops', version: '1.0.0', scenarioId: 'SCN-WST-HAZARD-MIX', dataset: DATASET }
+
+    // 已受管未激活：wire 面（workbench 场景运行 tab 的实际入口）同样受管闸 fail-closed
+    await assert.rejects(
+      () => service.remoteExportRunScenario(runArgs),
+      (e) =>
+        e.code === 'onto/conflict'
+        && e.details?.origCode === 'RELEASE_NOT_ACTIVE'
+        && /已导入未激活/.test(e.message),
+    )
+
+    // activate（工具面，批准卡 + 宿主身份）→ wire 面放行，规则引擎同口径
+    await chain.tools.get('activate_business').execute(
+      { name: 'wst-ops', version: '1.0.0', humanApproved: true },
+      EXEC,
+    )
+    const { result } = await service.remoteExportRunScenario(runArgs)
+    assert.equal(result.humanReviewRequired, true)
+    const cand = result.candidates[0]
+    assert.ok(cand.hitRuleIds.includes('RULE-WST-SCORE-FILL'), `命中规则: ${JSON.stringify(cand.hitRuleIds)}`)
+  } finally {
+    wireRuntime.dispose()
+    chain.dispose()
+  }
+})
+
+test('发布业务 v1：受控数据源配置随宿主启动恢复（重启后 sourceId 自动再登记；令牌不入包/不落台账）', async () => {
+  const chain = setupPublish()
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    await chain.tools.get('publish_business').execute(
+      {
+        name: 'wst-ops',
+        version: '1.0.0',
+        sourceId: 'SRC-WST-CORE',
+        sourceKind: 'simulated',
+        apiBaseUrl: 'http://127.0.0.1:3912',
+        apiToken: 'secret-token-42',
+        humanApproved: true,
+      },
+      EXEC,
+    )
+    const dataDir = join(chain.root, 'dsh-onto')
+    // 部署配置落盘（与发布台账分离）；令牌不入包、不落台账
+    assert.ok(existsSync(sourceConfigsPath(dataDir)), '受控数据源配置须落盘')
+    const configs = loadSourceConfigs(dataDir)
+    assert.equal(configs.length, 1)
+    assert.equal(configs[0].apiToken, 'secret-token-42')
+    const manifestRaw = readFileSync(join(dataDir, 'releases', 'manifests', 'wst-ops', '1.0.0.json'), 'utf8')
+    assert.ok(!manifestRaw.includes('secret-token-42'), '令牌不得入发布台账 manifest')
+    const historyRaw = readFileSync(join(dataDir, 'releases', 'history.jsonl'), 'utf8')
+    assert.ok(!historyRaw.includes('secret-token-42'), '令牌不得落 history 台账')
+    const pkgRaw = readFileSync(join(dataDir, 'workspace', 'packages', 'wst-ops', '1.0.0', 'package.yaml'), 'utf8')
+    assert.ok(!pkgRaw.includes('secret-token-42'), '令牌不得入包')
+
+    // 模拟重启：全新宿主运行上下文（登记表为空）→ backend 启动装配 → 按配置自动恢复登记
+    dataSources.unregister('SRC-WST-CORE')
+    const disposers = []
+    const bootCtx = {
+      root: { get: (k) => (k === 'profileContext' ? { dir: chain.root } : undefined) },
+      plugin() {},
+      effect(factory) { disposers.push(factory()) },
+    }
+    const bootRuntime = runtimeContextForHost(bootCtx.root)
+    try {
+      applyBackend(bootCtx)
+      const restored = bootRuntime.run(() => dataSources.has('SRC-WST-CORE'))
+      assert.equal(restored, true, '宿主启动须按受控数据源配置恢复登记')
+    } finally {
+      for (const dispose of disposers) dispose()
+    }
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('启动恢复 fail-closed：配置复核失败/包契约缺失不登记；已登记不覆盖；损坏配置整表拒', () => {
+  const chain = setupPublish()
+  try {
+    const dataDir = join(chain.root, 'dsh-onto')
+    const at = new Date().toISOString()
+    upsertSourceConfig(dataDir, {
+      sourceId: 'SRC-BAD-URL', package: { name: 'wst-ops', version: '1.0.0' },
+      sourceKind: 'simulated', apiBaseUrl: 'http://example.com:8080', registeredAt: at,
+    })
+    upsertSourceConfig(dataDir, {
+      sourceId: 'SRC-NO-PKG', package: { name: 'ghost-pkg', version: '9.9.9' },
+      sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912', registeredAt: at,
+    })
+    upsertSourceConfig(dataDir, {
+      sourceId: 'SRC-KEPT', package: { name: 'wst-ops', version: '1.0.0' },
+      sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912', registeredAt: at,
+    })
+    upsertSourceConfig(dataDir, {
+      sourceId: 'SRC-WST-CORE', package: { name: 'wst-ops', version: '1.0.0' },
+      sourceKind: 'formal', apiBaseUrl: 'https://api.example.com', registeredAt: at,
+    })
+    // 已登记的不被恢复覆盖（部署 env / 插件登记优先）
+    registerDataSourceForTest('SRC-KEPT', {
+      version: 'stub', nature: 'simulated',
+      async fetch() { throw new Error('stub-kept') },
+    })
+
+    const report = restoreManagedDataSources(dataDir)
+    assert.deepEqual(report.restored, ['SRC-WST-CORE'])
+    assert.deepEqual(report.skipped.map((s) => s.sourceId).sort(), ['SRC-BAD-URL', 'SRC-KEPT', 'SRC-NO-PKG'])
+    assert.equal(dataSources.has('SRC-WST-CORE'), true)
+    assert.equal(dataSources.has('SRC-BAD-URL'), false, '非回环 http 配置复核失败 → fail-closed 不登记')
+    assert.equal(dataSources.has('SRC-NO-PKG'), false, '包契约缺失 → fail-closed 不登记')
+    assert.ok(
+      report.skipped.find((s) => s.sourceId === 'SRC-KEPT')?.reason.includes('不覆盖'),
+      '已登记 sourceId 须标注不覆盖',
+    )
+
+    // 配置整体损坏 → 全部不登记 + loadError（fail-closed）
+    writeFileSync(sourceConfigsPath(dataDir), '{corrupt', 'utf8')
+    const corrupt = restoreManagedDataSources(dataDir)
+    assert.equal(corrupt.loadError !== undefined, true, '配置损坏须报 loadError')
+    assert.deepEqual(corrupt.restored, [])
   } finally {
     chain.dispose()
   }

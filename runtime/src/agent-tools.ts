@@ -139,6 +139,7 @@ import {
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { createMappedDataConnector } from './data-source-map.js'
+import { parseControlledBaseUrl, parseSourceKind, upsertSourceConfig } from './source-config.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
   persistReviewDecision,
@@ -4402,18 +4403,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '发布')
-          const kind = args.sourceKind === 'formal' ? 'formal' : args.sourceKind === 'simulated' ? 'simulated' : null
-          if (kind === null) throw new AgentToolError('INVALID_ARGS', 'sourceKind 只能是 simulated|formal')
-          let url: URL
-          try {
-            url = new URL(args.apiBaseUrl)
-          } catch {
-            throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 不是合法 URL')
-          }
-          const loopback = ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
-          if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))) {
-            throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 仅允许 https 或回环 http（受控数据源配置）')
-          }
+          const kind = parseSourceKind(args.sourceKind)
+          const url = parseControlledBaseUrl(args.apiBaseUrl)
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
           const src = pkg.apiSources.find((s) => s.id === args.sourceId)
@@ -4462,6 +4453,15 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               ...(typeof args.apiToken === 'string' && args.apiToken !== '' ? { auth: { token: args.apiToken } } : {}),
             }),
           )
+          // 受控数据源配置落盘（部署配置，与发布台账分离）：宿主重启后按此恢复登记。
+          upsertSourceConfig(dataDir, {
+            sourceId: args.sourceId,
+            package: { name: args.name, version: args.version },
+            sourceKind: kind,
+            apiBaseUrl: args.apiBaseUrl,
+            ...(typeof args.apiToken === 'string' && args.apiToken !== '' ? { apiToken: args.apiToken } : {}),
+            registeredAt: new Date().toISOString(),
+          })
           return toolOut(
             enforceOutputPolicy(
               {

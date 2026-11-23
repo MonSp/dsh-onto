@@ -46,7 +46,7 @@ test('回放夹具 → 映射 → 场景：候选/命中规则/证据/人审齐�
   assert.equal(result.audit.passed, true, JSON.stringify(result.audit.checks))
 })
 
-test('页面与 Agent 同源：runScenario 单一执行路径（同快照同分）', () => {
+test('runScenario 幂等：同输入双跑逐候选同分（页面/对话同一执行路径的同源保障）', () => {
   // 页面 wire 与 Agent run_scenario 工具调用的是同一 runScenario——此处双跑断言幂等同分
   const rows = fixtureRows()
   const a = transformSourceRows({ rows, maps: config.maps }).dataset
