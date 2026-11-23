@@ -513,3 +513,122 @@ test('批次 3：Table 列类型 / Stat.spark / Chart.palette', () => {
   )
   assert.equal(v4.ok, false)
 })
+
+test('批次 4：Chart 分组/堆叠/多系列槽位', () => {
+  const grouped = msg(
+    node('ch', 'Chart', {
+      kind: 'bars',
+      mode: 'grouped',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueFields: ['riskScore', 'hitRuleCount'],
+    }),
+  )
+  assert.equal(validateReportSurface(grouped).ok, true)
+
+  const stacked = msg(
+    node('ch', 'Chart', {
+      kind: 'bars',
+      mode: 'stacked',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      stackFrom: { listField: 'evidenceChains', labelField: 'ruleId', valueField: 'score' },
+    }),
+  )
+  assert.equal(validateReportSurface(stacked).ok, true)
+
+  const multiLine = msg(
+    node('ch', 'Chart', {
+      kind: 'line',
+      rowsBind: '/ruleHitLog',
+      labelField: 'ts',
+      valueField: 'score',
+      seriesField: 'candidateId',
+    }),
+  )
+  assert.equal(validateReportSurface(multiLine).ok, true)
+
+  // grouped 须 2–4 个数值字段且不接受 valueField
+  const v1 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', mode: 'grouped', rowsBind: '/candidates', labelField: 'candidateId', valueFields: ['riskScore'] })),
+  )
+  assert.equal(v1.ok, false)
+  const v2 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', mode: 'grouped', rowsBind: '/candidates', labelField: 'candidateId', valueField: 'riskScore', valueFields: ['riskScore', 'hitRuleCount'] })),
+  )
+  assert.equal(v2.ok, false)
+
+  // stacked 的嵌套字段闸
+  const v3 = validateReportSurface(
+    msg(node('ch', 'Chart', {
+      kind: 'bars',
+      mode: 'stacked',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      stackFrom: { listField: 'narrative', labelField: 'ruleId', valueField: 'score' },
+    })),
+  )
+  assert.equal(v3.ok, false)
+
+  // seriesField 仅 line；字段须元素字段
+  const v5 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'bars', rowsBind: '/candidates', labelField: 'candidateId', valueField: 'riskScore', seriesField: 'candidateId' })),
+  )
+  assert.equal(v5.ok, false)
+  const v6 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'line', rowsBind: '/ruleHitLog', labelField: 'ts', valueField: 'score', seriesField: 'nope' })),
+  )
+  assert.equal(v6.ok, false)
+
+  // mode 仅 bars
+  const v7 = validateReportSurface(
+    msg(node('ch', 'Chart', { kind: 'line', mode: 'grouped', rowsBind: '/candidates', labelField: 'candidateId', valueFields: ['riskScore', 'hitRuleCount'] })),
+  )
+  assert.equal(v7.ok, false)
+})
+
+test('批次 4：Input/Select / when.field / Table.filterBy', () => {
+  const ok = msg(
+    node('r', 'Row', undefined, [
+      node('q', 'Input', { id: 'q', label: '筛选', placeholder: '候选 id' }),
+      node('v', 'Select', { id: 'view', options: ['全部', '高风险'], value: '全部' }),
+      node('t', 'Table', {
+        rowsBind: '/candidates',
+        filterBy: 'q',
+        columns: [{ field: 'candidateId', header: 'ID' }],
+        when: { field: 'view', op: 'eq', value: '高风险' },
+      }),
+    ]),
+  )
+  assert.equal(validateReportSurface(ok).ok, true)
+
+  // when 双源互斥
+  const v1 = validateReportSurface(
+    msg(node('c', 'Callout', { content: 'x', when: { bind: '/summary/dataStatus', field: 'q', op: 'empty' } })),
+  )
+  assert.equal(v1.ok, false)
+  const v2 = validateReportSurface(msg(node('c', 'Callout', { content: 'x', when: { op: 'empty' } })))
+  assert.equal(v2.ok, false)
+
+  // 交互 id 查重
+  const v3 = validateReportSurface(
+    msg(node('r', 'Row', undefined, [
+      node('a', 'Input', { id: 'dup' }),
+      node('b', 'Select', { id: 'dup', options: ['x', 'y'] }),
+    ])),
+  )
+  assert.equal(v3.ok, false)
+  assert.ok(codes(v3).includes('SF_ID_DUP'))
+
+  // select options 形态
+  const v4 = validateReportSurface(msg(node('s', 'Select', { id: 's', options: ['only-one'] })))
+  assert.equal(v4.ok, false)
+  const v5 = validateReportSurface(msg(node('s', 'Select', { id: 's', options: ['a', 'b'], value: 'c' })))
+  assert.equal(v5.ok, false)
+
+  // filterBy 形态
+  const v6 = validateReportSurface(
+    msg(node('t', 'Table', { rowsBind: '/candidates', filterBy: 42, columns: [{ field: 'candidateId', header: 'x' }] })),
+  )
+  assert.equal(v6.ok, false)
+})

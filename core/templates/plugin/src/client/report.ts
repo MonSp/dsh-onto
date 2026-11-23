@@ -15,7 +15,10 @@ import {
 } from '@dsh-onto/core/surface'
 import {
   evalWhen,
+  projectChartGroups,
   projectChartPoints,
+  projectChartSeries,
+  projectChartStacks,
   resolveReportPointer,
   type ReportWhen,
   type RunReport,
@@ -170,6 +173,9 @@ interface RenderCtx {
   report: RunReport
   t: T
   navigate: () => void
+  /** 交互件本地状态（input/select）；when.field 与 Table.filterBy 读它。 */
+  uiState: Readonly<Record<string, string>>
+  setUi: (next: Record<string, string>) => void
 }
 
 function renderBound(props: Record<string, unknown>, ctx: RenderCtx): ReactNode {
@@ -235,6 +241,12 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   const q = query.trim().toLowerCase()
   if (q !== '') {
     rows = rows.filter((r) => JSON.stringify(r).toLowerCase().includes(q))
+  }
+  // 外联筛选（filterBy 绑 input 的 id）：与内建快筛取交集
+  const filterBy = String(p.filterBy ?? '')
+  const extQ = filterBy !== '' ? (ctx.uiState[filterBy] ?? '').trim().toLowerCase() : ''
+  if (extQ !== '') {
+    rows = rows.filter((r) => JSON.stringify(r).toLowerCase().includes(extQ))
   }
   if (sort !== null) {
     const dir = sort.dir === 'desc' ? -1 : 1
@@ -350,16 +362,21 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
 
 function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): ReactNode {
   const props = (node.props ?? {}) as Record<string, unknown>
-  // 数据驱动条件显隐（report-extras S2.1）：不满足整棵子树不渲染
+  // 条件显隐（双源）：数据源 bind / UI 源 field；不满足整棵子树不渲染
   if (props.when !== undefined) {
     const w = (props.when ?? {}) as Record<string, unknown>
-    const ptr = bindPointer(w.bind)
+    const ptr = w.bind !== undefined ? bindPointer(w.bind) : undefined
     const pred: ReportWhen = {
-      bind: ptr ?? '/',
+      ...(w.bind !== undefined ? { bind: ptr ?? '/' } : {}),
+      ...(w.field !== undefined ? { field: String(w.field) } : {}),
       op: String(w.op) as ReportWhen['op'],
       ...(w.value === undefined ? {} : { value: w.value as ReportWhen['value'] }),
     }
-    if (ptr === null || !evalWhen(ctx.report, pred)) return null
+    const ok =
+      w.bind !== undefined
+        ? ptr !== null && evalWhen(ctx.report, pred, ctx.uiState)
+        : w.field !== undefined && evalWhen(ctx.report, pred, ctx.uiState)
+    if (!ok) return null
   }
   const children = Array.isArray(node.children) ? node.children : []
   switch (node.type) {
@@ -506,6 +523,37 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
       return h(TabsBox, { key, node, ctx })
     case 'Chart':
       return h('div', { key }, h(ChartBox, { node, ctx }))
+    case 'Input': {
+      const id = String(props.id ?? '')
+      return h(
+        'div',
+        { key, className: 'txri-stat' },
+        props.label !== undefined ? h('span', { className: 'k' }, String(props.label)) : null,
+        h('input', {
+          type: 'search',
+          value: ctx.uiState[id] ?? '',
+          placeholder: props.placeholder !== undefined ? String(props.placeholder) : undefined,
+          onChange: (e: { target: { value: string } }) => ctx.setUi({ ...ctx.uiState, [id]: e.target.value }),
+        }),
+      )
+    }
+    case 'Select': {
+      const id = String(props.id ?? '')
+      const options = Array.isArray(props.options) ? (props.options as unknown[]).map((o) => String(o)) : []
+      return h(
+        'div',
+        { key, className: 'txri-stat' },
+        props.label !== undefined ? h('span', { className: 'k' }, String(props.label)) : null,
+        h(
+          'select',
+          {
+            value: ctx.uiState[id] ?? String(props.value ?? ''),
+            onChange: (e: { target: { value: string } }) => ctx.setUi({ ...ctx.uiState, [id]: e.target.value }),
+          },
+          ...options.map((o, i) => h('option', { key: i, value: o }, o)),
+        ),
+      )
+    }
     default:
       return h('p', { key, className: 'txri-err' }, `unknown component: ${String(node.type)}`)
   }
@@ -516,22 +564,191 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   const p = (node.props ?? {}) as Record<string, unknown>
   const kind = String(p.kind ?? 'bars')
   const height = typeof p.height === 'number' ? p.height : 160
+  const title = props.node.props?.title !== undefined ? h('strong', null, String(props.node.props.title)) : null
+  const palette = Array.isArray(p.palette) ? (p.palette as unknown[]).filter((c): c is string => typeof c === 'string') : []
+  const strokeOf = (i: number) => (palette.length > 0 ? palette[i % palette.length] : 'currentColor')
+  const opacityOf = (i: number) => (palette.length > 0 ? 1 : [1, 0.72, 0.5, 0.34, 0.22, 0.14][i % 6])
+  const rowsBind = bindPointer(p.rowsBind) ?? '/'
+  const labelField = String(p.labelField ?? '')
+  const emptyView = h('div', { className: 'txri-stat' }, title, h('span', { className: 'v' }, '—'))
+  const legend = (labels: string[]) =>
+    h(
+      'div',
+      { className: 'txri-note txri-row' },
+      ...labels.map((label, i) =>
+        h('span', { key: i, style: { color: strokeOf(i), opacity: opacityOf(i) } }, `■ ${label}`),
+      ),
+    )
+
+  // 多系列折线（seriesField 分组）
+  const seriesField = typeof p.seriesField === 'string' ? p.seriesField : ''
+  if (kind === 'line' && seriesField !== '') {
+    const series = projectChartSeries(ctx.report, rowsBind, seriesField, String(p.valueField ?? ''))
+    const all = series.flatMap((s) => s.points)
+    if (all.length === 0) return emptyView
+    const w = Math.max(...series.map((s) => s.points.length), 1) * 28
+    const pad = 12
+    const max = Math.max(...all.map((pt) => pt.value), 0)
+    const min = Math.min(...all.map((pt) => pt.value), 0)
+    const span = max - min || 1
+    const x = (i: number, n: number) => (n === 1 ? w / 2 : pad + (i * (w - pad * 2)) / (n - 1))
+    const y = (v: number) => height - pad - ((v - min) / span) * (height - pad * 2)
+    return h(
+      'div',
+      { className: 'txri-chart' },
+      title,
+      legend(series.map((s) => s.label)),
+      h(
+        'svg',
+        { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
+        ...series.map((s, si) =>
+          h('path', {
+            key: si,
+            d: s.points.map((pt, i) => `${i === 0 ? 'M' : 'L'}${x(i, s.points.length).toFixed(1)},${y(pt.value).toFixed(1)}`).join(' '),
+            fill: 'none',
+            stroke: strokeOf(si),
+            strokeWidth: 1.6,
+            strokeLinejoin: 'round',
+          }),
+        ),
+        ...series.flatMap((s, si) =>
+          s.points.map((pt, i) =>
+            h(
+              'circle',
+              { key: `${si}-${i}`, cx: x(i, s.points.length).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.4, fill: strokeOf(si) },
+              h('title', null, `${s.label} · ${pt.label} · ${fmtValue(pt.value)}`),
+            ),
+          ),
+        ),
+      ),
+    )
+  }
+
+  // 分组柱（同行多列）
+  if (p.mode === 'grouped') {
+    const valueFields = Array.isArray(p.valueFields) ? (p.valueFields as unknown[]).map((f) => String(f)) : []
+    const rows = projectChartGroups(ctx.report, rowsBind, labelField, valueFields)
+    const vals = rows.flatMap((r) => r.values).filter((v): v is number => v !== null)
+    if (rows.length === 0 || vals.length === 0) return emptyView
+    const max = Math.max(...vals, 0)
+    const min = Math.min(...vals, 0)
+    const span = max - min || 1
+    const w = Math.max(rows.length * 28, 120)
+    const groupW = w / rows.length
+    const barW = Math.min(16, (groupW - 8) / Math.max(valueFields.length, 1))
+    return h(
+      'div',
+      { className: 'txri-chart' },
+      title,
+      legend(valueFields),
+      h(
+        'svg',
+        { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
+        ...rows.map((r, ri) =>
+          h(
+            'g',
+            { key: ri },
+            h('title', null, `${r.label} · ${r.values.map((v) => fmtValue(v)).join(' / ')}`),
+            ...r.values.map((v, vi) =>
+              v === null
+                ? null
+                : h('rect', {
+                    key: vi,
+                    x: ri * groupW + 4 + vi * barW,
+                    y: height - 18 - Math.max(2, ((v - min) / span) * (height - 28)),
+                    width: barW - 1,
+                    height: Math.max(2, ((v - min) / span) * (height - 28)),
+                    rx: 2,
+                    fill: strokeOf(vi),
+                    fillOpacity: opacityOf(vi),
+                  }),
+            ),
+            h('text', {
+              x: ri * groupW + groupW / 2,
+              y: height - 5,
+              'font-size': 9,
+              fill: 'currentColor',
+              'text-anchor': 'middle',
+              opacity: 0.7,
+            }, r.label.length > 8 ? `${r.label.slice(0, 7)}…` : r.label),
+          ),
+        ),
+      ),
+    )
+  }
+
+  // 堆叠柱（行内嵌套列表段）
+  if (p.mode === 'stacked') {
+    const sf = (p.stackFrom ?? {}) as Record<string, unknown>
+    const rows = projectChartStacks(
+      ctx.report,
+      rowsBind,
+      labelField,
+      String(sf.listField ?? ''),
+      String(sf.labelField ?? ''),
+      String(sf.valueField ?? ''),
+    )
+    const totals = rows.map((r) => r.segments.reduce((s, x) => s + x.value, 0))
+    const maxTotal = Math.max(...totals, 0)
+    if (rows.length === 0 || maxTotal <= 0) return emptyView
+    const legendLabels = [...new Set(rows.flatMap((r) => r.segments.map((s) => s.label)))]
+    const w = Math.max(rows.length * 36, 140)
+    const barW = 22
+    return h(
+      'div',
+      { className: 'txri-chart' },
+      title,
+      legend(legendLabels),
+      h(
+        'svg',
+        { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
+        ...rows.map((r, ri) => {
+          const total = totals[ri]
+          const scale = (height - 28) / (maxTotal || 1)
+          let yBase = height - 18
+          return h(
+            'g',
+            { key: ri },
+            h('title', null, `${r.label} · ${r.segments.map((s) => `${s.label}:${fmtValue(s.value)}`).join(' / ')}`),
+            ...r.segments.map((s, si) => {
+              const hgt = Math.max(1, s.value * scale)
+              yBase -= hgt
+              return h('rect', {
+                key: si,
+                x: ri * (w / rows.length) + (w / rows.length - barW) / 2,
+                y: yBase,
+                width: barW,
+                height: hgt,
+                fill: strokeOf(legendLabels.indexOf(s.label)),
+                fillOpacity: opacityOf(legendLabels.indexOf(s.label)),
+              })
+            }),
+            h('text', {
+              x: ri * (w / rows.length) + w / rows.length / 2,
+              y: height - 5,
+              'font-size': 9,
+              fill: 'currentColor',
+              'text-anchor': 'middle',
+              opacity: 0.7,
+            }, fmtValue(total)),
+          )
+        }),
+      ),
+    )
+  }
+
   const { points, segments } = projectChartPoints(
     ctx.report,
-    bindPointer(p.rowsBind) ?? '/',
-    String(p.labelField ?? ''),
+    rowsBind,
+    labelField,
     String(p.valueField ?? ''),
   )
-  const title = props.node.props?.title !== undefined ? h('strong', null, String(props.node.props.title)) : null
   if (points.length === 0) {
-    return h('div', { className: 'txri-stat' }, title, h('span', { className: 'v' }, '—'))
+    return emptyView
   }
   const max = Math.max(...points.map((pt) => pt.value), 0)
   const min = Math.min(...points.map((pt) => pt.value), 0)
   const span = max - min || 1
-  const palette = Array.isArray(p.palette) ? (p.palette as unknown[]).filter((c): c is string => typeof c === 'string') : []
-  const strokeOf = (i: number) => (palette.length > 0 ? palette[i % palette.length] : 'currentColor')
-  const opacityOf = (i: number) => (palette.length > 0 ? 1 : [1, 0.72, 0.5, 0.34, 0.22, 0.14][i % 6])
 
   if (kind === 'donut') {
     const total = points.reduce((s, pt) => s + Math.max(pt.value, 0), 0) || 1
@@ -762,6 +979,24 @@ export function reportTextSummary(report: RunReport, t: T): ReactNode {
   )
 }
 
+/** 收集交互件初始态（select.value 预选；input 从空串起）。 */
+function collectUiDefaults(node: SurfaceNode, acc: Record<string, string>): void {
+  const props = (node.props ?? {}) as Record<string, unknown>
+  if (typeof props.id === 'string' && !(props.id in acc)) {
+    if (node.type === 'Select' && props.value !== undefined) acc[props.id] = String(props.value)
+    if (node.type === 'Input') acc[props.id] = ''
+  }
+  const children = Array.isArray(node.children) ? node.children : []
+  for (const c of children) collectUiDefaults(c, acc)
+  const tabs = props.tabs
+  if (Array.isArray(tabs)) {
+    for (const t of tabs) {
+      const items = t !== null && typeof t === 'object' ? (t as Record<string, unknown>).items : undefined
+      if (Array.isArray(items)) for (const c of items as SurfaceNode[]) collectUiDefaults(c, acc)
+    }
+  }
+}
+
 export function ReportSurface(props: {
   surface: A2uiSurfaceMessage
   report: RunReport
@@ -770,7 +1005,18 @@ export function ReportSurface(props: {
   /** 渲染失败回退面；缺省为报表文字摘要。 */
   fallback?: ReactNode
 }): ReactNode {
-  const ctx: RenderCtx = { report: props.report, t: props.t, navigate: props.navigate }
+  const [uiState, setUi] = useState<Record<string, string>>(() => {
+    const acc: Record<string, string> = {}
+    collectUiDefaults(props.surface.root, acc)
+    return acc
+  })
+  const ctx: RenderCtx = {
+    report: props.report,
+    t: props.t,
+    navigate: props.navigate,
+    uiState,
+    setUi,
+  }
   const fallback = props.fallback ?? reportTextSummary(props.report, props.t)
   try {
     return h(ReportBoundary, { fallback }, renderNode(props.surface.root, ctx, 'root'))

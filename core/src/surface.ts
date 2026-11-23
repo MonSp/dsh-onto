@@ -34,6 +34,8 @@ export const SURFACE_COMPONENT_TYPES = [
   'Timeline',
   'Tabs',
   'Chart',
+  'Input',
+  'Select',
 ] as const
 export type SurfaceComponentType = (typeof SURFACE_COMPONENT_TYPES)[number]
 
@@ -67,7 +69,7 @@ export type SurfaceValidation =
   | { ok: false; errors: SurfaceDiagnostic[] }
 
 const LEAF_TYPES = new Set<SurfaceComponentType>([
-  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs', 'Chart',
+  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs', 'Chart', 'Input', 'Select',
 ])
 const NAVIGATE_TARGETS = new Set(['result-page'])
 const FILTER_OPS = new Set(['eq', 'ne', 'gte', 'lte', 'contains'])
@@ -90,7 +92,7 @@ export const LIST_ITEM_FIELDS: Record<string, readonly string[]> = {
 }
 /** 各列表元素的数值字段（Chart.valueField 白名单；恒为 LIST_ITEM_FIELDS 子集）。 */
 export const LIST_NUMERIC_FIELDS: Record<string, readonly string[]> = {
-  candidates: ['riskScore'],
+  candidates: ['riskScore', 'hitRuleCount', 'evidenceCount'],
   'candidates[].evidenceChains': ['score'],
   ruleHitLog: ['score'],
 }
@@ -137,6 +139,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
     err('SF_SHAPE', '$.title', 'title 必须是字符串')
   }
   const seenIds = new Set<string>()
+  const seenStateIds = new Set<string>()
   let nodeCount = 0
 
   const walk = (node: unknown, where: string, depth: number): void => {
@@ -258,7 +261,10 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Table': {
-        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'when'], where, err)
+        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'filterBy', 'when'], where, err)
+        if (props.filterBy !== undefined && (!isNonEmptyString(props.filterBy) || props.filterBy.length > 64)) {
+          err('SF_SHAPE', `${where}.props.filterBy`, 'filterBy 必须是非空短 id（input 的 id）')
+        }
         const rowsBind = bindPointer(props.rowsBind)
         if (rowsBind === null || reportPointerToRef(rowsBind) !== 'candidates') {
           err('SF_BIND_INVALID', `${where}.props.rowsBind`, "v1 候选表 rowsBind 必须绑定 '/candidates'（{\"@path\":\"/candidates\"} 或指针字符串）")
@@ -511,7 +517,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         if ('data' in props || 'values' in props || 'series' in props || 'points' in props) {
           err('SF_SLOT_LITERAL', where, 'Chart 只接受序列绑定（rowsBind+labelField+valueField），拒绝字面量数据')
         }
-        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'title', 'horizontal', 'height', 'palette', 'when'], where, err)
+        rejectUnknownKeys(props, ['kind', 'rowsBind', 'labelField', 'valueField', 'valueFields', 'mode', 'stackFrom', 'seriesField', 'title', 'horizontal', 'height', 'palette', 'when'], where, err)
         if (typeof props.kind !== 'string' || !CHART_KINDS.has(props.kind)) {
           err('SF_SHAPE', `${where}.props.kind`, `kind 只能是 ${[...CHART_KINDS].join('|')}`)
         }
@@ -533,20 +539,78 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
             err('SF_FIELD_INVALID', `${where}.props.labelField`, `labelField 不是该列表元素字段: ${labelField}`)
           }
         }
-        const valueField = props.valueField
-        if (!isNonEmptyString(valueField)) {
-          err('SF_FIELD_INVALID', `${where}.props.valueField`, 'valueField 必填')
+        // 模式（report-series-state S2.1）：grouped=同行多列；stacked=行内嵌套列表堆叠
+        const mode = props.mode
+        const isGrouped = mode === 'grouped'
+        const isStacked = mode === 'stacked'
+        if (mode !== undefined && !isGrouped && !isStacked) {
+          err('SF_SHAPE', `${where}.props.mode`, "mode 只能是 'grouped'|'stacked'")
+        }
+        if ((isGrouped || isStacked) && props.kind !== 'bars') {
+          err('SF_SHAPE', `${where}.props.mode`, 'mode 仅 bars 支持')
+        }
+        const dualHitValue = (f: unknown, w: string): void => {
+          if (!isNonEmptyString(f)) {
+            err('SF_FIELD_INVALID', w, '数值字段必填')
+            return
+          }
+          const items = cRef !== null ? LIST_ITEM_FIELDS[cRef] : undefined
+          const nums = cRef !== null ? LIST_NUMERIC_FIELDS[cRef] : undefined
+          if (items === undefined || nums === undefined || !items.includes(f) || !nums.includes(f)) {
+            err('SF_FIELD_INVALID', w, `不是该列表数值字段: ${f}`)
+          }
+        }
+        if (isStacked) {
+          if (props.valueField !== undefined || props.valueFields !== undefined) {
+            err('SF_SHAPE', where, 'stacked 使用 stackFrom，不接受 valueField/valueFields')
+          }
+          const sf = props.stackFrom
+          if (!isRecord(sf)) {
+            err('SF_SHAPE', `${where}.props.stackFrom`, 'stacked 须给 stackFrom 对象')
+          } else {
+            rejectUnknownKeys(sf, ['listField', 'labelField', 'valueField'], `${where}.props.stackFrom`, err)
+            const listField = sf.listField
+            if (!isNonEmptyString(listField)) {
+              err('SF_FIELD_INVALID', `${where}.props.stackFrom.listField`, 'listField 必填')
+            } else {
+              const nested = cRef !== null ? `${cRef}[].${listField}` : null
+              const nestedItems = nested !== null ? LIST_ITEM_FIELDS[nested] : undefined
+              const nestedNums = nested !== null ? LIST_NUMERIC_FIELDS[nested] : undefined
+              if (nestedItems === undefined) {
+                err('SF_FIELD_INVALID', `${where}.props.stackFrom.listField`, `listField 不是该列表的嵌套列表字段: ${listField}`)
+              } else {
+                if (!isNonEmptyString(sf.labelField) || !nestedItems.includes(sf.labelField)) {
+                  err('SF_FIELD_INVALID', `${where}.props.stackFrom.labelField`, `labelField 不是嵌套元素字段: ${String(sf.labelField)}`)
+                }
+                if (!isNonEmptyString(sf.valueField) || nestedNums === undefined || !nestedNums.includes(sf.valueField)) {
+                  err('SF_FIELD_INVALID', `${where}.props.stackFrom.valueField`, `valueField 不是嵌套数值字段: ${String(sf.valueField)}`)
+                }
+              }
+            }
+          }
+        } else if (isGrouped) {
+          if (props.valueField !== undefined || props.stackFrom !== undefined) {
+            err('SF_SHAPE', where, 'grouped 使用 valueFields，不接受 valueField/stackFrom')
+          }
+          const vfs = props.valueFields
+          if (!Array.isArray(vfs) || vfs.length < 2 || vfs.length > 4) {
+            err('SF_SHAPE', `${where}.props.valueFields`, 'valueFields 必须是 2–4 个数值字段的数组')
+          } else {
+            vfs.forEach((f, i) => dualHitValue(f, `${where}.props.valueFields[${i}]`))
+          }
         } else {
-          // 双命中（S2.2）：既是元素字段、又在数值白名单——两表同闸，防漂移
-          const allowedItems = cRef !== null ? LIST_ITEM_FIELDS[cRef] : undefined
-          const allowedValues = cRef !== null ? LIST_NUMERIC_FIELDS[cRef] : undefined
-          if (
-            allowedItems === undefined ||
-            allowedValues === undefined ||
-            !allowedItems.includes(valueField) ||
-            !allowedValues.includes(valueField)
-          ) {
-            err('SF_FIELD_INVALID', `${where}.props.valueField`, `valueField 不是该列表数值字段: ${valueField}`)
+          if (props.valueFields !== undefined || props.stackFrom !== undefined) {
+            err('SF_SHAPE', where, '单序列不接受 valueFields/stackFrom（请给 mode）')
+          }
+          dualHitValue(props.valueField, `${where}.props.valueField`)
+        }
+        if (props.seriesField !== undefined) {
+          if (props.kind !== 'line') {
+            err('SF_SHAPE', `${where}.props.seriesField`, 'seriesField 仅 line 支持')
+          }
+          const items = cRef !== null ? LIST_ITEM_FIELDS[cRef] : undefined
+          if (!isNonEmptyString(props.seriesField) || items === undefined || !items.includes(props.seriesField)) {
+            err('SF_FIELD_INVALID', `${where}.props.seriesField`, `seriesField 不是该列表元素字段: ${String(props.seriesField)}`)
           }
         }
         if (props.title !== undefined && !isNonEmptyString(props.title)) {
@@ -576,6 +640,45 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
               }
             }
           }
+        }
+        break
+      }
+      case 'Input': {
+        rejectUnknownKeys(props, ['id', 'label', 'placeholder', 'when'], where, err)
+        const id = props.id
+        if (!isNonEmptyString(id) || id.length > 64) {
+          err('SF_SHAPE', `${where}.props.id`, 'id 必须是非空短 id')
+        } else if (seenStateIds.has(id)) {
+          err('SF_ID_DUP', `${where}.props.id`, `重复交互 id: ${id}`)
+        } else {
+          seenStateIds.add(id)
+        }
+        if (props.label !== undefined && !isNonEmptyString(props.label)) {
+          err('SF_SHAPE', `${where}.props.label`, 'label 必须是非空字符串')
+        }
+        if (props.placeholder !== undefined && !isNonEmptyString(props.placeholder)) {
+          err('SF_SHAPE', `${where}.props.placeholder`, 'placeholder 必须是非空字符串')
+        }
+        break
+      }
+      case 'Select': {
+        rejectUnknownKeys(props, ['id', 'label', 'options', 'value', 'when'], where, err)
+        const id = props.id
+        if (!isNonEmptyString(id) || id.length > 64) {
+          err('SF_SHAPE', `${where}.props.id`, 'id 必须是非空短 id')
+        } else if (seenStateIds.has(id)) {
+          err('SF_ID_DUP', `${where}.props.id`, `重复交互 id: ${id}`)
+        } else {
+          seenStateIds.add(id)
+        }
+        if (props.label !== undefined && !isNonEmptyString(props.label)) {
+          err('SF_SHAPE', `${where}.props.label`, 'label 必须是非空字符串')
+        }
+        const opts = props.options
+        if (!Array.isArray(opts) || opts.length < 2 || opts.length > 20 || opts.some((o) => !isNonEmptyString(o))) {
+          err('SF_SHAPE', `${where}.props.options`, 'options 必须是 2–20 个非空字符串')
+        } else if (props.value !== undefined && !opts.includes(props.value)) {
+          err('SF_SHAPE', `${where}.props.value`, 'value 必须是 options 之一')
         }
         break
       }
@@ -618,12 +721,24 @@ function validateWhen(
     err('SF_SHAPE', where, 'when 必须是对象')
     return
   }
-  rejectUnknownKeys(when, ['bind', 'op', 'value'], where, err)
-  const bind = bindPointer(when.bind)
-  if (bind === null) {
-    err('SF_SLOT_LITERAL', `${where}.bind`, 'when.bind 只允许字段绑定，拒绝字面量')
-  } else if (!isReportPointer(bind)) {
-    err('SF_BIND_INVALID', `${where}.bind`, `绑定不在报表契约内: ${bind}`)
+  rejectUnknownKeys(when, ['bind', 'field', 'op', 'value'], where, err)
+  const hasBind = when.bind !== undefined
+  const hasField = when.field !== undefined
+  if (hasBind === hasField) {
+    err('SF_SHAPE', where, 'when 必须且只能给 bind（数据源）或 field（UI 状态源）之一')
+  }
+  if (hasBind) {
+    const bind = bindPointer(when.bind)
+    if (bind === null) {
+      err('SF_SLOT_LITERAL', `${where}.bind`, 'when.bind 只允许字段绑定，拒绝字面量')
+    } else if (!isReportPointer(bind)) {
+      err('SF_BIND_INVALID', `${where}.bind`, `绑定不在报表契约内: ${bind}`)
+    }
+  }
+  if (hasField) {
+    if (!isNonEmptyString(when.field) || when.field.length > 64) {
+      err('SF_SHAPE', `${where}.field`, 'field 必须是非空短 id（input/select 的 id）')
+    }
   }
   if (typeof when.op !== 'string' || !WHEN_OPS.has(when.op)) {
     err('SF_SHAPE', `${where}.op`, `op 只能是 ${[...WHEN_OPS].join('|')}`)

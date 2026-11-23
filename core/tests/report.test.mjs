@@ -9,7 +9,10 @@ import {
   isCandidateRowField,
   isReportFieldRef,
   isReportPointer,
+  projectChartGroups,
   projectChartPoints,
+  projectChartSeries,
+  projectChartStacks,
   reportPointerToRef,
   resolveReportPointer,
 } from '../dist/index.js'
@@ -248,4 +251,44 @@ test('evalWhen：数据驱动谓词（各 op / 不可求值不满足）', () => 
   // 布尔严格等（false 不得等于 0）
   assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: true }), true)
   assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: 1 }), false)
+
+  // UI 状态源：未注册一律不渲染；注册后走同一谓词集
+  assert.equal(evalWhen(report, { field: 'q', op: 'empty' }, {}), false)
+  assert.equal(evalWhen(report, { field: 'q', op: 'empty' }, { q: '' }), true)
+  assert.equal(evalWhen(report, { field: 'q', op: 'not-empty' }, { q: 'abc' }), true)
+  assert.equal(evalWhen(report, { field: 'q', op: 'eq', value: 'abc' }, { q: 'abc' }), true)
+})
+
+test('多系列/堆叠/分组投影（null-safe 同取点语义）', () => {
+  const record = fullRecord()
+  record.result.ruleHitLog.push(
+    { ruleId: 'RULE-WST-OVER', candidateId: 'ALERT-BIN-03', score: 0.2, ts: '2026-11-22T00:00:02Z' },
+    { ruleId: 'RULE-WST-MIX', candidateId: 'ALERT-BIN-01', score: 0.1, ts: '2026-11-22T00:00:03Z' },
+  )
+  const report = buildRunReport(record)
+
+  // 分组柱：同行多列
+  const groups = projectChartGroups(report, '/candidates', 'candidateId', ['riskScore', 'hitRuleCount'])
+  assert.equal(groups.length, 2)
+  assert.deepEqual(groups[0], { label: 'ALERT-BIN-03', values: [0.94, 2] })
+  assert.deepEqual(groups[1], { label: 'ALERT-BIN-01', values: [0.368, 1] })
+
+  // 堆叠：行内 evidenceChains 段
+  const stacks = projectChartStacks(report, '/candidates', 'candidateId', 'evidenceChains', 'ruleId', 'score')
+  assert.equal(stacks.length, 2)
+  assert.deepEqual(stacks[0].segments.map((s) => s.label), ['RULE-WST-MIX', 'RULE-WST-OVER'])
+  assert.deepEqual(stacks[0].segments.map((s) => s.value), [0.5, 0.44])
+  assert.equal(stacks[1].segments.length, 1)
+
+  // 多系列折线：按 candidateId 分组（首次出现序）
+  const series = projectChartSeries(report, '/ruleHitLog', 'candidateId', 'score')
+  assert.deepEqual(series.map((s) => s.label), ['ALERT-BIN-03', 'ALERT-BIN-01'])
+  assert.equal(series[0].points.length, 2)
+  assert.equal(series[1].points.length, 1)
+
+  // null-safe：非有限值剔除；全空行跳过
+  record.result.candidates[1].riskScore = Number.NaN
+  record.result.candidates[1].hitRuleIds = []
+  const g2 = projectChartGroups(buildRunReport(record), '/candidates', 'candidateId', ['riskScore', 'hitRuleCount'])
+  assert.deepEqual(g2[1], { label: 'ALERT-BIN-01', values: [null, 0] })
 })

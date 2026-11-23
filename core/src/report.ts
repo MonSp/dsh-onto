@@ -50,7 +50,11 @@ export interface ReportCandidateRow {
   riskScore: number
   riskLevel?: string
   hitRuleIds: string[]
+  /** 派生计数（分组柱/度量用；= hitRuleIds.length）。 */
+  hitRuleCount: number
   evidenceChains: EvidenceChainEntry[]
+  /** 派生计数（= evidenceChains.length）。 */
+  evidenceCount: number
   narrative: string[]
   pendingChecks: PendingCheck[]
   pendingVerification: boolean
@@ -98,9 +102,11 @@ export const REPORT_FIELD_REFS = [
   'candidates[].riskScore',
   'candidates[].riskLevel',
   'candidates[].hitRuleIds[]',
+  'candidates[].hitRuleCount',
   'candidates[].evidenceChains[].ruleId',
   'candidates[].evidenceChains[].score',
   'candidates[].evidenceChains[].evidence',
+  'candidates[].evidenceCount',
   'candidates[].narrative[]',
   'candidates[].pendingChecks[].ruleId',
   'candidates[].pendingChecks[].missing[]',
@@ -123,7 +129,9 @@ export const CANDIDATE_ROW_FIELDS = [
   'riskScore',
   'riskLevel',
   'hitRuleIds',
+  'hitRuleCount',
   'evidenceChains',
+  'evidenceCount',
   'narrative',
   'pendingChecks',
   'pendingVerification',
@@ -148,11 +156,13 @@ export function buildRunReport(record: RunRecord): RunReport {
     riskScore: c.riskScore,
     ...(c.riskLevel === undefined ? {} : { riskLevel: c.riskLevel }),
     hitRuleIds: [...c.hitRuleIds],
+    hitRuleCount: c.hitRuleIds.length,
     evidenceChains: c.evidenceChains.map((e) => ({
       ruleId: e.ruleId,
       score: e.score,
       evidence: e.evidence,
     })),
+    evidenceCount: c.evidenceChains.length,
     narrative: [...c.narrative],
     pendingChecks: c.pendingChecks.map((p) => ({
       ...(p.ruleId === undefined ? {} : { ruleId: p.ruleId }),
@@ -342,10 +352,113 @@ function fmtChartLabel(v: unknown): string {
   return String(v)
 }
 
-/** `when` 条件显隐谓词（数据驱动，渲染期本地求值；report-extras S2.1）。 */
+export interface ChartSeries {
+  label: string
+  points: ChartPoint[]
+  segments: ChartPoint[][]
+}
+
+/**
+ * 多系列折线（report-series-state S2.1）：按 seriesField 分组，组内行序即 x 序；
+ * 组内断线语义同 projectChartPoints（缺断跳过不补 0）。首次出现序。
+ */
+export function projectChartSeries(
+  report: RunReport,
+  rowsBind: string,
+  seriesField: string,
+  valueField: string,
+): ChartSeries[] {
+  const rows = resolveReportPointer(report, rowsBind)
+  const order: string[] = []
+  const grouped = new Map<string, ChartPoint[]>()
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const raw = rec === null ? undefined : rec[valueField]
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+      const key = rec === null ? '' : fmtChartLabel(rec[seriesField])
+      if (!grouped.has(key)) {
+        grouped.set(key, [])
+        order.push(key)
+      }
+      ;(grouped.get(key) as ChartPoint[]).push({ label: key, value: raw })
+    }
+  }
+  return order.map((label) => {
+    const points = grouped.get(label) as ChartPoint[]
+    const segments: ChartPoint[][] = []
+    // 组内已剔除非有限点；行序分组后无「缺断」再断线需求——单段即可，
+    // 但保留 segments 形态与 projectChartPoints 同构
+    segments.push([...points])
+    return { label, points, segments }
+  })
+}
+
+/** 分组柱：同行多列并排（valueFields 与返回 values 按序对齐；非有限位为 null 不画）。 */
+export function projectChartGroups(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  valueFields: readonly string[],
+): Array<{ label: string; values: Array<number | null> }> {
+  const rows = resolveReportPointer(report, rowsBind)
+  const out: Array<{ label: string; values: Array<number | null> }> = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const values = valueFields.map((f) => {
+        const raw = rec === null ? undefined : rec[f]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+      })
+      if (values.every((v) => v === null)) continue
+      out.push({ label: rec === null ? '' : fmtChartLabel(rec[labelField]), values })
+    }
+  }
+  return out
+}
+
+export interface ChartStackSegment {
+  label: string
+  value: number
+}
+
+/** 堆叠柱：行内嵌套列表堆段（段内非有限剔除；无有效段的行跳过）。 */
+export function projectChartStacks(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  stackListField: string,
+  stackLabelField: string,
+  stackValueField: string,
+): Array<{ label: string; segments: ChartStackSegment[] }> {
+  const rows = resolveReportPointer(report, rowsBind)
+  const out: Array<{ label: string; segments: ChartStackSegment[] }> = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const list = rec === null ? undefined : rec[stackListField]
+      const segments: ChartStackSegment[] = []
+      if (Array.isArray(list)) {
+        for (const it of list) {
+          const item = it !== null && typeof it === 'object' ? (it as Record<string, unknown>) : null
+          const raw = item === null ? undefined : item[stackValueField]
+          if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+          segments.push({ label: item === null ? '' : fmtChartLabel(item[stackLabelField]), value: raw })
+        }
+      }
+      if (segments.length === 0) continue
+      out.push({ label: rec === null ? '' : fmtChartLabel(rec[labelField]), segments })
+    }
+  }
+  return out
+}
+
+/** `when` 条件显隐谓词（数据驱动 / UI 状态双源，渲染期本地求值；report-extras S2.1、report-series-state S2.3）。 */
 export interface ReportWhen {
-  /** 报表指针（调用方经 bindPointer 归一后传入）。 */
-  bind: string
+  /** 报表指针（调用方经 bindPointer 归一后传入）；与 field 互斥必居其一。 */
+  bind?: string
+  /** UI 状态源（input/select 的 id）；与 bind 互斥必居其一。 */
+  field?: string
   op: 'eq' | 'neq' | 'in' | 'not-in' | 'gt' | 'gte' | 'lt' | 'lte' | 'empty' | 'not-empty'
   value?: string | number | boolean | Array<string | number | boolean>
 }
@@ -378,8 +491,21 @@ function looseEq(a: unknown, b: unknown): boolean {
 }
 
 /** 条件谓词求值：比较族不可判定一律不满足；empty/not-empty 专责空语义。 */
-export function evalWhen(report: RunReport, when: ReportWhen): boolean {
-  const raw = resolveReportPointer(report, when.bind)
+export function evalWhen(
+  report: RunReport,
+  when: ReportWhen,
+  uiState: Readonly<Record<string, string>> = {},
+): boolean {
+  let raw: unknown
+  if (when.field !== undefined) {
+    // UI 状态源：未注册 id → 不可判定 → 一律不渲染（含 empty——注册件的空值才谈空语义）
+    if (!Object.prototype.hasOwnProperty.call(uiState, when.field)) return false
+    raw = uiState[when.field]
+  } else if (when.bind !== undefined) {
+    raw = resolveReportPointer(report, when.bind)
+  } else {
+    return false
+  }
   switch (when.op) {
     case 'empty':
       return isEmptyValue(raw)

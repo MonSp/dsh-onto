@@ -269,9 +269,12 @@ pnpm dsh --profile dsh-<domain> --no-open
   省略 surface 用默认模板（KeyValue 状态块 + Badge + Stat 行 + 风险分布图 + 候选表）。
   组件事件只做筛选（含表头排序）/展开/跳转（跳转到固定结果页），不接写操作。
 - **结构增强**：任意节点可带 `when`（数据驱动条件显隐，如 dataStatus=insufficient 才出
-  警示条）；Table 列 `type`（bar/badge/delta/num）；`Stat.spark` 微趋势
-  （`spark:{rowsBind,valueField}`）；Chart `palette` 色板与悬停提示。`when.value`/`palette`/
-  `max` 是呈现配置字面量，数据槽位仍只准绑定。
+  警示条；也可用 `field` 读 input/select 的界面态）；Table 列 `type`（bar/badge/delta/num）
+  与 `filterBy` 外联筛选；`Stat.spark` 微趋势（`spark:{rowsBind,valueField}`）；Chart
+  `palette` 色板与悬停提示。`when.value`/`palette`/`max` 是呈现配置字面量，数据槽位仍只准绑定。
+- **多系列图表**：`Chart` 支持 `mode:'grouped'`（`valueFields` 同行多列并排柱）、
+  `mode:'stacked'`（`stackFrom` 行内嵌套列表堆出构成，如逐规则得分）、line 的
+  `seriesField`（按行字段分组多折线）；配 `input`/`select` 轻交互件（本地筛选态，零往返）。
 - **同源**：页面与对话报表都经 `getRunReport(runId)` 取同一投影（core `buildRunReport`），数值
   一致由构造保证；展开详情经 wire 受权取数（strict 越权 run 拒绝）。meta 只携 runRef+布局
   引用（无数值、无短语）。

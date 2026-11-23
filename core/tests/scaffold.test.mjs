@@ -132,6 +132,9 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     for (const extra of ['evalWhen', 'renderCell', 'renderSpark', 'palette']) {
       assert.ok(reportTs.includes(extra), `report.ts 须渲染 ${extra}`)
     }
+    for (const extra of ['projectChartGroups', 'projectChartStacks', 'projectChartSeries', 'collectUiDefaults', 'filterBy', 'case \'Input\'', 'case \'Select\'']) {
+      assert.ok(reportTs.includes(extra), `report.ts 须渲染 ${extra}`)
+    }
     // 契约冻结
     const bindings = readFileSync(join(outDir, 'src', 'bindings.ts'), 'utf8')
     assert.ok(bindings.includes('SRC-WST-CORE'))
