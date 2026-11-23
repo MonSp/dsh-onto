@@ -185,6 +185,26 @@ test('P2a: 同版本同摘要重复导入 → 幂等 idempotent:true', () => {
   }
 })
 
+test('P2a2: manifest 在、包实物缺失 → 同摘要导入自愈补写（防「导入成功/激活报缺失」断裂）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    const bundle = makeBundle(dir)
+    const first = store.importRelease({ kind: 'controlled-upload', bundle })
+    assert.equal(first.idempotent, true)
+    // 只删包实物、保留外层 manifest——复现「导入幂等成功、激活报包缺失」现场
+    rmSync(ws.versionDir('test-pkg', '1.0.0'), { recursive: true, force: true })
+    assert.ok(!existsSync(join(ws.versionDir('test-pkg', '1.0.0'), 'package.yaml')))
+    const again = store.importRelease({ kind: 'controlled-upload', bundle })
+    assert.equal(again.idempotent, true)
+    assert.ok(existsSync(join(ws.versionDir('test-pkg', '1.0.0'), 'package.yaml')))
+    const act = store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    assert.equal(act.ok, true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('P2b: 同版本不同内容 → RELEASE_CONFLICT', () => {
   const { root, ws, dir } = setupIssuedPkg()
   try {

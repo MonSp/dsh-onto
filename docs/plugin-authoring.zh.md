@@ -207,6 +207,22 @@ cd ..
 
 ## 6. 插件生成与装配
 
+**一键受控部署链**（把 6.1–6.5、回放锚定、受控重启与双入口验收锚串成一条链；**人工激活保留**，不代签）：
+
+```powershell
+cd ..\<domain>-app
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -AuthorizedBy "授权部署人姓名" -Restart -Port 3081 -EnvFile .env
+```
+
+链路：构建 + 夹具 e2e → `replay --check`（随包夹具对照包内基线，漂移即拒）→ 装 profile → 原样导入 →
+授权人激活（缺省交互式提示）→ 组合断言 → 受控重启（**仅** `-Port` 上本 profile 的宿主，不触碰平台/其他
+profile）→ 同输入引擎面跑一遍，打印**双入口验收锚**（ruleId 集合与分数，页面/Agent 两边对照）。
+
+三个状态是分开的：**包可见**（列表有行）≠ **版本已激活**（授权人 activate）≠ **真实数据源可用**
+（`DSH_*_API_URL` 装配连接器 + `DSH_BIZ_*` 身份断言）。缺任一项应拒绝运行（fail-closed），不静默降级。
+
+手动分步等价（排障用）：
+
 ```powershell
 # 6.1 生成最小插件（结果页 + Agent 入口 + 部署模板；生成 ≠ 签发，不落凭据）
 node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out ..\<domain>-app

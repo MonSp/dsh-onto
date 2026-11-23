@@ -106,6 +106,7 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
       'scripts/setup-profile.ps1',
       'scripts/dump-config.ps1',
       'scripts/seed-release.mjs',
+      'scripts/deploy.ps1',
     ]) {
       assert.ok(existsSync(join(outDir, rel)), `缺文件: ${rel}`)
     }

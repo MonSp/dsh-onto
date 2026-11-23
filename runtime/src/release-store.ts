@@ -326,7 +326,20 @@ export class ReleaseStore {
           existingManifest?.packageDigest
           ?? (packageExists ? tryDigestOfDir(dir) : null)
         if (existingDigest !== null && existingDigest === manifest.packageDigest) {
-          // 已存在同内容：补齐外层发布描述（幂等），不重写包文件
+          // 已存在同内容：幂等，不改写包内容。但包实物缺失（manifest 在、workspace 空）时
+          // 从暂存区按同摘要自愈补写——否则出现「导入报幂等成功、激活报包缺失」的自洽性断裂。
+          if (!packageExists) {
+            mkdirSync(dir, { recursive: true })
+            for (const f of bundle.files) {
+              const full = join(dir, f.path)
+              if (!full.startsWith(dir)) {
+                throw new ReleaseError('RELEASE_UNSAFE_PATH', `path escapes package dir: ${f.path}`)
+              }
+              mkdirSync(dirname(full), { recursive: true })
+              writeFileSync(full, f.content, 'utf8')
+            }
+          }
+          // 补齐外层发布描述（幂等），不重写包文件
           const mp = this.manifestPath(name, version)
           if (!existsSync(mp)) {
             mkdirSync(dirname(mp), { recursive: true })
