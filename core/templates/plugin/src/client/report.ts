@@ -112,6 +112,13 @@ function listItems(v: unknown): unknown[] {
   return Array.isArray(v) ? v : []
 }
 
+/** 表格筛选数值化：空白串/布尔/非有限 → null（不可判定不满足，堵 Number(null)=0）。 */
+function filterNum(v: unknown): number | null {
+  const n =
+    typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN
+  return Number.isFinite(n) ? n : null
+}
+
 /** 表格单元格按列类型渲染（report-extras S2.2）：bar/badge/delta/num/text。 */
 function renderCell(value: unknown, type: unknown): ReactNode {
   const t = String(type ?? 'text')
@@ -232,9 +239,13 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
         case 'ne':
           return fmtValue(filter.value) !== s
         case 'gte':
-          return Number(v) >= Number(filter.value)
-        case 'lte':
-          return Number(v) <= Number(filter.value)
+        case 'lte': {
+          // 可空判空族：null/空白串/布尔不可判定 → 不满足（堵 Number(null)=0 当 0 分）
+          const nv = filterNum(v)
+          const nf = filterNum(filter.value)
+          if (nv === null || nf === null) return false
+          return filter.op === 'gte' ? nv >= nf : nv <= nf
+        }
         case 'contains':
           return s.includes(String(filter.value))
         default:
@@ -272,8 +283,9 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
 
   // 导出复制（report-export-compare S2.1）：取当前视图行（过筛选/排序后），零往返
   const copyTableText = async (fmt: 'md' | 'csv'): Promise<void> => {
-    const csvCell = (v: string) => `"${v.replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`
-    const mdCell = (v: string) => v.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+    const csvCell = (v: string) => `"${v.replace(/"/g, '""').replace(/\r\n?|\n/g, ' ')}"`
+    const mdCell = (v: string) =>
+      v.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r\n?|\n/g, ' ')
     const heads = columns.map((c) => String(c.header ?? c.field))
     const body = rows.map((r) => columns.map((c) => fmtValue(r[String(c.field)])))
     const text =
@@ -305,7 +317,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
                 void copyTableText('md').then(() => setCopied('md')).catch(() => setCopied('err'))
               },
             },
-            copied === 'md' ? '✓ Markdown' : t('exportMd'),
+            copied === 'md' ? t('exportDoneMd') : t('exportMd'),
           ),
           h(
             'button',
@@ -315,7 +327,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
                 void copyTableText('csv').then(() => setCopied('csv')).catch(() => setCopied('err'))
               },
             },
-            copied === 'csv' ? '✓ CSV' : t('exportCsv'),
+            copied === 'csv' ? t('exportDoneCsv') : t('exportCsv'),
           ),
           copied === 'err' ? h('span', { className: 'txri-note' }, t('reportError')) : null,
         )
@@ -1000,6 +1012,7 @@ function TabsBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string | numb
         h(
           'button',
           {
+            key: i,
             type: 'button',
             className: i === sel ? 'txri-primary' : '',
             onClick: () => setSel(i),
@@ -1034,7 +1047,7 @@ function CompareBox(props: { diff: RunDiffView; t: T }): ReactNode {
       ),
       h('span', { className: `tag ${diff.head.auditPassedA ? 'ok' : 'err'}` }, `A·${t('audit')}`),
       h('span', { className: `tag ${diff.head.auditPassedB ? 'ok' : 'err'}` }, `B·${t('audit')}`),
-      diff.head.sameDataset ? null : h('span', { className: 'tag warn' }, '≠dataset'),
+      diff.head.sameDataset ? null : h('span', { className: 'tag warn' }, t('diffDataset')),
       h('span', { className: 'tag ok' }, t('humanReview')),
     ),
     h(
@@ -1158,6 +1171,8 @@ export function ReportSurface(props: {
   report: RunReport
   t: T
   navigate: () => void
+  /** 对比上下文（surface 含 Compare 节点时注入；缺省该节点显 '—'）。 */
+  diff?: RunDiffView
   /** 渲染失败回退面；缺省为报表文字摘要。 */
   fallback?: ReactNode
 }): ReactNode {
@@ -1180,6 +1195,7 @@ export function ReportSurface(props: {
     navigate: props.navigate,
     uiState,
     setUi,
+    diff: props.diff,
   }
   const fallback = props.fallback ?? reportTextSummary(props.report, props.t)
   try {

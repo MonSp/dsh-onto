@@ -144,6 +144,7 @@ export const REPORT_LIST_REFS = [
   'candidates[].pendingChecks',
   'candidates[].narrative',
   'candidates[].hitRuleIds',
+  'candidates[].pendingChecks[].missing',
   'ruleHitLog',
 ] as const
 
@@ -551,6 +552,8 @@ export function evalWhen(
       if (when.op === 'neq') return !looseEq(raw, when.value)
       if (when.op === 'in') return Array.isArray(when.value) && when.value.some((v) => looseEq(raw, v))
       if (when.op === 'not-in') return Array.isArray(when.value) && !when.value.some((v) => looseEq(raw, v))
+      // 布尔不入大小比较（Number(true)=1 曲解语义；布尔只严格等）
+      if (typeof raw === 'boolean' || typeof when.value === 'boolean') return false
       const a = Number(raw)
       const b = Number(when.value)
       if (!Number.isFinite(a) || !Number.isFinite(b)) return false

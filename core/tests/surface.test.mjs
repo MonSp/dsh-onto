@@ -444,6 +444,32 @@ test('批次 3：when 谓词槽（全组件通用）', () => {
   )
   assert.equal(v6.ok, false)
   assert.ok(codes(v6).includes('SF_PROPS_UNKNOWN'))
+
+  // empty/not-empty 放行列表指针（数组空/非空语义）；比较族仍限元素字段
+  const okList = msg(
+    node('c', 'Callout', {
+      content: '有缺失项',
+      when: { bind: '/candidates/0/pendingChecks/0/missing', op: 'not-empty' },
+    }),
+  )
+  assert.equal(validateReportSurface(okList).ok, true)
+  const okList2 = msg(
+    node('c', 'Callout', {
+      content: '无命中',
+      when: { bind: '/candidates/0/hitRuleIds', op: 'empty' },
+    }),
+  )
+  assert.equal(validateReportSurface(okList2).ok, true)
+  const v7 = validateReportSurface(
+    msg(
+      node('c', 'Callout', {
+        content: 'x',
+        when: { bind: '/candidates/0/pendingChecks/0/missing', op: 'eq', value: 'fillLevel' },
+      }),
+    ),
+  )
+  assert.equal(v7.ok, false)
+  assert.ok(codes(v7).includes('SF_BIND_INVALID'))
 })
 
 test('批次 3：Table 列类型 / Stat.spark / Chart.palette', () => {

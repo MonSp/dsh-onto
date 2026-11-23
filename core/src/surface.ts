@@ -751,8 +751,12 @@ function validateWhen(
     const bind = bindPointer(when.bind)
     if (bind === null) {
       err('SF_SLOT_LITERAL', `${where}.bind`, 'when.bind 只允许字段绑定，拒绝字面量')
-    } else if (!isReportPointer(bind)) {
-      err('SF_BIND_INVALID', `${where}.bind`, `绑定不在报表契约内: ${bind}`)
+    } else {
+      // empty/not-empty 放行列表指针（数组空/非空语义）；比较族仍限元素字段
+      const listOp = when.op === 'empty' || when.op === 'not-empty'
+      if (!isReportPointer(bind) && !(listOp && isReportListPointer(bind))) {
+        err('SF_BIND_INVALID', `${where}.bind`, `绑定不在报表契约内: ${bind}`)
+      }
     }
   }
   if (hasField) {

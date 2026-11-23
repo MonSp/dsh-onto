@@ -93,6 +93,7 @@ import {
   renderExportText,
   renderRunDiffText,
   renderRunText,
+  requireMaskToken,
   retreatPhraseEcho,
   retreatRenderText,
   reviseTopHitAdvice,
@@ -904,17 +905,27 @@ function fmtDiffNum(v: number | null): string {
 
 /** 模型面回退文本（对比卡渲染失败/无 toolview 时宿主按原文渲染）。 */
 export function renderRunDiffCardText(value: DiffCardValue, phrases: readonly string[] = []): string {
+  const list = [...new Set(phrases.filter((p) => p !== ''))]
+  const token = list.length > 0 ? requireMaskToken(list) : ''
+  // ID 面与 renderRunDiffText 同口径：撞短语 fail-loud（不改写 ID），拼接重组交整段兜底
+  const idFace = (key: string, s: string) => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
   const lines = [
-    `对比 ${value.runIdA} → ${value.runIdB}${value.sameDataset ? '' : '（数据集不同）'}`,
+    `对比 ${idFace('runIdA', value.runIdA)} → ${idFace('runIdB', value.runIdB)}${value.sameDataset ? '' : '（数据集不同）'}`,
     `审计 A ${value.auditPassedA ? '过' : '未过'} / B ${value.auditPassedB ? '过' : '未过'}`
       + ` · Δ ${value.summary.deltaCount} · +${value.summary.addedCount}/-${value.summary.removedCount}`
       + ` · max|Δ| ${value.summary.maxAbsDelta === null ? '—' : value.summary.maxAbsDelta}`,
     ...value.topDeltas.map(
-      (d) => `- ${d.candidateId} A ${fmtDiffNum(d.riskScoreA)} B ${fmtDiffNum(d.riskScoreB)} Δ ${fmtDiffNum(d.riskScoreDelta)}`,
+      (d) =>
+        `- ${idFace('candidateId', d.candidateId)} A ${fmtDiffNum(d.riskScoreA)} B ${fmtDiffNum(d.riskScoreB)} Δ ${fmtDiffNum(d.riskScoreDelta)}`,
     ),
     '对比卡在会话中渲染；humanReviewRequired=true。',
   ]
-  return retreatRenderText(lines.join('\n'), phrases)
+  return retreatRenderText(lines.join('\n'), list)
 }
 
 /** presentationMeta 投影：只携两侧 runId 引用，无数值、无短语。 */
@@ -2325,7 +2336,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             auditPassedB: view.head.auditPassedB,
             summary: { ...view.summary },
             topDeltas: [...view.deltas]
-              .sort((a, b) => Math.abs(b.riskScoreDelta ?? 0) - Math.abs(a.riskScoreDelta ?? 0))
+              .sort((d1, d2) => Math.abs(d2.riskScoreDelta ?? 0) - Math.abs(d1.riskScoreDelta ?? 0))
               .slice(0, 10)
               .map((d) => ({
                 candidateId: d.candidateId,
@@ -2872,8 +2883,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
-        render: (args, value) =>
-          textBlock(renderRunDiffText(value as unknown as RunDiff, redlinesForRuns(ws, args))),
+        render: (args, value) => {
+          // 双 run 红线并集（show_run_diff 卡面同口径）：防跨段重组外泄
+          const d = value as unknown as RunDiff
+          const phrases = [
+            ...new Set([
+              ...redlinesForRuns(ws, args),
+              ...(recallPhrases(d.runIdA) ?? []),
+              ...(recallPhrases(d.runIdB) ?? []),
+            ]),
+          ]
+          return textBlock(renderRunDiffText(d, phrases))
+        },
       },
       execute: toolExecute(
         (args: { runIdA: string; runIdB: string }) => {

@@ -330,7 +330,7 @@ test('wire getRunReport：strict 越权身份拒绝，同身份放行', async ()
 })
 
 test('沙箱分类：报表工具登记为 onto 能力（onto 预设放行面）', () => {
-  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages']) {
+  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages', 'show_run_diff']) {
     assert.equal(classifyToolCapability(name), 'onto', `${name} 须归 onto`)
   }
 })
@@ -545,11 +545,25 @@ test('show_run_diff：工具面精简 + meta 只携引用 + 回退文本', async
         { candidateId: 'C1 B-ONLY-PHRASE', riskScoreA: 0.1, riskScoreB: 0.2, riskScoreDelta: 0.1 },
       ],
     }
-    const masked = tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, crafted)
-    assert.equal(masked[0].text.includes('B-ONLY-PHRASE'), false)
-    // 纯函数同口径：显式短语清单入参
-    const direct = renderRunDiffCardText(crafted, ['B-ONLY-PHRASE'])
-    assert.equal(direct.includes('B-ONLY-PHRASE'), false)
+    // ID 面撞短语 fail-loud（renderRunDiffText 家族同口径：工具层不改写 ID）
+    assert.throws(
+      () => tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, crafted),
+      (e) => e.code === 'INVALID_TOOL_OUTPUT' && /ID 回指字段冲突/.test(e.message),
+    )
+    assert.throws(
+      () => renderRunDiffCardText(crafted, ['B-ONLY-PHRASE']),
+      (e) => e.code === 'INVALID_TOOL_OUTPUT' && /ID 回指字段冲突/.test(e.message),
+    )
+    // 拼接重组兜底：短语横跨 runIdA/runIdB 分隔符重组 → 整段退避（零外泄）
+    const spliced = {
+      ...value,
+      runIdA: 'leadB-ONLY-',
+      runIdB: 'PHRASEtail',
+      topDeltas: [],
+    }
+    const masked = renderRunDiffCardText(spliced, ['B-ONLY- → PHRASE'])
+    assert.equal(masked.includes('B-ONLY- → PHRASE'), false)
+    assert.equal(masked.includes('PHRASEtail'), false)
   } finally {
     host.dispose()
     configurePhraseStore(null)

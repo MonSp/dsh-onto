@@ -227,6 +227,8 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
       return
     }
     let live = true
+    // 换 pair/换 run/换页即刻清旧卡，不残留到新数据落地
+    setDiff(null)
     void (async () => {
       try {
         const out = unwrap<{ diff: Parameters<typeof diffViewOf>[0] }>(
@@ -244,7 +246,7 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, compareRunId])
+  }, [pageId, runId, compareRunId])
 
   const page = pages.find((p) => p.pageId === pageId)
   // 渲染前校验闸（S2.2 两处共用）：wire 面数据亦须过同一契约
@@ -295,7 +297,13 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
           ),
           page && report
             ? checked !== null && checked.ok
-              ? h(ReportSurface, { surface: checked.value, report, t, navigate: () => {} })
+              ? h(ReportSurface, {
+                  surface: checked.value,
+                  report,
+                  t,
+                  navigate: () => {},
+                  diff: diff ?? undefined,
+                })
               : h(
                   'div',
                   null,

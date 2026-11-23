@@ -114,6 +114,18 @@ test('diffViewOf：全单侧时 maxAbsDelta 为 null（不展示为 0）', () =>
   assert.equal(view.summary.deltaCount, 0)
 })
 
+test('buildRunDiffView：双侧空候选 run 对比——不崩溃，摘要全零、maxAbsDelta 为 null', () => {
+  const a = recordOf('run-empty-a', [], { auditPassed: true })
+  const b = recordOf('run-empty-b', [], { auditPassed: true })
+  const view = buildRunDiffView(a, b)
+  assert.equal(view.deltas.length, 0)
+  assert.equal(view.summary.deltaCount, 0)
+  assert.equal(view.summary.addedCount, 0)
+  assert.equal(view.summary.removedCount, 0)
+  assert.equal(view.summary.maxAbsDelta, null)
+  assert.equal(view.head.sameDataset, true)
+})
+
 test('DIFF_FIELD_REFS 引用表：折叠与校验', () => {
   assert.ok(isDiffFieldRef('deltas[].riskScoreDelta'))
   assert.ok(isDiffFieldRef('deltas[2].riskScoreDelta'))

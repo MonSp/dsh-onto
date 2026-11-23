@@ -251,6 +251,15 @@ test('evalWhen：数据驱动谓词（各 op / 不可求值不满足）', () => 
   // 布尔严格等（false 不得等于 0）
   assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: true }), true)
   assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: 1 }), false)
+  // 布尔不入大小比较（Number(true)=1 曲解语义）
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'gt', value: 0 }), false)
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'lte', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/summary/maxRiskScore', op: 'lt', value: true }), false)
+
+  // 列表指针 empty/not-empty（数组空/非空语义，如「有缺失项才展示」）
+  assert.equal(evalWhen(report, { bind: '/candidates/0/pendingChecks/0/missing', op: 'not-empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/candidates/0/hitRuleIds', op: 'not-empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/candidates/1/pendingChecks', op: 'empty' }), true)
 
   // UI 状态源：未注册一律不渲染；注册后走同一谓词集
   assert.equal(evalWhen(report, { field: 'q', op: 'empty' }, {}), false)
