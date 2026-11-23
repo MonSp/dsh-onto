@@ -1,0 +1,67 @@
+{
+  "objects": [
+    { "id": "BLD-01", "type": "OBJ-EBC-BUILDING", "attrs": { "buildingId": "BLD-01", "buildingNo": "1号楼", "areaType": "highrise", "unitCount": 96, "floors": 18, "chargerPortRatio": 0.25 } },
+    { "id": "BLD-02", "type": "OBJ-EBC-BUILDING", "attrs": { "buildingId": "BLD-02", "buildingNo": "2号楼", "areaType": "multistory", "unitCount": 48, "floors": 6, "chargerPortRatio": 0.6 } },
+    { "id": "BLD-03", "type": "OBJ-EBC-BUILDING", "attrs": { "buildingId": "BLD-03", "buildingNo": "3号楼", "areaType": "selfbuilt", "unitCount": 24, "floors": 3, "chargerPortRatio": 0.1 } },
+    { "id": "BLD-04", "type": "OBJ-EBC-BUILDING", "attrs": { "buildingId": "BLD-04", "buildingNo": "4号楼", "areaType": "multistory", "unitCount": 36, "floors": 6, "chargerPortRatio": 0.5 } },
+    { "id": "CHG-01", "type": "OBJ-EBC-CHARGER", "attrs": { "chargerId": "CHG-01", "chargerNo": "A棚", "portCount": 24, "certified": 1, "lastInspectedAt": "2026-11-10T00:00:00Z" } },
+    { "id": "CHG-02", "type": "OBJ-EBC-CHARGER", "attrs": { "chargerId": "CHG-02", "chargerNo": "B棚", "portCount": 12, "certified": 1, "lastInspectedAt": "2026-11-05T00:00:00Z" } }
+  ],
+  "relations": [
+    { "id": "REL-EBC-001", "type": "REL-EBC-LOCATED", "from": "CHG-01", "to": "BLD-01" },
+    { "id": "REL-EBC-002", "type": "REL-EBC-LOCATED", "from": "CHG-02", "to": "BLD-02" }
+  ],
+  "behaviors": [
+    { "id": "B-001", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-01", "objectRef": "BLD-01", "occurredAt": "2026-11-02T19:30:00Z" },
+    { "id": "B-002", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-01", "objectRef": "BLD-01", "occurredAt": "2026-11-08T20:10:00Z" },
+    { "id": "B-003", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-01", "objectRef": "BLD-01", "occurredAt": "2026-11-15T18:45:00Z" },
+    { "id": "B-004", "type": "BHV-EBC-INDOOR", "anchorRef": "BLD-02", "objectRef": "BLD-02", "occurredAt": "2026-11-12T22:05:00Z" },
+    { "id": "B-005", "type": "BHV-EBC-BLOCKAGE", "anchorRef": "BLD-03", "objectRef": "BLD-03", "occurredAt": "2026-11-16T08:20:00Z" }
+  ],
+  "candidates": [
+    {
+      "candidateId": "EBC-CAND-001",
+      "objectRef": "BLD-01",
+      "features": {
+        "windowDays": 30,
+        "flyLineCount": 3,
+        "indoorChargeCount": 0,
+        "blockageCount": 0
+      },
+      "tags": []
+    },
+    {
+      "candidateId": "EBC-CAND-002",
+      "objectRef": "BLD-02",
+      "features": {
+        "windowDays": 30,
+        "flyLineCount": 0,
+        "indoorChargeCount": 1,
+        "blockageCount": 0
+      },
+      "tags": []
+    },
+    {
+      "candidateId": "EBC-CAND-003",
+      "objectRef": "BLD-03",
+      "features": {
+        "windowDays": 30,
+        "flyLineCount": 0,
+        "indoorChargeCount": 0,
+        "blockageCount": 1
+      },
+      "tags": ["certified-charging"]
+    },
+    {
+      "candidateId": "EBC-CAND-004",
+      "objectRef": "BLD-04",
+      "features": {
+        "windowDays": 30,
+        "flyLineCount": 1,
+        "indoorChargeCount": 0,
+        "blockageCount": 0
+      },
+      "tags": ["rectified"]
+    }
+  ]
+}

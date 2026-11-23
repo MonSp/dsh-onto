@@ -1,0 +1,46 @@
+kind: DerivedToolContracts
+llmForbidden: true
+idRules:
+  - objectId: OBJ-EBC-BUILDING
+    idRule: <building_id>
+  - objectId: OBJ-EBC-CHARGER
+    idRule: <charger_id>
+tools:
+  - id: TOOL-EBC-BUILDING
+    name: 读取楼栋
+    kind: object-read
+    objectId: OBJ-EBC-BUILDING
+    grantScope: OBJ-EBC-BUILDING
+    inputs:
+      - OBJ-EBC-BUILDING.buildingId
+      - OBJ-EBC-BUILDING.buildingNo
+    outputs:
+      - OBJ-EBC-BUILDING.buildingId
+      - OBJ-EBC-BUILDING.buildingNo
+      - OBJ-EBC-BUILDING.areaType
+      - OBJ-EBC-BUILDING.unitCount
+      - OBJ-EBC-BUILDING.floors
+      - OBJ-EBC-BUILDING.chargerPortRatio
+  - id: TOOL-EBC-CHARGER
+    name: 读取充电设施
+    kind: object-read
+    objectId: OBJ-EBC-CHARGER
+    grantScope: OBJ-EBC-CHARGER
+    inputs:
+      - OBJ-EBC-CHARGER.chargerId
+      - OBJ-EBC-CHARGER.chargerNo
+    outputs:
+      - OBJ-EBC-CHARGER.chargerId
+      - OBJ-EBC-CHARGER.chargerNo
+      - OBJ-EBC-CHARGER.portCount
+      - OBJ-EBC-CHARGER.certified
+      - OBJ-EBC-CHARGER.lastInspectedAt
+  - id: TOOL-EBC-LOCATED
+    name: 读取设施位于楼栋
+    kind: relation-read
+    relationId: REL-EBC-LOCATED
+    grantScope: REL-EBC-LOCATED
+    inputs:
+      - OBJ-EBC-CHARGER
+      - OBJ-EBC-BUILDING
+    outputs: []

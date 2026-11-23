@@ -1,0 +1,46 @@
+kind: O1ObjectTypes
+objects:
+  - id: OBJ-EBC-BUILDING
+    name: 楼栋
+    idRule: "<building_id>"
+    attributes:
+      - name: buildingId
+        type: string
+        required: true
+      - name: buildingNo
+        type: string
+        required: true
+      - name: areaType
+        type: enum
+        enumValuesRef: dict-ebc-area-type
+      - name: unitCount
+        type: int
+      - name: floors
+        type: int
+      - name: chargerPortRatio
+        type: float
+    lifecycle:
+      - 在用
+      - 整改中
+      - 销号
+    description: 电动自行车充电治理的主体对象（楼栋/院落），候选排查以楼栋为单位
+  - id: OBJ-EBC-CHARGER
+    name: 充电设施
+    idRule: "<charger_id>"
+    attributes:
+      - name: chargerId
+        type: string
+        required: true
+      - name: chargerNo
+        type: string
+        required: true
+      - name: portCount
+        type: int
+      - name: certified
+        type: int
+      - name: lastInspectedAt
+        type: date
+    lifecycle:
+      - 在用
+      - 停用
+    description: 楼栋配套的集中充电设施（车棚/充电桩）

@@ -1,0 +1,13 @@
+kind: O2ExclusionRules
+rules:
+  - id: RULE-EBC-EXCL-CERTIFIED
+    name: 已验收合规充电区排除
+    action: drop
+    condition: tag == 'certified-charging'
+    description: 已验收合规充电区候选直接剔除。
+  - id: RULE-EBC-EXCL-RECTIFIED
+    name: 已完成整改降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'rectified'
+    description: 已完成整改的楼栋降权观察，避免整改后误报。

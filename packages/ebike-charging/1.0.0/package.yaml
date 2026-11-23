@@ -1,0 +1,13 @@
+kind: BusinessOntologyPackage
+name: ebike-charging
+version: 1.0.0
+domain: EBC
+metaFrameworkVersion: "1.0"
+status: ISSUED
+issueRecord:
+  - version: 1.0.0
+    issuedAt: 2026-11-23T04:40:20.789Z
+    issuedBy: 验收主持人（人工代办）
+    note: 新域零改接入实验（电动自行车充电安全）
+    manifestDigest: 0f30fcd4128c1d7fd64fb8cd6a755d317fe819e30eabee091ae6e8b86bdba4d5
+externalRefs: []

@@ -1,0 +1,14 @@
+kind: O2SkillTemplate
+template:
+  id: SKL-EBC-CHARGE-NARRATIVE
+  name: 充电隐患排查叙述
+  weights:
+    RULE-EBC-SCORE-FLYLINE: 0.4
+    RULE-EBC-SCORE-INDOOR: 0.35
+    RULE-EBC-SCORE-BLOCKAGE: 0.25
+  steps:
+    - 核对飞线与入户充电记录的时间线与涉及住户
+    - 检查疏散通道堵塞点位与充电设施配建比
+    - 标记待核实的充电行为来源与整改责任环节
+  outputTemplate: 候选 {candidateId}：综合风险分 {riskScore}，命中 {hitCount} 条规则（{ruleIds}）；飞线充电
+    {flyLineCount} 次，入户充电 {indoorChargeCount} 次，通道堵塞 {blockageCount} 处。请核实充电行为来源与整改记录，不作定性结论。

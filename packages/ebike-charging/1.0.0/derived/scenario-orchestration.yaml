@@ -1,0 +1,71 @@
+kind: DerivedScenarioOrchestration
+scenarios:
+  - id: SCN-EBC-CHARGE-RISK
+    name: 电动自行车充电隐患排查
+    goal: 从楼栋、充电设施与充电行为记录出发，识别飞线充电、入户充电与通道堵塞等候选隐患线索，输出风险分与待核实点；不作定性。
+    boundary: 仅输出候选线索、风险分与待核实点；不作定性，不替代人工复核与整改决定。
+    inputs:
+      - description: 观察窗口（天），缺省 30
+        name: windowDays
+        required: false
+        type: int
+    outputs:
+      fields:
+        - candidateList
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+        - excluded
+    pipeline:
+      - label: 归一楼栋、充电设施与充电行为记录
+        stepId: s1
+        stepType: DATA_INGEST
+      - label: 装载飞线/入户/堵塞行为
+        stepId: s2
+        stepType: BEHAVIOR_CALL
+      - label: 排除段：已验收合规充电区/已整改降权
+        order: before-scoring
+        stepId: s3
+        stepType: RULE_EVALUATE
+      - label: 打分段：飞线充电/入户充电/通道堵塞
+        stepId: s4
+        stepType: RULE_EVALUATE
+      - label: 充电隐患叙述
+        skillRefs:
+          - SKL-EBC-CHARGE-NARRATIVE
+        stepId: s5
+        stepType: SKILL_RUN
+      - label: 三层闭合审计
+        stepId: s6
+        stepType: AUDIT_CHECK
+      - label: 人工复核（含排除件）
+        stepId: s7
+        stepType: HUMAN_REVIEW
+    behaviorRefs:
+      - BHV-EBC-FLYCHARGE
+      - BHV-EBC-INDOOR
+      - BHV-EBC-BLOCKAGE
+    exclusionRefs:
+      - RULE-EBC-EXCL-CERTIFIED
+      - RULE-EBC-EXCL-RECTIFIED
+    scoreRefs:
+      - RULE-EBC-SCORE-FLYLINE
+      - RULE-EBC-SCORE-INDOOR
+      - RULE-EBC-SCORE-BLOCKAGE
+    outputContract:
+      mustInclude:
+        - candidateList
+        - riskScore
+        - hitRuleIds
+        - evidenceChains
+        - pendingChecks
+      forbiddenPhrases:
+        - 认定违规充电
+        - 确定存在重大消防隐患
+        - 已构成危害公共安全
+        - 该楼栋系消防重大隐患单位
+    reviewGate:
+      required: true
+      threshold: 0.45
+      includeExcluded: true

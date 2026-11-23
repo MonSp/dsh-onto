@@ -1,0 +1,17 @@
+{
+  "package": "ebike-charging",
+  "version": "1.0.0",
+  "generatedAt": "2026-11-23T04:40:20.752Z",
+  "errors": [],
+  "warnings": [],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 2 / 关系 1 / 字典 1 / 行为 3 / 打分规则 3 / 排除规则 2 / 方法论模板 1 / 场景 1 / 字段映射 0 / 数据源 0 / 源映射 0"
+    }
+  ],
+  "score": 100,
+  "passed": true
+}

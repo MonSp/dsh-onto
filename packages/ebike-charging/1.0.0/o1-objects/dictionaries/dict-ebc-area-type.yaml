@@ -1,0 +1,7 @@
+kind: O1Dictionary
+id: dict-ebc-area-type
+name: 楼栋类型
+values:
+  - highrise
+  - multistory
+  - selfbuilt

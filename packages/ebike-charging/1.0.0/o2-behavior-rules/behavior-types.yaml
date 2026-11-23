@@ -1,0 +1,27 @@
+kind: O2BehaviorTypes
+behaviors:
+  - id: BHV-EBC-FLYCHARGE
+    name: 飞线充电事件
+    anchor: OBJ-EBC-BUILDING
+    relations:
+      - REL-EBC-LOCATED
+    states:
+      - 待核实
+      - 已记录
+    trigger: 楼栋外立面飞线充电记录（flyCharge 子记录）
+  - id: BHV-EBC-INDOOR
+    name: 入户充电事件
+    anchor: OBJ-EBC-BUILDING
+    relations: []
+    states:
+      - 待核实
+      - 已记录
+    trigger: 电动自行车入户/楼道内充电记录（indoorCharge 子记录）
+  - id: BHV-EBC-BLOCKAGE
+    name: 堵塞疏散通道事件
+    anchor: OBJ-EBC-BUILDING
+    relations: []
+    states:
+      - 待核实
+      - 已记录
+    trigger: 车辆/充电线缆堵塞疏散通道记录（blockage 子记录）

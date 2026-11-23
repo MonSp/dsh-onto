@@ -1,0 +1,61 @@
+kind: DerivedAgentDuties
+duties:
+  - id: AGT-EBC-CHARGE-RISK-s1
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s1
+    stepType: DATA_INGEST
+    stageDuty: 数据归一、建图
+    toolRefs: &a1
+      - TOOL-EBC-BUILDING
+      - TOOL-EBC-CHARGER
+      - TOOL-EBC-LOCATED
+    llm: allowed
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s2
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s2
+    stepType: BEHAVIOR_CALL
+    stageDuty: 行为实例生成与关系聚合
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s3
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s3
+    stepType: RULE_EVALUATE
+    stageDuty: 排除段（before-scoring，drop/downweight）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s4
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s4
+    stepType: RULE_EVALUATE
+    stageDuty: 打分段（加权汇总 riskScore）
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s5
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s5
+    stepType: SKILL_RUN
+    stageDuty: 方法论模板叙述（证据摘要）
+    toolRefs: *a1
+    llm: allowed
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s6
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s6
+    stepType: AUDIT_CHECK
+    stageDuty: 三层闭合审计闸门
+    toolRefs: []
+    llm: forbidden
+    humanGate: false
+  - id: AGT-EBC-CHARGE-RISK-s7
+    scenario: SCN-EBC-CHARGE-RISK
+    stepId: s7
+    stepType: HUMAN_REVIEW
+    stageDuty: 人工复核（认定唯一出口）
+    toolRefs: []
+    llm: forbidden
+    humanGate: true
