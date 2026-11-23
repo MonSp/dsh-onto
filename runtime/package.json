@@ -1,6 +1,6 @@
 {
   "name": "@dsh-onto/runtime",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "dsh-onto 公共运行与治理库：取数、身份权限、运行记录、复核/批准、动作台账与审计（无自动 dsh 装配）",
