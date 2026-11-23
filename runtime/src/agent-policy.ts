@@ -255,7 +255,7 @@ function pickMaskToken(phrases: readonly string[]): string {
 }
 
 /** 短语非空即必须有可用标记；全冲突（病态构造）fail-loud，不带短语回显。 */
-function requireMaskToken(phrases: readonly string[]): string {
+export function requireMaskToken(phrases: readonly string[]): string {
   const token = pickMaskToken(phrases)
   if (token === '') {
     throw new AgentToolError('INVALID_TOOL_OUTPUT', '输出契约失败: 禁语短语与脱敏标记冲突')

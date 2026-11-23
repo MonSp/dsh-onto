@@ -25,6 +25,7 @@ import {
   abstractSkillDrafts,
   buildDefaultReportSurface,
   buildDiffTable,
+  buildRunDiffView,
   buildRunRecord,
   buildRunReport,
   buildTaskSignature,
@@ -92,6 +93,7 @@ import {
   renderExportText,
   renderRunDiffText,
   renderRunText,
+  requireMaskToken,
   retreatPhraseEcho,
   retreatRenderText,
   reviseTopHitAdvice,
@@ -870,6 +872,65 @@ export function projectRunReportMeta<R>(value: RunReportToolValue): R {
     surface: value.surface,
     surfaceSource: value.surfaceSource,
   } as unknown as R
+}
+
+/* ---------------- chat-run-report S2.3 之对比面（report-export-compare） ---------------- */
+
+/** show_run_diff 模型面精简值（无自由证据文本）。 */
+export interface DiffCardValue {
+  runIdA: string
+  runIdB: string
+  sameDataset: boolean
+  auditPassedA: boolean
+  auditPassedB: boolean
+  summary: {
+    deltaCount: number
+    addedCount: number
+    removedCount: number
+    maxAbsDelta: number | null
+    humanReviewRequired: true
+  }
+  topDeltas: Array<{
+    candidateId: string
+    riskScoreA: number | null
+    riskScoreB: number | null
+    riskScoreDelta: number | null
+  }>
+  humanReviewRequired: true
+}
+
+function fmtDiffNum(v: number | null): string {
+  return v === null ? '—' : String(v)
+}
+
+/** 模型面回退文本（对比卡渲染失败/无 toolview 时宿主按原文渲染）。 */
+export function renderRunDiffCardText(value: DiffCardValue, phrases: readonly string[] = []): string {
+  const list = [...new Set(phrases.filter((p) => p !== ''))]
+  const token = list.length > 0 ? requireMaskToken(list) : ''
+  // ID 面与 renderRunDiffText 同口径：撞短语 fail-loud（不改写 ID），拼接重组交整段兜底
+  const idFace = (key: string, s: string) => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines = [
+    `对比 ${idFace('runIdA', value.runIdA)} → ${idFace('runIdB', value.runIdB)}${value.sameDataset ? '' : '（数据集不同）'}`,
+    `审计 A ${value.auditPassedA ? '过' : '未过'} / B ${value.auditPassedB ? '过' : '未过'}`
+      + ` · Δ ${value.summary.deltaCount} · +${value.summary.addedCount}/-${value.summary.removedCount}`
+      + ` · max|Δ| ${value.summary.maxAbsDelta === null ? '—' : value.summary.maxAbsDelta}`,
+    ...value.topDeltas.map(
+      (d) =>
+        `- ${idFace('candidateId', d.candidateId)} A ${fmtDiffNum(d.riskScoreA)} B ${fmtDiffNum(d.riskScoreB)} Δ ${fmtDiffNum(d.riskScoreDelta)}`,
+    ),
+    '对比卡在会话中渲染；humanReviewRequired=true。',
+  ]
+  return retreatRenderText(lines.join('\n'), list)
+}
+
+/** presentationMeta 投影：只携两侧 runId 引用，无数值、无短语。 */
+export function projectDiffCardMeta<R>(value: DiffCardValue): R {
+  return { kind: 'diff', runIdA: value.runIdA, runIdB: value.runIdB } as unknown as R
 }
 
 /** 解析批量场景清单：缺省（undefined/null/空数组）全场景；显式列表去重保序，错型 fail-fast。 */
@@ -2217,6 +2278,82 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
     }))
 
   reg('run', () => defineTool({
+      name: 'show_run_diff',
+      description:
+        '打开两轮运行的对比卡（对话内渲染：摘要 → delta 表 → 命中/排除增删；只读）。'
+        + '对比数据来自 runtime 受权运行结果（compareRunRecords 同源）；缺席侧分数为 null 不补 0。'
+        + '组件事件只做筛选/展开/跳转；v1 固定布局。',
+      parameters: {
+        runIdA: { type: 'string', required: true, description: '基准运行 ID（A）' },
+        runIdB: { type: 'string', required: true, description: '对比运行 ID（B）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            runIdA: { type: 'string', required: true },
+            runIdB: { type: 'string', required: true },
+            sameDataset: { type: 'boolean', required: true },
+            auditPassedA: { type: 'boolean', required: true },
+            auditPassedB: { type: 'boolean', required: true },
+            summary: { type: 'json', required: true },
+            topDeltas: { type: 'json', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (args, value) => {
+          const v = value as unknown as DiffCardValue
+          // 双 run 红线并集（compare_runs 同口径）：防跨段重组外泄
+          const phrases = [
+            ...new Set([
+              ...redlinesForRuns(ws, args),
+              ...(recallPhrases(v.runIdA) ?? []),
+              ...(recallPhrases(v.runIdB) ?? []),
+            ]),
+          ]
+          return textBlock(renderRunDiffCardText(v, phrases))
+        },
+        presentationMeta: (_args, value) => projectDiffCardMeta(value as unknown as DiffCardValue),
+      },
+      execute: toolExecute(
+        (args: { runIdA: string; runIdB: string }) => {
+          requireBizAuth('history', null, { typeExists: () => true, instanceExists: () => true })
+          const a = loadRunRecord(ws.root, args.runIdA)
+          const b = loadRunRecord(ws.root, args.runIdB)
+          const identity = strict ? requireBusinessIdentity('history') : undefined
+          if (identity) {
+            assertBusinessRun(identity, a)
+            assertBusinessRun(identity, b)
+          }
+          const view = buildRunDiffView(a, b)
+          const phrases = [...new Set([...a.redlines, ...b.redlines].filter((p) => p !== ''))]
+          const value = {
+            runIdA: view.head.runIdA,
+            runIdB: view.head.runIdB,
+            sameDataset: view.head.sameDataset,
+            auditPassedA: view.head.auditPassedA,
+            auditPassedB: view.head.auditPassedB,
+            summary: { ...view.summary },
+            topDeltas: [...view.deltas]
+              .sort((d1, d2) => Math.abs(d2.riskScoreDelta ?? 0) - Math.abs(d1.riskScoreDelta ?? 0))
+              .slice(0, 10)
+              .map((d) => ({
+                candidateId: d.candidateId,
+                riskScoreA: d.riskScoreA,
+                riskScoreB: d.riskScoreB,
+                riskScoreDelta: d.riskScoreDelta,
+              })),
+            humanReviewRequired: true as const,
+          }
+          return toolOut(enforceOutputPolicy(value, phrases))
+        },
+        [],
+        (args) => redlinesForRuns(ws, args),
+      ),
+    }))
+
+  reg('run', () => defineTool({
       name: 'save_report_page',
       description:
         '把对话中用过的报表 surface 沉淀为可复用插件页（spec chat-run-report S2.7）。'
@@ -2746,8 +2883,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
-        render: (args, value) =>
-          textBlock(renderRunDiffText(value as unknown as RunDiff, redlinesForRuns(ws, args))),
+        render: (args, value) => {
+          // 双 run 红线并集（show_run_diff 卡面同口径）：防跨段重组外泄
+          const d = value as unknown as RunDiff
+          const phrases = [
+            ...new Set([
+              ...redlinesForRuns(ws, args),
+              ...(recallPhrases(d.runIdA) ?? []),
+              ...(recallPhrases(d.runIdB) ?? []),
+            ]),
+          ]
+          return textBlock(renderRunDiffText(d, phrases))
+        },
       },
       execute: toolExecute(
         (args: { runIdA: string; runIdB: string }) => {

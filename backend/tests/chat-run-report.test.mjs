@@ -28,6 +28,7 @@ import {
 import {
   leanRunReport,
   projectRunReportMeta,
+  renderRunDiffCardText,
   renderRunReportText,
 } from '../dist/agent-tools.js'
 import { apply as applyTools } from '../dist/agent-tools.js'
@@ -329,7 +330,7 @@ test('wire getRunReport：strict 越权身份拒绝，同身份放行', async ()
 })
 
 test('沙箱分类：报表工具登记为 onto 能力（onto 预设放行面）', () => {
-  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages']) {
+  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages', 'show_run_diff']) {
     assert.equal(classifyToolCapability(name), 'onto', `${name} 须归 onto`)
   }
 })
@@ -483,6 +484,86 @@ test('save_report_page：strict 写目标收权——跨身份覆写拒、同身
       .get('save_report_page')
       .execute({ name: 'b-page', runId: 'run-b0000001', surface }, {})
     assert.notEqual(bPage.pageId, first.pageId)
+  } finally {
+    host.dispose()
+    configurePhraseStore(null)
+  }
+})
+
+test('show_run_diff：工具面精简 + meta 只携引用 + 回退文本', async () => {
+  const host = fixture()
+  try {
+    const root = join(host.dir, 'dsh-onto', 'workspace')
+    saveRunRecord(
+      root,
+      buildRunRecord({
+        package: { name: 'aml-analysis', version: '1.0.0' },
+        dataset: fakeDataset(),
+        result: fakeResult('run-diff-a'),
+        redlines: [],
+      }),
+    )
+    const bResult = fakeResult('run-diff-b')
+    bResult.candidates[0].riskScore = 0.9
+    saveRunRecord(
+      root,
+      buildRunRecord({
+        package: { name: 'aml-analysis', version: '1.0.0' },
+        dataset: fakeDataset(),
+        result: bResult,
+        redlines: [],
+      }),
+    )
+    host.runtime.run(() => {
+      businessPolicy.setIdentityProvider(() => identity('tester'))
+    })
+    applyTools(host.ctx)
+    const tool = host.tools.get('show_run_diff')
+    const value = await tool.execute({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, {})
+    assert.equal(value.humanReviewRequired, true)
+    assert.equal(value.runIdA, 'run-diff-a')
+    assert.equal(value.topDeltas.length, 1)
+    assert.ok(Math.abs((value.topDeltas[0].riskScoreDelta ?? 0) - 0.4) < 1e-9)
+    const keys = walkKeys(value)
+    assert.ok(!keys.has('evidence'))
+    assert.ok(!keys.has('evidenceChains'))
+    const meta = tool.output.presentationMeta({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, value)
+    assert.deepEqual(Object.keys(meta).sort(), ['kind', 'runIdA', 'runIdB'])
+    assert.equal(JSON.stringify(meta).includes('0.9'), false)
+    const text = tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, value)
+    assert.ok(text[0].text.includes('run-diff-a'))
+    assert.ok(text[0].text.includes('run-diff-b'))
+
+    // 双 run 红线并集遮蔽：B 侧短语也必须遮（P2.2 跨段重组防线）
+    // 短语注册表按 runtime 上下文隔离——须在宿主上下文内注册（同 execute/render 作用域）
+    host.runtime.run(() => {
+      rememberPhrases('run-diff-b', ['B-ONLY-PHRASE'])
+    })
+    const crafted = {
+      ...value,
+      topDeltas: [
+        { candidateId: 'C1 B-ONLY-PHRASE', riskScoreA: 0.1, riskScoreB: 0.2, riskScoreDelta: 0.1 },
+      ],
+    }
+    // ID 面撞短语 fail-loud（renderRunDiffText 家族同口径：工具层不改写 ID）
+    assert.throws(
+      () => tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, crafted),
+      (e) => e.code === 'INVALID_TOOL_OUTPUT' && /ID 回指字段冲突/.test(e.message),
+    )
+    assert.throws(
+      () => renderRunDiffCardText(crafted, ['B-ONLY-PHRASE']),
+      (e) => e.code === 'INVALID_TOOL_OUTPUT' && /ID 回指字段冲突/.test(e.message),
+    )
+    // 拼接重组兜底：短语横跨 runIdA/runIdB 分隔符重组 → 整段退避（零外泄）
+    const spliced = {
+      ...value,
+      runIdA: 'leadB-ONLY-',
+      runIdB: 'PHRASEtail',
+      topDeltas: [],
+    }
+    const masked = renderRunDiffCardText(spliced, ['B-ONLY- → PHRASE'])
+    assert.equal(masked.includes('B-ONLY- → PHRASE'), false)
+    assert.equal(masked.includes('PHRASEtail'), false)
   } finally {
     host.dispose()
     configurePhraseStore(null)

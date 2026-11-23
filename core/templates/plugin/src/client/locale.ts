@@ -38,6 +38,12 @@ export const zh = {
   pages: '报表页',
   pagesEmpty: '（暂无沉淀的报表页）',
   pagesRun: '作用运行',
+  compareWith: '对比',
+  exportMd: '复制 Markdown',
+  exportCsv: '复制 CSV',
+  exportDoneMd: '✓ Markdown',
+  exportDoneCsv: '✓ CSV',
+  diffDataset: '≠dataset',
 }
 
 export const en: Record<string, string> = {
@@ -78,4 +84,10 @@ export const en: Record<string, string> = {
   pages: 'Report pages',
   pagesEmpty: '(no saved report pages yet)',
   pagesRun: 'Run',
+  compareWith: 'Compare with',
+  exportMd: 'Copy Markdown',
+  exportCsv: 'Copy CSV',
+  exportDoneMd: '✓ Markdown',
+  exportDoneCsv: '✓ CSV',
+  diffDataset: '≠dataset',
 }

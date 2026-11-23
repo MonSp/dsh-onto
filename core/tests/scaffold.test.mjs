@@ -124,6 +124,24 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     const reportTs = readFileSync(join(outDir, 'src', 'client', 'report.ts'), 'utf8')
     assert.ok(reportTs.includes('@dsh-onto/core/surface'))
     assert.ok(reportTs.includes('@dsh-onto/core/report'))
+    for (const comp of ['KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'TabsBox']) {
+      assert.ok(reportTs.includes(comp), `report.ts 须渲染 ${comp}`)
+    }
+    assert.ok(reportTs.includes('ChartBox'), 'report.ts 须渲染 ChartBox')
+    assert.ok(reportTs.includes("case 'Chart'"))
+    for (const extra of ['evalWhen', 'renderCell', 'renderSpark', 'palette']) {
+      assert.ok(reportTs.includes(extra), `report.ts 须渲染 ${extra}`)
+    }
+    for (const extra of ['projectChartGroups', 'projectChartStacks', 'projectChartSeries', 'collectUiDefaults', 'filterBy', 'case \'Input\'', 'case \'Select\'']) {
+      assert.ok(reportTs.includes(extra), `report.ts 须渲染 ${extra}`)
+    }
+    for (const extra of ['ComparePanel', 'createDiffToolView', 'copyTableText']) {
+      assert.ok(reportTs.includes(extra), `report.ts 须渲染 ${extra}`)
+    }
+    assert.ok(appTs.includes('show_run_diff'), 'app.ts 须注册 show_run_diff toolview')
+    // 同 run 对比互斥 + 换 pair/换页清旧卡（防残留）；表格筛选可空判空（堵 Number(null)=0）
+    assert.ok(appTs.includes('compareRunId === runId'), 'app.ts 须含同 run 对比互斥')
+    assert.ok(reportTs.includes('filterNum'), 'report.ts 须含筛选数值化判空')
     // 契约冻结
     const bindings = readFileSync(join(outDir, 'src', 'bindings.ts'), 'utf8')
     assert.ok(bindings.includes('SRC-WST-CORE'))

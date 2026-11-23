@@ -96,6 +96,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),
       desc('ontoRuntime', 'showRun', true, 'RSH', 'Show one run record (human-review face).'),
       desc('ontoRuntime', 'getRunReport', true, 'RGR', 'Run report projection (human-review face).'),
+      desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records (human-review face).'),
       desc('ontoRuntime', 'listReportPages', false, 'RLP', 'List saved report pages (human-review face).'),
       desc('ontoRuntime', 'getReportPage', true, 'RGP', 'Show one saved report page (human-review face).'),
     ]

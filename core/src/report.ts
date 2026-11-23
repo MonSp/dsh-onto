@@ -50,7 +50,11 @@ export interface ReportCandidateRow {
   riskScore: number
   riskLevel?: string
   hitRuleIds: string[]
+  /** 派生计数（分组柱/度量用；= hitRuleIds.length）。 */
+  hitRuleCount: number
   evidenceChains: EvidenceChainEntry[]
+  /** 派生计数（= evidenceChains.length）。 */
+  evidenceCount: number
   narrative: string[]
   pendingChecks: PendingCheck[]
   pendingVerification: boolean
@@ -98,11 +102,14 @@ export const REPORT_FIELD_REFS = [
   'candidates[].riskScore',
   'candidates[].riskLevel',
   'candidates[].hitRuleIds[]',
+  'candidates[].hitRuleCount',
   'candidates[].evidenceChains[].ruleId',
   'candidates[].evidenceChains[].score',
   'candidates[].evidenceChains[].evidence',
+  'candidates[].evidenceCount',
   'candidates[].narrative[]',
   'candidates[].pendingChecks[].ruleId',
+  'candidates[].pendingChecks[].missing[]',
   'candidates[].pendingChecks[].note',
   'candidates[].pendingVerification',
   'excluded[].candidateId',
@@ -110,6 +117,7 @@ export const REPORT_FIELD_REFS = [
   'ruleHitLog[].ruleId',
   'ruleHitLog[].candidateId',
   'ruleHitLog[].score',
+  'ruleHitLog[].ts',
   'audit.passed',
   'audit.checks[].detail',
 ] as const
@@ -121,19 +129,23 @@ export const CANDIDATE_ROW_FIELDS = [
   'riskScore',
   'riskLevel',
   'hitRuleIds',
+  'hitRuleCount',
   'evidenceChains',
+  'evidenceCount',
   'narrative',
   'pendingChecks',
   'pendingVerification',
 ] as const
 
-/** 可整体绑定的列表容器（v1 实际绑定面：Table.rowsBind=/candidates；Accordion=行级明细四列表）。 */
+/** 可整体绑定的列表容器（Table.rowsBind=/candidates；Accordion=行级明细四列表；Timeline 额外含 ruleHitLog）。 */
 export const REPORT_LIST_REFS = [
   'candidates',
   'candidates[].evidenceChains',
   'candidates[].pendingChecks',
   'candidates[].narrative',
   'candidates[].hitRuleIds',
+  'candidates[].pendingChecks[].missing',
+  'ruleHitLog',
 ] as const
 
 /** RunRecord → RunReport 纯投影。 */
@@ -145,11 +157,13 @@ export function buildRunReport(record: RunRecord): RunReport {
     riskScore: c.riskScore,
     ...(c.riskLevel === undefined ? {} : { riskLevel: c.riskLevel }),
     hitRuleIds: [...c.hitRuleIds],
+    hitRuleCount: c.hitRuleIds.length,
     evidenceChains: c.evidenceChains.map((e) => ({
       ruleId: e.ruleId,
       score: e.score,
       evidence: e.evidence,
     })),
+    evidenceCount: c.evidenceChains.length,
     narrative: [...c.narrative],
     pendingChecks: c.pendingChecks.map((p) => ({
       ...(p.ruleId === undefined ? {} : { ruleId: p.ruleId }),
@@ -290,4 +304,265 @@ export function resolveReportPointer(report: RunReport, pointer: string): unknow
     if (cur === undefined) return undefined
   }
   return cur
+}
+
+export interface ChartPoint {
+  label: string
+  value: number
+}
+
+/**
+ * 图表取点（null-safe，渲染层共用）：非有限值跳过并断线分段（绝不补 0），
+ * 行序即 x 序；全空返回空段（渲染显 `—`）。
+ */
+export function projectChartPoints(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  valueField: string,
+): { points: ChartPoint[]; segments: ChartPoint[][] } {
+  const rows = resolveReportPointer(report, rowsBind)
+  const points: ChartPoint[] = []
+  const segments: ChartPoint[][] = []
+  let current: ChartPoint[] = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const raw = rec === null ? undefined : rec[valueField]
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        const pt: ChartPoint = {
+          label: rec === null ? '' : fmtChartLabel(rec[labelField]),
+          value: raw,
+        }
+        points.push(pt)
+        current.push(pt)
+      } else if (current.length > 0) {
+        segments.push(current)
+        current = []
+      }
+    }
+  }
+  if (current.length > 0) segments.push(current)
+  return { points, segments }
+}
+
+function fmtChartLabel(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (Array.isArray(v)) return v.map((x) => fmtChartLabel(x)).join(', ')
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+export interface ChartSeriesPoint {
+  label: string
+  value: number
+  /** 全局行序（多系列共享 x 轴对齐）。 */
+  index: number
+}
+
+export interface ChartSeries {
+  label: string
+  points: ChartSeriesPoint[]
+  segments: ChartSeriesPoint[][]
+}
+
+/**
+ * 多系列折线（report-series-state S2.1）：按 seriesField 分组，x 轴取全局行序（跨系列对齐）；
+ * 组内断线语义同 projectChartPoints（非有限值作缺断，断线不补 0）；点标签取 labelField。
+ */
+export function projectChartSeries(
+  report: RunReport,
+  rowsBind: string,
+  seriesField: string,
+  labelField: string,
+  valueField: string,
+): ChartSeries[] {
+  const rows = resolveReportPointer(report, rowsBind)
+  const order: string[] = []
+  const entries = new Map<string, Array<{ index: number; pt: ChartSeriesPoint | null }>>()
+  if (Array.isArray(rows)) {
+    let idx = 0
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const key = rec === null ? '' : fmtChartLabel(rec[seriesField])
+      if (!entries.has(key)) {
+        entries.set(key, [])
+        order.push(key)
+      }
+      const raw = rec === null ? undefined : rec[valueField]
+      const list = entries.get(key) as Array<{ index: number; pt: ChartSeriesPoint | null }>
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        list.push({
+          index: idx,
+          pt: { label: rec === null ? '' : fmtChartLabel(rec[labelField]), value: raw, index: idx },
+        })
+      } else {
+        // 非有限值 = 该系列的缺断标记（断线用），并推进全局 x
+        list.push({ index: idx, pt: null })
+      }
+      idx += 1
+    }
+  }
+  return order.map((label) => {
+    const list = entries.get(label) as Array<{ index: number; pt: ChartSeriesPoint | null }>
+    const points: ChartSeriesPoint[] = []
+    const segments: ChartSeriesPoint[][] = []
+    let current: ChartSeriesPoint[] = []
+    for (const e of list) {
+      if (e.pt !== null) {
+        points.push(e.pt)
+        current.push(e.pt)
+      } else if (current.length > 0) {
+        segments.push(current)
+        current = []
+      }
+    }
+    if (current.length > 0) segments.push(current)
+    return { label, points, segments }
+  })
+}
+
+/** 分组柱：同行多列并排（valueFields 与返回 values 按序对齐；非有限位为 null 不画）。 */
+export function projectChartGroups(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  valueFields: readonly string[],
+): Array<{ label: string; values: Array<number | null> }> {
+  const rows = resolveReportPointer(report, rowsBind)
+  const out: Array<{ label: string; values: Array<number | null> }> = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const values = valueFields.map((f) => {
+        const raw = rec === null ? undefined : rec[f]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+      })
+      if (values.every((v) => v === null)) continue
+      out.push({ label: rec === null ? '' : fmtChartLabel(rec[labelField]), values })
+    }
+  }
+  return out
+}
+
+export interface ChartStackSegment {
+  label: string
+  value: number
+}
+
+/** 堆叠柱：行内嵌套列表堆段（段内非有限剔除；无有效段的行跳过）。 */
+export function projectChartStacks(
+  report: RunReport,
+  rowsBind: string,
+  labelField: string,
+  stackListField: string,
+  stackLabelField: string,
+  stackValueField: string,
+): Array<{ label: string; segments: ChartStackSegment[] }> {
+  const rows = resolveReportPointer(report, rowsBind)
+  const out: Array<{ label: string; segments: ChartStackSegment[] }> = []
+  if (Array.isArray(rows)) {
+    for (const r of rows) {
+      const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
+      const list = rec === null ? undefined : rec[stackListField]
+      const segments: ChartStackSegment[] = []
+      if (Array.isArray(list)) {
+        for (const it of list) {
+          const item = it !== null && typeof it === 'object' ? (it as Record<string, unknown>) : null
+          const raw = item === null ? undefined : item[stackValueField]
+          if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+          segments.push({ label: item === null ? '' : fmtChartLabel(item[stackLabelField]), value: raw })
+        }
+      }
+      if (segments.length === 0) continue
+      out.push({ label: rec === null ? '' : fmtChartLabel(rec[labelField]), segments })
+    }
+  }
+  return out
+}
+
+/** `when` 条件显隐谓词（数据驱动 / UI 状态双源，渲染期本地求值；report-extras S2.1、report-series-state S2.3）。 */
+export interface ReportWhen {
+  /** 报表指针（调用方经 bindPointer 归一后传入）；与 field 互斥必居其一。 */
+  bind?: string
+  /** UI 状态源（input/select 的 id）；与 bind 互斥必居其一。 */
+  field?: string
+  op: 'eq' | 'neq' | 'in' | 'not-in' | 'gt' | 'gte' | 'lt' | 'lte' | 'empty' | 'not-empty'
+  value?: string | number | boolean | Array<string | number | boolean>
+}
+
+function isEmptyValue(raw: unknown): boolean {
+  return (
+    raw === null ||
+    raw === undefined ||
+    raw === '' ||
+    (Array.isArray(raw) && raw.length === 0)
+  )
+}
+
+/**
+ * 可判定性：缺失指针/空投影/空白串一律不可判定（比较族谓词全部不满足——
+ * 含 neq/not-in 取反侧，防「不可求值反而出真」；也堵 Number(null)=0 陷阱）。
+ */
+function isEvaluableValue(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return false
+  if (typeof raw === 'string' && raw.trim() === '') return false
+  return true
+}
+
+function looseEq(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  // 布尔只严格等（false 不得等于 0/'false'）
+  if (typeof a === 'boolean' || typeof b === 'boolean') return false
+  if (typeof a === 'number' && typeof b === 'number') return a === b
+  return String(a) === String(b)
+}
+
+/** 条件谓词求值：比较族不可判定一律不满足；empty/not-empty 专责空语义。 */
+export function evalWhen(
+  report: RunReport,
+  when: ReportWhen,
+  uiState: Readonly<Record<string, string>> = {},
+): boolean {
+  let raw: unknown
+  if (when.bind !== undefined) {
+    raw = resolveReportPointer(report, when.bind)
+  } else if (when.field !== undefined) {
+    // UI 状态源：未注册 id → 不可判定 → 一律不渲染（含 empty——注册件的空值才谈空语义）
+    if (!Object.prototype.hasOwnProperty.call(uiState, when.field)) return false
+    raw = uiState[when.field]
+  } else {
+    return false
+  }
+  switch (when.op) {
+    case 'empty':
+      return isEmptyValue(raw)
+    case 'not-empty':
+      return !isEmptyValue(raw)
+    case 'eq':
+    case 'neq':
+    case 'in':
+    case 'not-in':
+    case 'gt':
+    case 'gte':
+    case 'lt':
+    case 'lte': {
+      if (!isEvaluableValue(raw)) return false
+      if (when.op === 'eq') return looseEq(raw, when.value)
+      if (when.op === 'neq') return !looseEq(raw, when.value)
+      if (when.op === 'in') return Array.isArray(when.value) && when.value.some((v) => looseEq(raw, v))
+      if (when.op === 'not-in') return Array.isArray(when.value) && !when.value.some((v) => looseEq(raw, v))
+      // 布尔不入大小比较（Number(true)=1 曲解语义；布尔只严格等）
+      if (typeof raw === 'boolean' || typeof when.value === 'boolean') return false
+      const a = Number(raw)
+      const b = Number(when.value)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false
+      if (when.op === 'gt') return a > b
+      if (when.op === 'gte') return a >= b
+      if (when.op === 'lt') return a < b
+      return a <= b
+    }
+    default:
+      return false
+  }
 }

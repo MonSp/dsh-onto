@@ -5,9 +5,14 @@ import {
   CANDIDATE_ROW_FIELDS,
   REPORT_FIELD_REFS,
   buildRunReport,
+  evalWhen,
   isCandidateRowField,
   isReportFieldRef,
   isReportPointer,
+  projectChartGroups,
+  projectChartPoints,
+  projectChartSeries,
+  projectChartStacks,
   reportPointerToRef,
   resolveReportPointer,
 } from '../dist/index.js'
@@ -175,4 +180,141 @@ test('引用闭包：满配报表上每个稳定引用均可解析', () => {
   assert.equal(resolveReportPointer(report, '/candidates/1/riskScore'), 0.368)
   assert.equal(resolveReportPointer(report, '/candidates/9/riskScore'), undefined)
   assert.equal(resolveReportPointer(report, '/nope'), undefined)
+})
+
+test('projectChartPoints：null-safe 取点、断线分段、绝不补 0', () => {
+  const record = fullRecord()
+  // 中间插入不可数值化行 → 跳过并断线（两侧各成一段）
+  record.result.candidates.splice(1, 0, {
+    ...record.result.candidates[1],
+    candidateId: 'ALERT-BIN-99',
+    riskScore: Number.NaN,
+  })
+  const report = buildRunReport(record)
+  const { points, segments } = projectChartPoints(report, '/candidates', 'candidateId', 'riskScore')
+  assert.equal(points.length, 2)
+  assert.deepEqual(points.map((p) => p.label), ['ALERT-BIN-03', 'ALERT-BIN-01'])
+  assert.deepEqual(points.map((p) => p.value), [0.94, 0.368])
+  assert.equal(segments.length, 2, '缺断点断线分段')
+  assert.equal(segments[0].length, 1)
+  assert.equal(segments[1].length, 1)
+
+  // 空候选 → 空点空段（渲染显 '—'，不得画 0）
+  const empty = fullRecord()
+  empty.result.candidates = []
+  const emptyReport = buildRunReport(empty)
+  const none = projectChartPoints(emptyReport, '/candidates', 'candidateId', 'riskScore')
+  assert.equal(none.points.length, 0)
+  assert.equal(none.segments.length, 0)
+
+  // 全有效 → 单段
+  const ok = projectChartPoints(buildRunReport(fullRecord()), '/candidates', 'candidateId', 'riskScore')
+  assert.equal(ok.segments.length, 1)
+  assert.equal(ok.points.length, 2)
+})
+
+test('evalWhen：数据驱动谓词（各 op / 不可求值不满足）', () => {
+  const report = buildRunReport(fullRecord())
+  const at = (op, value) => ({ bind: '/summary/dataStatus', op, ...(value === undefined ? {} : { value }) })
+
+  // fullRecord 带 dataStatus: 'verified'
+  assert.equal(evalWhen(report, at('eq', 'verified')), true)
+  assert.equal(evalWhen(report, at('eq', 'insufficient')), false)
+  assert.equal(evalWhen(report, at('neq', 'insufficient')), true)
+  assert.equal(evalWhen(report, at('in', ['verified', 'conditional'])), true)
+  assert.equal(evalWhen(report, at('not-in', ['insufficient'])), true)
+  assert.equal(evalWhen(report, at('empty')), false)
+  assert.equal(evalWhen(report, at('not-empty')), true)
+
+  // 数值比较
+  const score = (op, value) => ({ bind: '/summary/maxRiskScore', op, value })
+  assert.equal(evalWhen(report, score('gt', 0.5)), true)
+  assert.equal(evalWhen(report, score('gt', 0.94)), false)
+  assert.equal(evalWhen(report, score('gte', 0.94)), true)
+  assert.equal(evalWhen(report, score('lt', 1)), true)
+  assert.equal(evalWhen(report, score('lte', 0.94)), true)
+
+  // 不可求值（null 比较 / 缺字段）→ 不满足（含 neq/not-in 取反侧）
+  const emptyRec = fullRecord()
+  emptyRec.result.candidates = []
+  const emptyReport = buildRunReport(emptyRec)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'gt', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'eq', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'neq', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'not-in', value: [1] }), false)
+  assert.equal(evalWhen(report, { bind: '/nope', op: 'gte', value: 0 }), false)
+  // null 分数不得当 0 分（Number(null)=0 陷阱）
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'eq', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'gte', value: 0 }), false)
+  assert.equal(evalWhen(emptyReport, { bind: '/summary/maxRiskScore', op: 'lte', value: 0 }), false)
+  // 布尔严格等（false 不得等于 0）
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: true }), true)
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'eq', value: 1 }), false)
+  // 布尔不入大小比较（Number(true)=1 曲解语义）
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'gt', value: 0 }), false)
+  assert.equal(evalWhen(report, { bind: '/summary/auditPassed', op: 'lte', value: 1 }), false)
+  assert.equal(evalWhen(report, { bind: '/summary/maxRiskScore', op: 'lt', value: true }), false)
+
+  // 列表指针 empty/not-empty（数组空/非空语义，如「有缺失项才展示」）
+  assert.equal(evalWhen(report, { bind: '/candidates/0/pendingChecks/0/missing', op: 'not-empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/candidates/0/hitRuleIds', op: 'not-empty' }), true)
+  assert.equal(evalWhen(report, { bind: '/candidates/1/pendingChecks', op: 'empty' }), true)
+
+  // UI 状态源：未注册一律不渲染；注册后走同一谓词集
+  assert.equal(evalWhen(report, { field: 'q', op: 'empty' }, {}), false)
+  assert.equal(evalWhen(report, { field: 'q', op: 'empty' }, { q: '' }), true)
+  assert.equal(evalWhen(report, { field: 'q', op: 'not-empty' }, { q: 'abc' }), true)
+  assert.equal(evalWhen(report, { field: 'q', op: 'eq', value: 'abc' }, { q: 'abc' }), true)
+})
+
+test('多系列/堆叠/分组投影（null-safe 同取点语义）', () => {
+  const record = fullRecord()
+  record.result.ruleHitLog.push(
+    { ruleId: 'RULE-WST-OVER', candidateId: 'ALERT-BIN-03', score: 0.2, ts: '2026-11-22T00:00:02Z' },
+    { ruleId: 'RULE-WST-MIX', candidateId: 'ALERT-BIN-01', score: 0.1, ts: '2026-11-22T00:00:03Z' },
+  )
+  const report = buildRunReport(record)
+
+  // 分组柱：同行多列
+  const groups = projectChartGroups(report, '/candidates', 'candidateId', ['riskScore', 'hitRuleCount'])
+  assert.equal(groups.length, 2)
+  assert.deepEqual(groups[0], { label: 'ALERT-BIN-03', values: [0.94, 2] })
+  assert.deepEqual(groups[1], { label: 'ALERT-BIN-01', values: [0.368, 1] })
+
+  // 堆叠：行内 evidenceChains 段
+  const stacks = projectChartStacks(report, '/candidates', 'candidateId', 'evidenceChains', 'ruleId', 'score')
+  assert.equal(stacks.length, 2)
+  assert.deepEqual(stacks[0].segments.map((s) => s.label), ['RULE-WST-MIX', 'RULE-WST-OVER'])
+  assert.deepEqual(stacks[0].segments.map((s) => s.value), [0.5, 0.44])
+  assert.equal(stacks[1].segments.length, 1)
+
+  // 多系列折线：按 candidateId 分组（首次出现序；x=全局行序）
+  const series = projectChartSeries(report, '/ruleHitLog', 'candidateId', 'ruleId', 'score')
+  assert.deepEqual(series.map((s) => s.label), ['ALERT-BIN-03', 'ALERT-BIN-01'])
+  assert.equal(series[0].points.length, 2)
+  assert.equal(series[1].points.length, 1)
+  assert.deepEqual(series[0].points.map((p) => p.label), ['RULE-WST-MIX', 'RULE-WST-OVER'])
+  assert.deepEqual(series[0].points.map((p) => p.index), [0, 1])
+  assert.deepEqual(series[1].points.map((p) => p.index), [2])
+
+  // null-safe：非有限值剔除；全空行跳过
+  record.result.candidates[1].riskScore = Number.NaN
+  record.result.candidates[1].hitRuleIds = []
+  const g2 = projectChartGroups(buildRunReport(record), '/candidates', 'candidateId', ['riskScore', 'hitRuleCount'])
+  assert.deepEqual(g2[1], { label: 'ALERT-BIN-01', values: [null, 0] })
+})
+
+test('多系列折线：组内缺断断线（与取点语义同构）', () => {
+  const record = fullRecord()
+  record.result.ruleHitLog = [
+    { ruleId: 'R1', candidateId: 'A', score: 0.5, ts: '1' },
+    { ruleId: 'R2', candidateId: 'A', score: Number.NaN, ts: '2' },
+    { ruleId: 'R3', candidateId: 'A', score: 0.7, ts: '3' },
+  ]
+  const series = projectChartSeries(buildRunReport(record), '/ruleHitLog', 'candidateId', 'ruleId', 'score')
+  assert.equal(series.length, 1)
+  assert.equal(series[0].points.length, 2)
+  assert.equal(series[0].segments.length, 2, '缺断两侧断线')
+  assert.deepEqual(series[0].points.map((p) => p.index), [0, 2])
 })

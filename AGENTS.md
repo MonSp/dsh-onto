@@ -25,10 +25,10 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 
 ## 验证阶梯（改动后必跑）
 
-1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（286 项验收测试全绿）。
+1. `core`：`pnpm run build` + `node --test tests/*.test.mjs`（303 项验收测试全绿）。
 2. `backend` / `workbench`：`pnpm install`（依赖变化时）+ `pnpm run build` +
    `node --check dist/index.js dist/client.js`；backend 另跑 `pnpm run test`
-   （agent 工具/技能纯函数，317 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
+   （agent 工具/技能纯函数，318 项全绿，含 attack-surface 不变量表——防线改动必须全表重放）。
 3. `scripts/dump-config.ps1` — 硬断言 `@dsh-onto/backend`、`@dsh-onto/workbench` 均在组合结果中。
 4. `scripts/dev-web.ps1` 启动 → 浏览器冒烟（可 Tabbit）：侧栏「dsh-onto」→ 五个 tab
    （包管理/建模/知识库/校验派生/场景运行）；选中 aml-analysis@1.0.0 → 场景运行
@@ -75,6 +75,7 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
 | `replay.ts` | 发布前回放（api-to-plugin）：随包夹具→映射→场景→基线对照/缺数/越权/版本切换 |
 | `scaffold.ts` | 插件脚手架（api-to-plugin）：已签发包→最小 DSH 插件（模板树 `core/templates/plugin/`） |
 | `report.ts` | RunReport 投影（chat-run-report）：runRef+稳定字段引用，固定页/对话报表共用同一投影 |
+| `diffview.ts` | RunDiffView 跨 run 对比投影（report-export-compare）：缺席侧 null 不补 0，buildRunDiffView 下沉 runstore 保客户端纯度 |
 | `surface.ts` | A2UI 1.0 子集 surface 契约（chat-run-report）：白名单组件、数值槽位只准绑定、配额、默认模板 |
 | `reportpage.ts` | 报表页存储（chat-run-report）：`reports/` 工作区工件、surface 过闸、单段 pageId 围栏 |
 | `cli.ts` | `dsh-onto package/validate/derive/gate/run/runs/source/replay/plugin/knowledge/exp` |

@@ -261,10 +261,23 @@ pnpm dsh --profile dsh-<domain> --no-open
 页面与 Agent 之外，同一次运行还有**对话内交互报表**（A2UI 1.0 子集，catalog `dsh-onto/report/v1`）：
 
 - **打开**：会话里 `show_run_report(runId, surface?)`——摘要卡/候选表/证据展开直接渲染在对话中。
-  `surface` 可按问题组织视图（白名单组件 Card/Stat/Row/Column/Text/Table/Accordion/Button；
-  **数值槽位只准字段绑定**（如 `{"@path":"/summary/maxRiskScore"}`、Table 列 field 用候选行字段），
-  字面量分数/证据会被 `INVALID_ARGS` 拒）；省略 surface 用默认模板。组件事件只做筛选（含表头
-  排序）/展开/跳转（跳转到固定结果页），不接写操作。
+  `surface` 可按问题组织视图（白名单组件 Card/Stat/Row/Column/Text/Table/Accordion/Button/
+  KeyValue/Badge/Callout/Progress/Timeline/Tabs/Chart/Input/Select/Compare；**数值槽位只准字段绑定**（如
+  `{"@path":"/summary/maxRiskScore"}`、Table 列 field 用候选行字段、Timeline 绑
+  `/ruleHitLog` 等列表 + 行字段映射；Chart 序列绑定 `rowsBind + labelField + valueField`
+  出 bars/line/donut，数据数组字面量拒），字面量分数/证据会被 `INVALID_ARGS` 拒）；
+  省略 surface 用默认模板（KeyValue 状态块 + Badge + Stat 行 + 风险分布图 + 候选表）。
+  组件事件只做筛选（含表头排序）/展开/跳转（跳转到固定结果页），不接写操作。
+- **结构增强**：任意节点可带 `when`（数据驱动条件显隐，如 dataStatus=insufficient 才出
+  警示条；也可用 `field` 读 input/select 的界面态）；Table 列 `type`（bar/badge/delta/num）
+  与 `filterBy` 外联筛选；`Stat.spark` 微趋势（`spark:{rowsBind,valueField}`）；Chart
+  `palette` 色板与悬停提示。`when.value`/`palette`/`max` 是呈现配置字面量，数据槽位仍只准绑定。
+- **多系列图表**：`Chart` 支持 `mode:'grouped'`（`valueFields` 同行多列并排柱）、
+  `mode:'stacked'`（`stackFrom` 行内嵌套列表堆出构成，如逐规则得分）、line 的
+  `seriesField`（按行字段分组多折线）；配 `input`/`select` 轻交互件（本地筛选态，零往返）。
+- **导出与对比**：Table `export: true` 出「复制 Markdown / 复制 CSV」（本地剪贴板，
+  取当前视图行）；`show_run_diff(runIdA, runIdB)` 对话内对比卡（delta 表/命中增删/排除
+  增删；缺席侧分数 null 不补 0），报表页可选第二 run 出同一对比面。
 - **同源**：页面与对话报表都经 `getRunReport(runId)` 取同一投影（core `buildRunReport`），数值
   一致由构造保证；展开详情经 wire 受权取数（strict 越权 run 拒绝）。meta 只携 runRef+布局
   引用（无数值、无短语）。
@@ -276,6 +289,9 @@ pnpm dsh --profile dsh-<domain> --no-open
 
 对照：同一次运行的固定页数值 = 对话报表数值 = `show_run_report` 文字面数值（同一投影 + 同一
 渲染器组件）。
+
+> 升级 `@dsh-onto/core` 后请**重新生成插件**：旧生成物对新 surface 组件会显示
+> `unknown component` 并回退文字（生成时烘焙渲染器，不随 link 依赖自动更新）。
 
 ## 8. 卡点记录表
 

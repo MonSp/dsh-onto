@@ -824,8 +824,9 @@ test('I4 收权：新工具面 objectId/objectRef 入参同过 guard，未命中
   // 新工具未带对象面：guard 空过
   assert.equal(grantGuardDecision('compare_runs', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
   assert.equal(grantGuardDecision('export_audit', { runId: 'run-a' }, () => []), undefined)
+  assert.equal(grantGuardDecision('show_run_diff', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
   // 注入 objectId：同 guard 收口，未收权即拒
-  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
+  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'show_run_diff', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
     const denial = grantGuardDecision(tool, { runId: 'run-a', objectId: 'OBJ-NOPE' }, () => [])
     assert.ok(typeof denial === 'string' && denial.includes('OBJECT_NOT_GRANTED'), `${tool} 应拒: ${String(denial)}`)
   }
@@ -985,6 +986,7 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   assert.ok(ONTOOL_NAMES.has('expand_entity'), 'expand_entity 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('project_features'), 'project_features 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('show_run_report'), 'show_run_report 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('show_run_diff'), 'show_run_diff 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('list_report_pages'), 'list_report_pages 须入 ONTOOL_NAMES')
 })

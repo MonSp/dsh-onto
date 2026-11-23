@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInsideDir, isSafeRelPath, PackageStoreError } from './store.js'
+import { diffViewOf, type RunDiffView } from './diffview.js'
 import type { RuntimeDataset, ScenarioPrepSummary, ScenarioRunResult } from './types.js'
 
 export const RUNS_DIR = 'runs'
@@ -299,6 +300,11 @@ function pendingKey(p: { ruleId?: string; note: string }): string {
 
 function finiteOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** 两轮运行记录 → 对比视图（报告面投影；缺席侧 null 不补 0）。 */
+export function buildRunDiffView(a: RunRecord, b: RunRecord): RunDiffView {
+  return diffViewOf(compareRunRecords(a, b))
 }
 
 /**
