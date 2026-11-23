@@ -2205,12 +2205,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       description:
         '打开一次运行的交互报表（对话内渲染：摘要卡/候选表/证据展开；只读）。'
         + 'surface 可按问题组织视图（A2UI 1.0 子集，catalogId "dsh-onto/report/v1"；组件 '
-        + 'Card/Stat/Row/Column/Text/Table/Accordion/Button；数值槽位只接受字段绑定，如 '
-        + '{"@path":"/summary/maxRiskScore"}，Table 列 field 用候选行字段 '
-        + 'candidateId/objectRef/riskScore/riskLevel/hitRuleIds/pendingChecks/pendingVerification；'
-        + 'Table props: rowsBind="/candidates"、columns、expandField、sort、filter；'
-        + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"）。'
-        + '省略 surface 用默认模板。数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
+        + 'Card/Stat/Row/Column/Text/Table/Accordion/Button/KeyValue/Badge/Callout/Progress/Timeline/Tabs/Chart/Input/Select/Compare；'
+        + '数值槽位只接受字段绑定，如 {"@path":"/summary/maxRiskScore"}，字面量分数/数据数组拒（INVALID_ARGS）；'
+        + 'Table 列 field 用候选行字段 '
+        + 'candidateId/objectRef/riskScore/riskLevel/hitRuleIds/pendingChecks/pendingVerification，'
+        + 'columns 列 type: text|num|bar|badge|delta，props: rowsBind="/candidates"、expandField、sort、filter/filterBy；'
+        + 'Chart kind=bars|line|donut，序列绑定 rowsBind+labelField+valueField'
+        + '（多系列 valueFields、mode=grouped|stacked 仅 bars，seriesField 仅 line）；'
+        + 'Stat 可带 spark；Timeline 绑 ruleHitLog 等列表 + 行字段映射；任意节点可带 when（bind/field 条件显隐）；'
+        + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"；'
+        + 'Input/Select 为本地交互件（不扩事件面））。'
+        + '省略 surface 用默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。'
+        + '数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
         + '展开详情经权限校验取数。组件事件只做筛选/展开/跳转。',
       parameters: {
         runId: {
@@ -2222,7 +2228,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           type: 'json',
           description:
             'A2UI 1.0 子集 surface：{version:"1.0",type:"createSurface",surfaceId,catalogId:"dsh-onto/report/v1",root:{id,type,props,children}}。'
-            + '缺省省略=默认模板（摘要卡+候选表+证据展开）。',
+            + '缺省省略=默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。',
         },
       },
       output: {
