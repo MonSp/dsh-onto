@@ -222,22 +222,27 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
 
   // 对比入口（report-export-compare）：选第二 run 即出对比卡，页面与对话同源
   useEffect(() => {
-    if (!api || runId === '' || compareRunId === '') {
+    if (!api || runId === '' || compareRunId === '' || compareRunId === runId) {
       setDiff(null)
       return
     }
+    let live = true
     void (async () => {
-      setError('')
       try {
         const out = unwrap<{ diff: Parameters<typeof diffViewOf>[0] }>(
           await api.compareRuns({ runIdA: runId, runIdB: compareRunId }),
         )
+        if (!live) return
         setDiff(diffViewOf(out.diff))
       } catch (e) {
+        if (!live) return
         setDiff(null)
         setError(errText(e))
       }
     })()
+    return () => {
+      live = false
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, compareRunId])
 

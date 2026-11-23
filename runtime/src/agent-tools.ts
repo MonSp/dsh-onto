@@ -903,7 +903,7 @@ function fmtDiffNum(v: number | null): string {
 }
 
 /** 模型面回退文本（对比卡渲染失败/无 toolview 时宿主按原文渲染）。 */
-export function renderRunDiffCardText(value: DiffCardValue): string {
+export function renderRunDiffCardText(value: DiffCardValue, phrases: readonly string[] = []): string {
   const lines = [
     `对比 ${value.runIdA} → ${value.runIdB}${value.sameDataset ? '' : '（数据集不同）'}`,
     `审计 A ${value.auditPassedA ? '过' : '未过'} / B ${value.auditPassedB ? '过' : '未过'}`
@@ -914,7 +914,7 @@ export function renderRunDiffCardText(value: DiffCardValue): string {
     ),
     '对比卡在会话中渲染；humanReviewRequired=true。',
   ]
-  return retreatRenderText(lines.join('\n'), recallPhrases(value.runIdA) ?? [])
+  return retreatRenderText(lines.join('\n'), phrases)
 }
 
 /** presentationMeta 投影：只携两侧 runId 引用，无数值、无短语。 */
@@ -2291,8 +2291,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
-        render: (_args, value) =>
-          textBlock(renderRunDiffCardText(value as unknown as DiffCardValue)),
+        render: (args, value) => {
+          const v = value as unknown as DiffCardValue
+          // 双 run 红线并集（compare_runs 同口径）：防跨段重组外泄
+          const phrases = [
+            ...new Set([
+              ...redlinesForRuns(ws, args),
+              ...(recallPhrases(v.runIdA) ?? []),
+              ...(recallPhrases(v.runIdB) ?? []),
+            ]),
+          ]
+          return textBlock(renderRunDiffCardText(v, phrases))
+        },
         presentationMeta: (_args, value) => projectDiffCardMeta(value as unknown as DiffCardValue),
       },
       execute: toolExecute(
@@ -2314,7 +2324,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             auditPassedA: view.head.auditPassedA,
             auditPassedB: view.head.auditPassedB,
             summary: { ...view.summary },
-            topDeltas: view.deltas
+            topDeltas: [...view.deltas]
+              .sort((a, b) => Math.abs(b.riskScoreDelta ?? 0) - Math.abs(a.riskScoreDelta ?? 0))
               .slice(0, 10)
               .map((d) => ({
                 candidateId: d.candidateId,

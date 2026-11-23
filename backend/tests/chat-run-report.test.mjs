@@ -28,6 +28,7 @@ import {
 import {
   leanRunReport,
   projectRunReportMeta,
+  renderRunDiffCardText,
   renderRunReportText,
 } from '../dist/agent-tools.js'
 import { apply as applyTools } from '../dist/agent-tools.js'
@@ -532,6 +533,23 @@ test('show_run_diff：工具面精简 + meta 只携引用 + 回退文本', async
     const text = tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, value)
     assert.ok(text[0].text.includes('run-diff-a'))
     assert.ok(text[0].text.includes('run-diff-b'))
+
+    // 双 run 红线并集遮蔽：B 侧短语也必须遮（P2.2 跨段重组防线）
+    // 短语注册表按 runtime 上下文隔离——须在宿主上下文内注册（同 execute/render 作用域）
+    host.runtime.run(() => {
+      rememberPhrases('run-diff-b', ['B-ONLY-PHRASE'])
+    })
+    const crafted = {
+      ...value,
+      topDeltas: [
+        { candidateId: 'C1 B-ONLY-PHRASE', riskScoreA: 0.1, riskScoreB: 0.2, riskScoreDelta: 0.1 },
+      ],
+    }
+    const masked = tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, crafted)
+    assert.equal(masked[0].text.includes('B-ONLY-PHRASE'), false)
+    // 纯函数同口径：显式短语清单入参
+    const direct = renderRunDiffCardText(crafted, ['B-ONLY-PHRASE'])
+    assert.equal(direct.includes('B-ONLY-PHRASE'), false)
   } finally {
     host.dispose()
     configurePhraseStore(null)

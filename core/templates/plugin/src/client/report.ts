@@ -272,21 +272,21 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
 
   // 导出复制（report-export-compare S2.1）：取当前视图行（过筛选/排序后），零往返
   const copyTableText = async (fmt: 'md' | 'csv'): Promise<void> => {
+    const csvCell = (v: string) => `"${v.replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`
+    const mdCell = (v: string) => v.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
     const heads = columns.map((c) => String(c.header ?? c.field))
     const body = rows.map((r) => columns.map((c) => fmtValue(r[String(c.field)])))
     const text =
       fmt === 'md'
         ? [
-            `| ${heads.join(' | ')} |`,
+            `| ${heads.map(mdCell).join(' | ')} |`,
             `| ${heads.map(() => '---').join(' | ')} |`,
-            ...body.map((r) => `| ${r.join(' | ')} |`),
+            ...body.map((r) => `| ${r.map(mdCell).join(' | ')} |`),
           ].join('\n')
-        : [
-            heads.join(','),
-            ...body.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')),
-          ].join('\n')
+        : [heads.map(csvCell).join(','), ...body.map((r) => r.map(csvCell).join(','))].join('\n')
     const clip = (globalThis as { navigator?: { clipboard?: { writeText(s: string): Promise<void> } } }).navigator?.clipboard
     if (clip === undefined) throw new Error('clipboard unavailable')
+    setCopied('')
     await clip.writeText(text)
   }
 
@@ -305,7 +305,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
                 void copyTableText('md').then(() => setCopied('md')).catch(() => setCopied('err'))
               },
             },
-            copied === 'md' ? '✓ Markdown' : '复制 Markdown',
+            copied === 'md' ? '✓ Markdown' : t('exportMd'),
           ),
           h(
             'button',
@@ -315,7 +315,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
                 void copyTableText('csv').then(() => setCopied('csv')).catch(() => setCopied('err'))
               },
             },
-            copied === 'csv' ? '✓ CSV' : '复制 CSV',
+            copied === 'csv' ? '✓ CSV' : t('exportCsv'),
           ),
           copied === 'err' ? h('span', { className: 'txri-note' }, t('reportError')) : null,
         )
@@ -1026,9 +1026,15 @@ function CompareBox(props: { diff: RunDiffView; t: T }): ReactNode {
     h(
       'div',
       { className: 'txri-bar' },
-      h('span', { className: 'txri-note txri-mono' }, `${diff.head.runIdA} → ${diff.head.runIdB}`),
+      h(
+        'span',
+        { className: 'txri-note txri-mono' },
+        `${diff.head.runIdA} (${diff.head.packageA.name}@${diff.head.packageA.version})`
+          + ` → ${diff.head.runIdB} (${diff.head.packageB.name}@${diff.head.packageB.version})`,
+      ),
       h('span', { className: `tag ${diff.head.auditPassedA ? 'ok' : 'err'}` }, `A·${t('audit')}`),
       h('span', { className: `tag ${diff.head.auditPassedB ? 'ok' : 'err'}` }, `B·${t('audit')}`),
+      diff.head.sameDataset ? null : h('span', { className: 'tag warn' }, '≠dataset'),
       h('span', { className: 'tag ok' }, t('humanReview')),
     ),
     h(
