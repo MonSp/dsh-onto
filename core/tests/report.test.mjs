@@ -280,15 +280,32 @@ test('多系列/堆叠/分组投影（null-safe 同取点语义）', () => {
   assert.deepEqual(stacks[0].segments.map((s) => s.value), [0.5, 0.44])
   assert.equal(stacks[1].segments.length, 1)
 
-  // 多系列折线：按 candidateId 分组（首次出现序）
-  const series = projectChartSeries(report, '/ruleHitLog', 'candidateId', 'score')
+  // 多系列折线：按 candidateId 分组（首次出现序；x=全局行序）
+  const series = projectChartSeries(report, '/ruleHitLog', 'candidateId', 'ruleId', 'score')
   assert.deepEqual(series.map((s) => s.label), ['ALERT-BIN-03', 'ALERT-BIN-01'])
   assert.equal(series[0].points.length, 2)
   assert.equal(series[1].points.length, 1)
+  assert.deepEqual(series[0].points.map((p) => p.label), ['RULE-WST-MIX', 'RULE-WST-OVER'])
+  assert.deepEqual(series[0].points.map((p) => p.index), [0, 1])
+  assert.deepEqual(series[1].points.map((p) => p.index), [2])
 
   // null-safe：非有限值剔除；全空行跳过
   record.result.candidates[1].riskScore = Number.NaN
   record.result.candidates[1].hitRuleIds = []
   const g2 = projectChartGroups(buildRunReport(record), '/candidates', 'candidateId', ['riskScore', 'hitRuleCount'])
   assert.deepEqual(g2[1], { label: 'ALERT-BIN-01', values: [null, 0] })
+})
+
+test('多系列折线：组内缺断断线（与取点语义同构）', () => {
+  const record = fullRecord()
+  record.result.ruleHitLog = [
+    { ruleId: 'R1', candidateId: 'A', score: 0.5, ts: '1' },
+    { ruleId: 'R2', candidateId: 'A', score: Number.NaN, ts: '2' },
+    { ruleId: 'R3', candidateId: 'A', score: 0.7, ts: '3' },
+  ]
+  const series = projectChartSeries(buildRunReport(record), '/ruleHitLog', 'candidateId', 'ruleId', 'score')
+  assert.equal(series.length, 1)
+  assert.equal(series[0].points.length, 2)
+  assert.equal(series[0].segments.length, 2, '缺断两侧断线')
+  assert.deepEqual(series[0].points.map((p) => p.index), [0, 2])
 })

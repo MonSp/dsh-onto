@@ -631,4 +631,24 @@ test('批次 4：Input/Select / when.field / Table.filterBy', () => {
     msg(node('t', 'Table', { rowsBind: '/candidates', filterBy: 42, columns: [{ field: 'candidateId', header: 'x' }] })),
   )
   assert.equal(v6.ok, false)
+
+  // 保留 id（原型链读取面）拒
+  for (const bad of ['__proto__', 'constructor', 'prototype']) {
+    const v = validateReportSurface(msg(node('i', 'Input', { id: bad })))
+    assert.equal(v.ok, false, bad)
+    const w = validateReportSurface(msg(node('c', 'Callout', { content: 'x', when: { field: bad, op: 'empty' } })))
+    assert.equal(w.ok, false, `when.field ${bad}`)
+  }
+
+  // valueFields 重复拒
+  const v7 = validateReportSurface(
+    msg(node('ch', 'Chart', {
+      kind: 'bars',
+      mode: 'grouped',
+      rowsBind: '/candidates',
+      labelField: 'candidateId',
+      valueFields: ['riskScore', 'riskScore'],
+    })),
+  )
+  assert.equal(v7.ok, false)
 })

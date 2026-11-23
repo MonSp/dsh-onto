@@ -262,7 +262,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       }
       case 'Table': {
         rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'filterBy', 'when'], where, err)
-        if (props.filterBy !== undefined && (!isNonEmptyString(props.filterBy) || props.filterBy.length > 64)) {
+        if (props.filterBy !== undefined && !isValidStateId(props.filterBy)) {
           err('SF_SHAPE', `${where}.props.filterBy`, 'filterBy 必须是非空短 id（input 的 id）')
         }
         const rowsBind = bindPointer(props.rowsBind)
@@ -595,6 +595,8 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
           const vfs = props.valueFields
           if (!Array.isArray(vfs) || vfs.length < 2 || vfs.length > 4) {
             err('SF_SHAPE', `${where}.props.valueFields`, 'valueFields 必须是 2–4 个数值字段的数组')
+          } else if (new Set(vfs.map((f) => String(f))).size !== vfs.length) {
+            err('SF_SHAPE', `${where}.props.valueFields`, 'valueFields 不得重复')
           } else {
             vfs.forEach((f, i) => dualHitValue(f, `${where}.props.valueFields[${i}]`))
           }
@@ -646,7 +648,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       case 'Input': {
         rejectUnknownKeys(props, ['id', 'label', 'placeholder', 'when'], where, err)
         const id = props.id
-        if (!isNonEmptyString(id) || id.length > 64) {
+        if (!isValidStateId(id)) {
           err('SF_SHAPE', `${where}.props.id`, 'id 必须是非空短 id')
         } else if (seenStateIds.has(id)) {
           err('SF_ID_DUP', `${where}.props.id`, `重复交互 id: ${id}`)
@@ -664,7 +666,7 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
       case 'Select': {
         rejectUnknownKeys(props, ['id', 'label', 'options', 'value', 'when'], where, err)
         const id = props.id
-        if (!isNonEmptyString(id) || id.length > 64) {
+        if (!isValidStateId(id)) {
           err('SF_SHAPE', `${where}.props.id`, 'id 必须是非空短 id')
         } else if (seenStateIds.has(id)) {
           err('SF_ID_DUP', `${where}.props.id`, `重复交互 id: ${id}`)
@@ -710,6 +712,12 @@ function rejectUnknownKeys(
 
 const WHEN_OPS = new Set(['eq', 'neq', 'in', 'not-in', 'gt', 'gte', 'lt', 'lte', 'empty', 'not-empty'])
 const COLUMN_TYPES = new Set(['text', 'num', 'bar', 'badge', 'delta'])
+/** 交互 id 保留字（防原型链读取面）；id/when.field/filterBy 一律拒绝。 */
+const RESERVED_STATE_IDS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isValidStateId(id: unknown): id is string {
+  return isNonEmptyString(id) && id.length <= 64 && !RESERVED_STATE_IDS.has(id)
+}
 
 /** `when` 谓词槽校验（全组件通用；report-extras S2.1）。 */
 function validateWhen(
@@ -736,8 +744,8 @@ function validateWhen(
     }
   }
   if (hasField) {
-    if (!isNonEmptyString(when.field) || when.field.length > 64) {
-      err('SF_SHAPE', `${where}.field`, 'field 必须是非空短 id（input/select 的 id）')
+    if (!isValidStateId(when.field)) {
+      err('SF_SHAPE', `${where}.field`, 'field 必须是非空短 id（input/select 的 id，避开保留字）')
     }
   }
   if (typeof when.op !== 'string' || !WHEN_OPS.has(when.op)) {

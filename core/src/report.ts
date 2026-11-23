@@ -352,44 +352,71 @@ function fmtChartLabel(v: unknown): string {
   return String(v)
 }
 
+export interface ChartSeriesPoint {
+  label: string
+  value: number
+  /** 全局行序（多系列共享 x 轴对齐）。 */
+  index: number
+}
+
 export interface ChartSeries {
   label: string
-  points: ChartPoint[]
-  segments: ChartPoint[][]
+  points: ChartSeriesPoint[]
+  segments: ChartSeriesPoint[][]
 }
 
 /**
- * 多系列折线（report-series-state S2.1）：按 seriesField 分组，组内行序即 x 序；
- * 组内断线语义同 projectChartPoints（缺断跳过不补 0）。首次出现序。
+ * 多系列折线（report-series-state S2.1）：按 seriesField 分组，x 轴取全局行序（跨系列对齐）；
+ * 组内断线语义同 projectChartPoints（非有限值作缺断，断线不补 0）；点标签取 labelField。
  */
 export function projectChartSeries(
   report: RunReport,
   rowsBind: string,
   seriesField: string,
+  labelField: string,
   valueField: string,
 ): ChartSeries[] {
   const rows = resolveReportPointer(report, rowsBind)
   const order: string[] = []
-  const grouped = new Map<string, ChartPoint[]>()
+  const entries = new Map<string, Array<{ index: number; pt: ChartSeriesPoint | null }>>()
   if (Array.isArray(rows)) {
+    let idx = 0
     for (const r of rows) {
       const rec = r !== null && typeof r === 'object' ? (r as Record<string, unknown>) : null
-      const raw = rec === null ? undefined : rec[valueField]
-      if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
       const key = rec === null ? '' : fmtChartLabel(rec[seriesField])
-      if (!grouped.has(key)) {
-        grouped.set(key, [])
+      if (!entries.has(key)) {
+        entries.set(key, [])
         order.push(key)
       }
-      ;(grouped.get(key) as ChartPoint[]).push({ label: key, value: raw })
+      const raw = rec === null ? undefined : rec[valueField]
+      const list = entries.get(key) as Array<{ index: number; pt: ChartSeriesPoint | null }>
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        list.push({
+          index: idx,
+          pt: { label: rec === null ? '' : fmtChartLabel(rec[labelField]), value: raw, index: idx },
+        })
+      } else {
+        // 非有限值 = 该系列的缺断标记（断线用），并推进全局 x
+        list.push({ index: idx, pt: null })
+      }
+      idx += 1
     }
   }
   return order.map((label) => {
-    const points = grouped.get(label) as ChartPoint[]
-    const segments: ChartPoint[][] = []
-    // 组内已剔除非有限点；行序分组后无「缺断」再断线需求——单段即可，
-    // 但保留 segments 形态与 projectChartPoints 同构
-    segments.push([...points])
+    const list = entries.get(label) as Array<{ index: number; pt: ChartSeriesPoint | null }>
+    const points: ChartSeriesPoint[] = []
+    const segments: ChartSeriesPoint[][] = []
+    let current: ChartSeriesPoint[] = []
+    for (const e of list) {
+      if (e.pt !== null) {
+        points.push(e.pt)
+        current.push(e.pt)
+      } else if (current.length > 0) {
+        segments.push(current)
+        current = []
+      }
+    }
+    if (current.length > 0) segments.push(current)
     return { label, points, segments }
   })
 }
@@ -497,12 +524,12 @@ export function evalWhen(
   uiState: Readonly<Record<string, string>> = {},
 ): boolean {
   let raw: unknown
-  if (when.field !== undefined) {
+  if (when.bind !== undefined) {
+    raw = resolveReportPointer(report, when.bind)
+  } else if (when.field !== undefined) {
     // UI 状态源：未注册 id → 不可判定 → 一律不渲染（含 empty——注册件的空值才谈空语义）
     if (!Object.prototype.hasOwnProperty.call(uiState, when.field)) return false
     raw = uiState[when.field]
-  } else if (when.bind !== undefined) {
-    raw = resolveReportPointer(report, when.bind)
   } else {
     return false
   }

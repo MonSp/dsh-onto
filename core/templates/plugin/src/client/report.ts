@@ -244,7 +244,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
   }
   // 外联筛选（filterBy 绑 input 的 id）：与内建快筛取交集
   const filterBy = String(p.filterBy ?? '')
-  const extQ = filterBy !== '' ? (ctx.uiState[filterBy] ?? '').trim().toLowerCase() : ''
+  const extQ = filterBy !== '' ? readUi(ctx.uiState, filterBy).trim().toLowerCase() : ''
   if (extQ !== '') {
     rows = rows.filter((r) => JSON.stringify(r).toLowerCase().includes(extQ))
   }
@@ -531,7 +531,7 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         props.label !== undefined ? h('span', { className: 'k' }, String(props.label)) : null,
         h('input', {
           type: 'search',
-          value: ctx.uiState[id] ?? '',
+          value: readUi(ctx.uiState, id),
           placeholder: props.placeholder !== undefined ? String(props.placeholder) : undefined,
           onChange: (e: { target: { value: string } }) => ctx.setUi({ ...ctx.uiState, [id]: e.target.value }),
         }),
@@ -547,7 +547,7 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         h(
           'select',
           {
-            value: ctx.uiState[id] ?? String(props.value ?? ''),
+            value: readUi(ctx.uiState, id) !== '' ? readUi(ctx.uiState, id) : String(props.value ?? ''),
             onChange: (e: { target: { value: string } }) => ctx.setUi({ ...ctx.uiState, [id]: e.target.value }),
           },
           ...options.map((o, i) => h('option', { key: i, value: o }, o)),
@@ -580,18 +580,19 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
       ),
     )
 
-  // 多系列折线（seriesField 分组）
+  // 多系列折线（seriesField 分组；x 全局行序对齐；缺断断线）
   const seriesField = typeof p.seriesField === 'string' ? p.seriesField : ''
   if (kind === 'line' && seriesField !== '') {
-    const series = projectChartSeries(ctx.report, rowsBind, seriesField, String(p.valueField ?? ''))
+    const series = projectChartSeries(ctx.report, rowsBind, seriesField, labelField, String(p.valueField ?? ''))
     const all = series.flatMap((s) => s.points)
     if (all.length === 0) return emptyView
-    const w = Math.max(...series.map((s) => s.points.length), 1) * 28
+    const maxIdx = Math.max(...all.map((pt) => pt.index), 1)
+    const w = (maxIdx + 1) * 28
     const pad = 12
     const max = Math.max(...all.map((pt) => pt.value), 0)
     const min = Math.min(...all.map((pt) => pt.value), 0)
     const span = max - min || 1
-    const x = (i: number, n: number) => (n === 1 ? w / 2 : pad + (i * (w - pad * 2)) / (n - 1))
+    const x = (i: number) => (maxIdx === 0 ? w / 2 : pad + (i * (w - pad * 2)) / maxIdx)
     const y = (v: number) => height - pad - ((v - min) / span) * (height - pad * 2)
     return h(
       'div',
@@ -601,21 +602,23 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
       h(
         'svg',
         { viewBox: `0 0 ${w} ${height}`, width: '100%', height, role: 'img' },
-        ...series.map((s, si) =>
-          h('path', {
-            key: si,
-            d: s.points.map((pt, i) => `${i === 0 ? 'M' : 'L'}${x(i, s.points.length).toFixed(1)},${y(pt.value).toFixed(1)}`).join(' '),
-            fill: 'none',
-            stroke: strokeOf(si),
-            strokeWidth: 1.6,
-            strokeLinejoin: 'round',
-          }),
+        ...series.flatMap((s, si) =>
+          s.segments.map((seg, gi) =>
+            h('path', {
+              key: `${si}-${gi}`,
+              d: seg.map((pt, i) => `${i === 0 ? 'M' : 'L'}${x(pt.index).toFixed(1)},${y(pt.value).toFixed(1)}`).join(' '),
+              fill: 'none',
+              stroke: strokeOf(si),
+              strokeWidth: 1.6,
+              strokeLinejoin: 'round',
+            }),
+          ),
         ),
         ...series.flatMap((s, si) =>
           s.points.map((pt, i) =>
             h(
               'circle',
-              { key: `${si}-${i}`, cx: x(i, s.points.length).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.4, fill: strokeOf(si) },
+              { key: `${si}-${i}`, cx: x(pt.index).toFixed(1), cy: y(pt.value).toFixed(1), r: 2.4, fill: strokeOf(si) },
               h('title', null, `${s.label} · ${pt.label} · ${fmtValue(pt.value)}`),
             ),
           ),
@@ -690,7 +693,7 @@ function ChartBox(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
     )
     const totals = rows.map((r) => r.segments.reduce((s, x) => s + x.value, 0))
     const maxTotal = Math.max(...totals, 0)
-    if (rows.length === 0 || maxTotal <= 0) return emptyView
+    if (rows.length === 0) return emptyView
     const legendLabels = [...new Set(rows.flatMap((r) => r.segments.map((s) => s.label)))]
     const w = Math.max(rows.length * 36, 140)
     const barW = 22
@@ -979,11 +982,16 @@ export function reportTextSummary(report: RunReport, t: T): ReactNode {
   )
 }
 
-/** 收集交互件初始态（select.value 预选；input 从空串起）。 */
+/** 交互状态安全读（防原型链 id）；未注册 → ''。 */
+function readUi(uiState: Readonly<Record<string, string>>, id: string): string {
+  return Object.prototype.hasOwnProperty.call(uiState, id) ? uiState[id] : ''
+}
+
+/** 收集交互件初始态（select.value 预选、无 value 也注册空串；input 从空串起）。 */
 function collectUiDefaults(node: SurfaceNode, acc: Record<string, string>): void {
   const props = (node.props ?? {}) as Record<string, unknown>
-  if (typeof props.id === 'string' && !(props.id in acc)) {
-    if (node.type === 'Select' && props.value !== undefined) acc[props.id] = String(props.value)
+  if (typeof props.id === 'string' && !Object.prototype.hasOwnProperty.call(acc, props.id)) {
+    if (node.type === 'Select') acc[props.id] = props.value !== undefined ? String(props.value) : ''
     if (node.type === 'Input') acc[props.id] = ''
   }
   const children = Array.isArray(node.children) ? node.children : []
@@ -1010,6 +1018,14 @@ export function ReportSurface(props: {
     collectUiDefaults(props.surface.root, acc)
     return acc
   })
+  const [lastSurface, setLastSurface] = useState(props.surface)
+  if (lastSurface !== props.surface) {
+    // 换 surface（报表页切页/换 run）：渲染期重置交互态（React 推荐的派生态调整）
+    const acc: Record<string, string> = {}
+    collectUiDefaults(props.surface.root, acc)
+    setLastSurface(props.surface)
+    setUi(acc)
+  }
   const ctx: RenderCtx = {
     report: props.report,
     t: props.t,
