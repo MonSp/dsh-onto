@@ -24,6 +24,7 @@ $RuntimeDir = $Config.runtimeDir
 $PackageDir = $Config.packageDir
 $ScenarioId = $Config.scenarioId
 $SourceId   = $Config.sourceId
+$isDataset  = ($Config.dataMode -eq 'dataset')
 $Profile    = $Config.profileName
 $PkgName    = $Config.packageName
 $PkgVersion = $Config.packageVersion
@@ -56,9 +57,14 @@ if (-not $SkipBuild) {
 }
 
 # 2) replay anchor: packaged fixture -> mapping -> scenario vs packaged baseline (fingerprinted; drift is rejected)
-Step ('replay --check ' + $ScenarioId)
-node (Join-Path $CoreDir 'dist/cli.js') replay --dir $PackageDir --scenario $ScenarioId --check
-if ($LASTEXITCODE -ne 0) { Fail 'replay --check (baseline drift or replay failure)' }
+#    dataset 模式（纯内容包）无映射链，跳过回放锚；验收锚改由步骤 7 的夹具 live run 提供。
+if (-not $isDataset) {
+    Step ('replay --check ' + $ScenarioId)
+    node (Join-Path $CoreDir 'dist/cli.js') replay --dir $PackageDir --scenario $ScenarioId --check
+    if ($LASTEXITCODE -ne 0) { Fail 'replay --check (baseline drift or replay failure)' }
+} else {
+    Step 'replay anchor skipped (dataset mode: no mapping chain)'
+}
 
 # 3) install into the dedicated profile (no backend/workbench)
 Step ('setup-profile ' + $Profile)
@@ -110,6 +116,11 @@ if ($Data -ne '') {
     if ($LASTEXITCODE -ne 0) { Fail 'acceptance run' }
     $accept = Get-Content $outJson -Raw -Encoding UTF8 | ConvertFrom-Json
     Write-Host 'anchor source: live run (-Data)'
+} elseif ($isDataset -and (Test-Path (Join-Path $Root 'tests/fixtures/replay.json'))) {
+    node (Join-Path $CoreDir 'dist/cli.js') run $PackageDir $ScenarioId --data (Join-Path $Root 'tests/fixtures/replay.json') --out $outJson
+    if ($LASTEXITCODE -ne 0) { Fail 'acceptance run (packaged dataset fixture)' }
+    $accept = Get-Content $outJson -Raw -Encoding UTF8 | ConvertFrom-Json
+    Write-Host 'anchor source: live run (packaged dataset fixture)'
 } elseif (Test-Path $expectedPath) {
     $accept = Get-Content $expectedPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Write-Host 'anchor source: packaged replay baseline (verified by step 2)'
@@ -127,8 +138,14 @@ foreach ($e in $accept.excluded) {
 }
 Write-Host ''
 Write-Host 'Dual-entry acceptance (ruleId set and scores must match the anchors above):' -ForegroundColor Yellow
-Write-Host ('  Page : domain panel -> ' + $ScenarioId + ' -> run (sourceId=' + $SourceId + ')')
-Write-Host ('  Agent: run_scenario(name=' + $PkgName + ', version=' + $PkgVersion + ', scenarioId=' + $ScenarioId + ', sourceId=' + $SourceId + ')')
-Write-Host ('  Data source: without ' + $ApiEnvName + ' the sourceId run must deny (fail-closed); identity asserts DSH_BIZ_* same as startup')
+if ($isDataset) {
+    Write-Host ('  Page : domain panel -> ' + $ScenarioId + ' -> paste dataset JSON -> run')
+    Write-Host ('  Agent: run_scenario(name=' + $PkgName + ', version=' + $PkgVersion + ', scenarioId=' + $ScenarioId + ', dataset=<inline>)')
+    Write-Host ('  Data channel: inline dataset (unverified) — same runScenario path for Page and Agent')
+} else {
+    Write-Host ('  Page : domain panel -> ' + $ScenarioId + ' -> run (sourceId=' + $SourceId + ')')
+    Write-Host ('  Agent: run_scenario(name=' + $PkgName + ', version=' + $PkgVersion + ', scenarioId=' + $ScenarioId + ', sourceId=' + $SourceId + ')')
+    Write-Host ('  Data source: without ' + $ApiEnvName + ' the sourceId run must deny (fail-closed); identity asserts DSH_BIZ_* same as startup')
+}
 Write-Host ''
 Write-Host 'deploy chain: OK' -ForegroundColor Green

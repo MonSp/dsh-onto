@@ -80,23 +80,28 @@ function mount(ctx: Context): void {
   })
 
   // 只读数据源：显式 URL 才登记（deny-by-default；地址不来自包内）。
-  const apiUrl = process.env.__ENV_API_URL__
-  if (typeof apiUrl === 'string' && apiUrl !== '') {
-    const kind = process.env.__ENV_API_KIND__ === 'formal' ? 'formal' : 'simulated'
-    dataSources.register(
-      BINDINGS.sourceId,
-      createMappedDataConnector({
-        sourceId: BINDINGS.sourceId,
-        baseUrl: apiUrl,
-        shape: BINDINGS.shape,
-        maps: BINDINGS.maps,
-        kind,
-        ...(process.env.__ENV_API_TOKEN__ ? { auth: { token: process.env.__ENV_API_TOKEN__ } } : {}),
-      }),
-    )
-    console.log(`__LOG_PREFIX__ data source registered: ${BINDINGS.sourceId} (kind=${kind}):`, apiUrl)
+  // dataset 模式（纯内容包）：无连接器——运行走内联 dataset 通道（与 Agent run_scenario(dataset) 同源）。
+  if (BINDINGS.mode === 'dataset') {
+    console.log('__LOG_PREFIX__ dataset mode — inline dataset channel only, no connector registered')
   } else {
-    console.log(`__LOG_PREFIX__ __ENV_API_URL__ not set — ${BINDINGS.sourceId} not registered (sourceId runs will deny)`)
+    const apiUrl = process.env.__ENV_API_URL__
+    if (typeof apiUrl === 'string' && apiUrl !== '') {
+      const kind = process.env.__ENV_API_KIND__ === 'formal' ? 'formal' : 'simulated'
+      dataSources.register(
+        BINDINGS.sourceId,
+        createMappedDataConnector({
+          sourceId: BINDINGS.sourceId,
+          baseUrl: apiUrl,
+          shape: BINDINGS.shape,
+          maps: BINDINGS.maps,
+          kind,
+          ...(process.env.__ENV_API_TOKEN__ ? { auth: { token: process.env.__ENV_API_TOKEN__ } } : {}),
+        }),
+      )
+      console.log(`__LOG_PREFIX__ data source registered: ${BINDINGS.sourceId} (kind=${kind}):`, apiUrl)
+    } else {
+      console.log(`__LOG_PREFIX__ __ENV_API_URL__ not set — ${BINDINGS.sourceId} not registered (sourceId runs will deny)`)
+    }
   }
 
   console.log('__LOG_PREFIX__ mounted: OntoRuntime + RUN tools/skills (no DEV services, no action connectors)')

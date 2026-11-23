@@ -176,7 +176,8 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
   replay --dir <versionDir> --scenario <SCN> [--fixture F] [--expected F] [--check]
          [--scope-types A,B] [--against <versionDir>] [--write-expected]
-  plugin generate --dir <versionDir> --scenario <SCN> --source <SRC> --out <dir> [--force] [--profile P]
+  plugin generate --dir <versionDir> --scenario <SCN> [--source <SRC>] [--fixture <file>] --out <dir> [--force] [--profile P]
+    （省略 --source = dataset 模式：纯内容包走内联 dataset 通道；--fixture 显式指定运行夹具）
   knowledge upload|parse|queue|review|materialize
   exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
@@ -547,7 +548,8 @@ function cmdPlugin(sub: string | undefined, args: Args): void {
     const result = generatePlugin({
       versionDir: resolve(flagStr(args, 'dir')),
       scenarioId: flagStr(args, 'scenario'),
-      sourceId: flagStr(args, 'source'),
+      ...(typeof args.flags['source'] === 'string' ? { sourceId: args.flags['source'] } : {}),
+      ...(typeof args.flags['fixture'] === 'string' ? { fixturePath: resolve(args.flags['fixture']) } : {}),
       outDir: resolve(flagStr(args, 'out')),
       force: args.flags['force'] === true,
       ...(typeof args.flags['profile'] === 'string' ? { profileName: args.flags['profile'] } : {}),

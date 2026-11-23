@@ -14,6 +14,8 @@ const PKG_NAME = '__PKG_NAME__'
 const PKG_VERSION = '__PKG_VERSION__'
 const DEFAULT_SCENARIO = '__SCENARIO_ID__'
 const SOURCE_ID = '__SOURCE_ID__'
+/** 数据通道：connector = sourceId 取数；dataset = 运行页内联 JSON（纯内容包）。 */
+const DATA_MODE: string = '__DATA_MODE__'
 
 function unwrap<T>(result: unknown): T {
   if (result && typeof result === 'object' && 'ok' in (result as Record<string, unknown>)) {
@@ -62,6 +64,7 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [report, setReport] = useState<RunReport | null>(null)
+  const [datasetText, setDatasetText] = useState('')
 
   useEffect(() => {
     if (!api) return
@@ -93,12 +96,21 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
       setBusy('run')
       setReport(null)
       try {
+        let dataset: unknown
+        if (DATA_MODE === 'dataset') {
+          if (datasetText.trim() === '') throw new Error(t('datasetRequired'))
+          try {
+            dataset = JSON.parse(datasetText)
+          } catch {
+            throw new Error(t('datasetInvalid'))
+          }
+        }
         const out = unwrap<{ result: { runId: string } }>(
           await api.runScenario({
             name: PKG_NAME,
             version: PKG_VERSION,
             scenarioId,
-            sourceId: SOURCE_ID,
+            ...(DATA_MODE === 'dataset' ? { dataset } : { sourceId: SOURCE_ID }),
             analysisMode: 'explore',
           }),
         )
@@ -160,13 +172,32 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         },
         ...scenarios.map((s) => h('option', { key: s.id, value: s.id }, `${s.id} — ${s.name}`)),
       ),
-      h('span', { className: 'txri-note' }, `${t('sourceId')}: ${SOURCE_ID}`),
+      DATA_MODE === 'dataset'
+        ? null
+        : h('span', { className: 'txri-note' }, `${t('sourceId')}: ${SOURCE_ID}`),
       h(
         'button',
         { type: 'button', className: 'txri-primary', disabled: !!busy || !scenarioId, onClick: () => run() },
         busy === 'run' ? t('running') : t('run'),
       ),
     ),
+    DATA_MODE === 'dataset'
+      ? h(
+          'div',
+          { className: 'txri-bar' },
+          h('label', null, `${t('dataset')}: `),
+          h('textarea', {
+            className: 'txri-mono',
+            rows: 8,
+            style: { width: '100%', boxSizing: 'border-box' as const },
+            value: datasetText,
+            disabled: busy !== '',
+            placeholder: '{ "objects": [], "relations": [], "behaviors": [], "candidates": [] }',
+            onChange: (e: { target: { value: string } }) => setDatasetText(e.target.value),
+          }),
+          h('p', { className: 'txri-note' }, t('datasetHint')),
+        )
+      : null,
     h('div', { className: 'txri-panel' }, ...resultView()),
   )
 }

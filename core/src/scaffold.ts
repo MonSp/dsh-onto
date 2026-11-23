@@ -17,7 +17,13 @@ export interface GeneratePluginInput {
   /** 已签发包版本目录。 */
   versionDir: string
   scenarioId: string
-  sourceId: string
+  /**
+   * 逻辑数据源 id（connector 模式：包内须声明 apiSources shape + source-maps）。
+   * 缺省 = dataset 模式（纯内容包）：运行页走内联 dataset 通道，无连接器登记。
+   */
+  sourceId?: string
+  /** 运行夹具显式指定（复制进生成物 tests/fixtures/replay.json）；缺省取包内 fixtures/。 */
+  fixturePath?: string
   /** 输出目录（新建或覆盖需 force）。 */
   outDir: string
   force?: boolean
@@ -83,11 +89,20 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
   }
   const scenario = pkg.scenarios.find((s) => s.id === input.scenarioId)
   if (scenario === undefined) throw new Error(`场景不存在: ${input.scenarioId}`)
-  const source = pkg.apiSources.find((s) => s.id === input.sourceId)
-  if (source === undefined) throw new Error(`数据源不存在: ${input.sourceId}`)
-  if (source.shape === undefined) throw new Error(`${input.sourceId} 未声明 shape`)
-  const maps = pkg.sourceMaps ?? []
-  if (maps.length === 0) throw new Error('包内无 source-maps：先完成映射（source map init/preview）')
+  // 模式分离：--source = connector（须 API 绑定契约）；缺省 = dataset（纯内容包，内联数据通道）
+  const sourceId = input.sourceId
+  const datasetMode = sourceId === undefined || sourceId === ''
+  let source: { shape?: ApiShape } | undefined
+  let maps: O1SourceMap[] = []
+  if (datasetMode) {
+    if (sourceId === '') throw new Error('sourceId 不能是空串（connector 模式传 --source <SRC>；纯内容包省略 --source 走 dataset 模式）')
+  } else {
+    source = pkg.apiSources.find((s) => s.id === sourceId)
+    if (source === undefined) throw new Error(`数据源不存在: ${sourceId}`)
+    if (source.shape === undefined) throw new Error(`${sourceId} 未声明 shape`)
+    maps = pkg.sourceMaps ?? []
+    if (maps.length === 0) throw new Error('包内无 source-maps：先完成映射（source map init/preview）')
+  }
 
   if (existsSync(outDir) && readdirSync(outDir).length > 0 && input.force !== true) {
     throw new Error(`输出目录非空：${outDir}（覆盖请加 force）`)
@@ -116,8 +131,17 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
     __PKG_ID__: `@dsh-${slug}/app`,
     __PKG_NAME__: meta.name,
     __PKG_VERSION__: meta.version,
-    __PKG_DESC__: `${meta.name} 业务插件：只读自助运行装配（一个数据源 + 一个场景 + 最小运行页 + Agent 同源）`,
-    __SOURCE_ID__: input.sourceId,
+    __PKG_DESC__: datasetMode
+      ? `${meta.name} 业务插件：只读自助运行装配（内联 dataset 通道 + 一个场景 + 最小运行页 + Agent 同源）`
+      : `${meta.name} 业务插件：只读自助运行装配（一个数据源 + 一个场景 + 最小运行页 + Agent 同源）`,
+    __SOURCE_ID__: sourceId ?? '',
+    __DATA_MODE__: datasetMode ? 'dataset' : 'connector',
+    __SUBTITLE_ZH__: datasetMode
+      ? '选场景 → 运行数据（JSON）内联运行 → 候选与证据；与 Agent run_scenario(dataset) 同源'
+      : '选场景 → sourceId 取数运行 → 候选与证据；与 Agent run_scenario 同源',
+    __SUBTITLE_EN__: datasetMode
+      ? 'Pick scenario → run with inline dataset JSON → candidates & evidence; same path as Agent run_scenario(dataset)'
+      : 'Pick scenario → sourceId fetch → candidates & evidence; same path as Agent run_scenario',
     __SCENARIO_ID__: input.scenarioId,
     __ENV_API_URL__: `DSH_${tag}_API_URL`,
     __ENV_API_KIND__: `DSH_${tag}_API_KIND`,
@@ -164,15 +188,31 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
   }
 
   // 冻结映射契约（生成物内不写转换逻辑；运行走 createMappedDataConnector + core 纯转换）
-  const bindingsTs = `/** 生成物：映射契约冻结自已签发包 ${meta.name}@${meta.version}（api-to-plugin S2.4）。 */
+  // dataset 模式无契约可冻（纯内容包）：shape=null / maps=[]，运行走内联 dataset 通道。
+  const bindingsTs = datasetMode
+    ? `/** 生成物：dataset 模式（纯内容包 ${meta.name}@${meta.version}，无 API 绑定契约；api-to-plugin S2.4）。 */
 import type { ApiShape, O1SourceMap } from '@dsh-onto/core'
 
 export const BINDINGS = {
-  sourceId: ${JSON.stringify(input.sourceId)},
+  mode: 'dataset' as 'dataset' | 'connector',
+  sourceId: '',
   scenarioId: ${JSON.stringify(input.scenarioId)},
   packageName: ${JSON.stringify(meta.name)},
   packageVersion: ${JSON.stringify(meta.version)},
-  shape: ${JSON.stringify(source.shape, null, 2)} as ApiShape,
+  shape: null as unknown as ApiShape,
+  maps: [] as O1SourceMap[],
+}
+`
+    : `/** 生成物：映射契约冻结自已签发包 ${meta.name}@${meta.version}（api-to-plugin S2.4）。 */
+import type { ApiShape, O1SourceMap } from '@dsh-onto/core'
+
+export const BINDINGS = {
+  mode: 'connector' as 'dataset' | 'connector',
+  sourceId: ${JSON.stringify(sourceId)},
+  scenarioId: ${JSON.stringify(input.scenarioId)},
+  packageName: ${JSON.stringify(meta.name)},
+  packageVersion: ${JSON.stringify(meta.version)},
+  shape: ${JSON.stringify(source?.shape ?? null, null, 2)} as ApiShape,
   maps: ${JSON.stringify(maps, null, 2)} as O1SourceMap[],
 }
 `
@@ -184,7 +224,8 @@ export const BINDINGS = {
     packageVersion: meta.version,
     packageDir: versionDir,
     scenarioId: input.scenarioId,
-    sourceId: input.sourceId,
+    dataMode: datasetMode ? 'dataset' : 'connector',
+    sourceId: sourceId ?? null,
     coreDir,
     runtimeDir,
     harnessDir,
@@ -195,21 +236,34 @@ export const BINDINGS = {
       apiToken: tokens.__ENV_API_TOKEN__,
       profileDir: tokens.__ENV_PROFILE_DIR__,
     },
-    shape: source.shape,
+    shape: datasetMode ? null : source?.shape ?? null,
     maps,
   }
   writeFileSync(join(outDir, 'plugin.config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8')
   files.push('plugin.config.json')
 
-  // 回放夹具随生成物走（e2e 对着夹具跑）；无夹具只警告——先 replay --write-expected 补齐
-  const fixtureSrc = join(versionDir, 'fixtures', `replay-${input.scenarioId}.json`)
+  // 运行夹具随生成物走（e2e 对着夹具跑）：dataset 模式夹具即数据集本体，connector 模式夹具是源快照。
+  // 取位顺序：--fixture 显式指定 > 包内 fixtures/dataset-<SCN>.json > fixtures/replay-<SCN>.json。
   const fixtureDst = join(outDir, 'tests', 'fixtures', 'replay.json')
-  if (existsSync(fixtureSrc)) {
+  const packagedFixture = [datasetMode ? `dataset-${input.scenarioId}.json` : '', `replay-${input.scenarioId}.json`]
+    .filter((n) => n !== '')
+    .map((n) => join(versionDir, 'fixtures', n))
+    .find((p) => existsSync(p))
+  const fixtureSrc = input.fixturePath !== undefined && input.fixturePath !== ''
+    ? resolve(input.fixturePath)
+    : packagedFixture
+  if (fixtureSrc !== undefined && existsSync(fixtureSrc)) {
     mkdirSync(join(outDir, 'tests', 'fixtures'), { recursive: true })
     cpSync(fixtureSrc, fixtureDst)
     files.push('tests/fixtures/replay.json')
+  } else if (input.fixturePath !== undefined && input.fixturePath !== '') {
+    throw new Error(`--fixture 文件不存在: ${input.fixturePath}`)
   } else {
-    warnings.push(`包内无回放夹具 fixtures/replay-${input.scenarioId}.json：生成的 e2e 需补夹具后才可跑`)
+    warnings.push(
+      datasetMode
+        ? `包内无运行夹具 fixtures/dataset-${input.scenarioId}.json（或 --fixture <file>）：生成的 e2e 需补夹具后才可跑`
+        : `包内无回放夹具 fixtures/replay-${input.scenarioId}.json：生成的 e2e 需补夹具后才可跑`,
+    )
   }
 
   return { outDir, files, warnings, config }
