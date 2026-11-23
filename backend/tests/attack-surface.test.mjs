@@ -985,6 +985,7 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   assert.ok(ONTOOL_NAMES.has('expand_entity'), 'expand_entity 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('project_features'), 'project_features 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('show_run_report'), 'show_run_report 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('show_run_diff'), 'show_run_diff 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('list_report_pages'), 'list_report_pages 须入 ONTOOL_NAMES')
 })

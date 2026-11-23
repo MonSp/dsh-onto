@@ -2,8 +2,9 @@ import { h, useState, useEffect, setReact } from './react'
 import type { ReactNode, Ctx, PluginModule } from './types'
 import { zh, en } from './locale'
 import { CSS } from './styles'
-import { createReportToolView, ReportSurface, reportTextSummary } from './report'
+import { createDiffToolView, createReportToolView, ComparePanel, ReportSurface, reportTextSummary } from './report'
 import { buildDefaultReportSurface, validateReportSurface } from '@dsh-onto/core/surface'
+import { diffViewOf, type RunDiffView } from '@dsh-onto/core/diffview'
 import type { RunReport } from '@dsh-onto/core/report'
 import type { ReportPage } from '@dsh-onto/core/reportpage'
 
@@ -179,6 +180,8 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
   const [runs, setRuns] = useState<Array<{ runId: string; package?: { name?: string } }>>([])
   const [runId, setRunId] = useState('')
   const [report, setReport] = useState<RunReport | null>(null)
+  const [compareRunId, setCompareRunId] = useState('')
+  const [diff, setDiff] = useState<RunDiffView | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -217,6 +220,27 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, runId])
 
+  // 对比入口（report-export-compare）：选第二 run 即出对比卡，页面与对话同源
+  useEffect(() => {
+    if (!api || runId === '' || compareRunId === '') {
+      setDiff(null)
+      return
+    }
+    void (async () => {
+      setError('')
+      try {
+        const out = unwrap<{ diff: Parameters<typeof diffViewOf>[0] }>(
+          await api.compareRuns({ runIdA: runId, runIdB: compareRunId }),
+        )
+        setDiff(diffViewOf(out.diff))
+      } catch (e) {
+        setDiff(null)
+        setError(errText(e))
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, compareRunId])
+
   const page = pages.find((p) => p.pageId === pageId)
   // 渲染前校验闸（S2.2 两处共用）：wire 面数据亦须过同一契约
   const checked = page ? validateReportSurface(page.surface) : null
@@ -251,6 +275,18 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
               { value: runId, onChange: (e: { target: { value: string } }) => setRunId(e.target.value) },
               ...runOptions.map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
             ),
+            h('label', null, `${t('compareWith')}: `),
+            h(
+              'select',
+              {
+                value: compareRunId,
+                onChange: (e: { target: { value: string } }) => setCompareRunId(e.target.value),
+              },
+              h('option', { value: '' }, '—'),
+              ...runOptions
+                .filter((r) => r.runId !== runId)
+                .map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
+            ),
           ),
           page && report
             ? checked !== null && checked.ok
@@ -262,6 +298,7 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
                   reportTextSummary(report, t),
                 )
             : h('p', { className: 'txri-note' }, t('reportLoading')),
+          diff !== null ? h(ComparePanel, { diff, t }) : null,
         ),
   )
 }
@@ -314,6 +351,12 @@ export function createPlugin(React: typeof import('react')): PluginModule {
         t,
         navigate,
       })
+      const DiffToolView = createDiffToolView({
+        api: {
+          compareRuns: (request: { runIdA: string; runIdB: string }) => api().compareRuns(request),
+        },
+        t,
+      })
       function api() {
         const remote = ctx.remote['ontoRuntime']
         if (!remote) throw new Error('remote.ontoRuntime missing')
@@ -333,6 +376,12 @@ export function createPlugin(React: typeof import('react')): PluginModule {
         ctx.slots.register(
           { name: 'tool.call.toolview', key: 'show_run_report', locale: NS },
           ReportToolView,
+        ),
+      )
+      ctx.slots.inject('tool.call.toolview', () =>
+        ctx.slots.register(
+          { name: 'tool.call.toolview', key: 'show_run_diff', locale: NS },
+          DiffToolView,
         ),
       )
     },

@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInsideDir, isSafeRelPath, PackageStoreError } from './store.js'
+import { diffViewOf, type RunDiffView } from './diffview.js'
 import type { RuntimeDataset, ScenarioPrepSummary, ScenarioRunResult } from './types.js'
 
 export const RUNS_DIR = 'runs'
@@ -305,6 +306,11 @@ function finiteOrNull(value: unknown): number | null {
  * 两轮对比（纯函数）：候选按 candidateId 并集，B 相对 A 的命中/待核实增删、分数 delta。
  * 跨版本（fork 改权重）与跨场景（同数据多视角）同口径——同数据由 datasetDigest 标记。
  */
+/** 两轮运行记录 → 对比视图（报告面投影；缺席侧 null 不补 0）。 */
+export function buildRunDiffView(a: RunRecord, b: RunRecord): RunDiffView {
+  return diffViewOf(compareRunRecords(a, b))
+}
+
 export function compareRunRecords(a: RunRecord, b: RunRecord): RunDiff {
   const candA = new Map(a.result.candidates.map((c) => [c.candidateId, c]))
   const candB = new Map(b.result.candidates.map((c) => [c.candidateId, c]))

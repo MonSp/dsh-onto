@@ -488,3 +488,52 @@ test('save_report_page：strict 写目标收权——跨身份覆写拒、同身
     configurePhraseStore(null)
   }
 })
+
+test('show_run_diff：工具面精简 + meta 只携引用 + 回退文本', async () => {
+  const host = fixture()
+  try {
+    const root = join(host.dir, 'dsh-onto', 'workspace')
+    saveRunRecord(
+      root,
+      buildRunRecord({
+        package: { name: 'aml-analysis', version: '1.0.0' },
+        dataset: fakeDataset(),
+        result: fakeResult('run-diff-a'),
+        redlines: [],
+      }),
+    )
+    const bResult = fakeResult('run-diff-b')
+    bResult.candidates[0].riskScore = 0.9
+    saveRunRecord(
+      root,
+      buildRunRecord({
+        package: { name: 'aml-analysis', version: '1.0.0' },
+        dataset: fakeDataset(),
+        result: bResult,
+        redlines: [],
+      }),
+    )
+    host.runtime.run(() => {
+      businessPolicy.setIdentityProvider(() => identity('tester'))
+    })
+    applyTools(host.ctx)
+    const tool = host.tools.get('show_run_diff')
+    const value = await tool.execute({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, {})
+    assert.equal(value.humanReviewRequired, true)
+    assert.equal(value.runIdA, 'run-diff-a')
+    assert.equal(value.topDeltas.length, 1)
+    assert.ok(Math.abs((value.topDeltas[0].riskScoreDelta ?? 0) - 0.4) < 1e-9)
+    const keys = walkKeys(value)
+    assert.ok(!keys.has('evidence'))
+    assert.ok(!keys.has('evidenceChains'))
+    const meta = tool.output.presentationMeta({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, value)
+    assert.deepEqual(Object.keys(meta).sort(), ['kind', 'runIdA', 'runIdB'])
+    assert.equal(JSON.stringify(meta).includes('0.9'), false)
+    const text = tool.output.render({ runIdA: 'run-diff-a', runIdB: 'run-diff-b' }, value)
+    assert.ok(text[0].text.includes('run-diff-a'))
+    assert.ok(text[0].text.includes('run-diff-b'))
+  } finally {
+    host.dispose()
+    configurePhraseStore(null)
+  }
+})

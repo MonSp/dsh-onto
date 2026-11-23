@@ -275,6 +275,9 @@ pnpm dsh --profile dsh-<domain> --no-open
 - **多系列图表**：`Chart` 支持 `mode:'grouped'`（`valueFields` 同行多列并排柱）、
   `mode:'stacked'`（`stackFrom` 行内嵌套列表堆出构成，如逐规则得分）、line 的
   `seriesField`（按行字段分组多折线）；配 `input`/`select` 轻交互件（本地筛选态，零往返）。
+- **导出与对比**：Table `export: true` 出「复制 Markdown / 复制 CSV」（本地剪贴板，
+  取当前视图行）；`show_run_diff(runIdA, runIdB)` 对话内对比卡（delta 表/命中增删/排除
+  增删；缺席侧分数 null 不补 0），报表页可选第二 run 出同一对比面。
 - **同源**：页面与对话报表都经 `getRunReport(runId)` 取同一投影（core `buildRunReport`），数值
   一致由构造保证；展开详情经 wire 受权取数（strict 越权 run 拒绝）。meta 只携 runRef+布局
   引用（无数值、无短语）。

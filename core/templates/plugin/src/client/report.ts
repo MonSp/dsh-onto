@@ -23,6 +23,7 @@ import {
   type ReportWhen,
   type RunReport,
 } from '@dsh-onto/core/report'
+import { diffViewOf, type RunDiffView } from '@dsh-onto/core/diffview'
 
 type T = (key: string) => string
 
@@ -176,6 +177,8 @@ interface RenderCtx {
   /** 交互件本地状态（input/select）；when.field 与 Table.filterBy 读它。 */
   uiState: Readonly<Record<string, string>>
   setUi: (next: Record<string, string>) => void
+  /** 对比上下文（Compare 专件数据源；仅 show_run_diff/报表页对比面注入）。 */
+  diff?: RunDiffView
 }
 
 function renderBound(props: Record<string, unknown>, ctx: RenderCtx): ReactNode {
@@ -213,6 +216,7 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
     declaredSort && typeof declaredSort.field === 'string' ? declaredSort : null,
   )
   const [query, setQuery] = useState('')
+  const [copied, setCopied] = useState('')
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const expandField = typeof p.expandField === 'string' ? p.expandField : ''
   const filter = (p.filter ?? null) as { field: string; op: string; value: unknown } | null
@@ -266,9 +270,56 @@ function ReportTable(props: { node: SurfaceNode; ctx: RenderCtx }): ReactNode {
     }
   }
 
+  // 导出复制（report-export-compare S2.1）：取当前视图行（过筛选/排序后），零往返
+  const copyTableText = async (fmt: 'md' | 'csv'): Promise<void> => {
+    const heads = columns.map((c) => String(c.header ?? c.field))
+    const body = rows.map((r) => columns.map((c) => fmtValue(r[String(c.field)])))
+    const text =
+      fmt === 'md'
+        ? [
+            `| ${heads.join(' | ')} |`,
+            `| ${heads.map(() => '---').join(' | ')} |`,
+            ...body.map((r) => `| ${r.join(' | ')} |`),
+          ].join('\n')
+        : [
+            heads.join(','),
+            ...body.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')),
+          ].join('\n')
+    const clip = (globalThis as { navigator?: { clipboard?: { writeText(s: string): Promise<void> } } }).navigator?.clipboard
+    if (clip === undefined) throw new Error('clipboard unavailable')
+    await clip.writeText(text)
+  }
+
   return h(
     'div',
     null,
+    p.export === true
+      ? h(
+          'div',
+          { className: 'txri-bar' },
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: () => {
+                void copyTableText('md').then(() => setCopied('md')).catch(() => setCopied('err'))
+              },
+            },
+            copied === 'md' ? '✓ Markdown' : '复制 Markdown',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: () => {
+                void copyTableText('csv').then(() => setCopied('csv')).catch(() => setCopied('err'))
+              },
+            },
+            copied === 'csv' ? '✓ CSV' : '复制 CSV',
+          ),
+          copied === 'err' ? h('span', { className: 'txri-note' }, t('reportError')) : null,
+        )
+      : null,
     h(
       'div',
       { className: 'txri-bar' },
@@ -554,6 +605,14 @@ function renderNode(node: SurfaceNode, ctx: RenderCtx, key: string | number): Re
         ),
       )
     }
+    case 'Compare':
+      return h(
+        'div',
+        { key },
+        ctx.diff !== undefined
+          ? h(CompareBox, { diff: ctx.diff, t: ctx.t })
+          : h('p', { className: 'txri-note' }, '—'),
+      )
     default:
       return h('p', { key, className: 'txri-err' }, `unknown component: ${String(node.type)}`)
   }
@@ -953,6 +1012,89 @@ function TabsBox(props: { node: SurfaceNode; ctx: RenderCtx; key?: string | numb
   )
 }
 
+/** 对比面（report-export-compare S2.3）：摘要 → delta 表（增删 chips）→ 排除增删清单。 */
+function CompareBox(props: { diff: RunDiffView; t: T }): ReactNode {
+  const { diff, t } = props
+  const chips = (d: RunDiffView['deltas'][number]) => {
+    const added = d.hitRuleIdsAdded.map((r) => `+${r}`)
+    const removed = d.hitRuleIdsRemoved.map((r) => `-${r}`)
+    return [...added, ...removed].join(' ')
+  }
+  return h(
+    'div',
+    { className: 'txri-gov' },
+    h(
+      'div',
+      { className: 'txri-bar' },
+      h('span', { className: 'txri-note txri-mono' }, `${diff.head.runIdA} → ${diff.head.runIdB}`),
+      h('span', { className: `tag ${diff.head.auditPassedA ? 'ok' : 'err'}` }, `A·${t('audit')}`),
+      h('span', { className: `tag ${diff.head.auditPassedB ? 'ok' : 'err'}` }, `B·${t('audit')}`),
+      h('span', { className: 'tag ok' }, t('humanReview')),
+    ),
+    h(
+      'p',
+      { className: 'txri-note' },
+      `Δ ${diff.summary.deltaCount} · +${diff.summary.addedCount} / -${diff.summary.removedCount}`
+        + ` · max|Δ| ${diff.summary.maxAbsDelta === null ? '—' : fmtValue(diff.summary.maxAbsDelta)}`,
+    ),
+    diff.deltas.length === 0
+      ? h('p', { className: 'txri-note' }, t('noCandidates'))
+      : h(
+          'table',
+          null,
+          h(
+            'thead',
+            null,
+            h(
+              'tr',
+              null,
+              h('th', null, 'candidateId'),
+              h('th', null, 'A'),
+              h('th', null, 'B'),
+              h('th', null, 'Δ'),
+              h('th', null, t('hitRules')),
+            ),
+          ),
+          h(
+            'tbody',
+            null,
+            ...diff.deltas.map((d) =>
+              h(
+                'tr',
+                { key: d.candidateId },
+                h('td', { className: 'txri-mono' }, d.candidateId),
+                h('td', { className: 'txri-num' }, fmtValue(d.riskScoreA)),
+                h('td', { className: 'txri-num' }, fmtValue(d.riskScoreB)),
+                h('td', { className: 'txri-num' }, renderCell(d.riskScoreDelta, 'delta')),
+                h('td', { className: 'txri-mono' }, chips(d) || '—'),
+              ),
+            ),
+          ),
+        ),
+    diff.excludedAdded.length === 0 && diff.excludedRemoved.length === 0
+      ? null
+      : h(
+          'div',
+          { className: 'txri-note' },
+          diff.excludedAdded.length > 0
+            ? h('div', null, `+excluded: ${diff.excludedAdded.map((x) => `${x.candidateId}(${x.ruleId})`).join(', ')}`)
+            : null,
+          diff.excludedRemoved.length > 0
+            ? h('div', null, `-excluded: ${diff.excludedRemoved.map((x) => `${x.candidateId}(${x.ruleId})`).join(', ')}`)
+            : null,
+        ),
+  )
+}
+
+/** 对比面板（工具面/报表页共用入口）。 */
+export function ComparePanel(props: { diff: RunDiffView; t: T }): ReactNode {
+  return h(
+    ReportBoundary,
+    { fallback: h('p', { className: 'txri-note' }, props.t('reportFallback')) },
+    h(CompareBox, props),
+  )
+}
+
 class ReportBoundary extends Component<
   { fallback: ReactNode; children?: ReactNode },
   { failed: boolean }
@@ -1124,4 +1266,75 @@ function ReportLoader(props: {
     ),
     h(ReportSurface, { surface, report, t, navigate, fallback }),
   )
+}
+
+/* ------------------------- 对比卡 toolview（report-export-compare） ------------------------- */
+
+interface DiffMeta {
+  runIdA: string
+  runIdB: string
+}
+
+interface DiffApi {
+  compareRuns(request: { runIdA: string; runIdB: string }): Promise<unknown>
+}
+
+function parseDiffMeta(meta: unknown): DiffMeta | null {
+  if (meta === null || typeof meta !== 'object') return null
+  const m = meta as Record<string, unknown>
+  if (m.kind !== 'diff') return null
+  if (typeof m.runIdA !== 'string' || typeof m.runIdB !== 'string') return null
+  if (m.runIdA === '' || m.runIdB === '') return null
+  return { runIdA: m.runIdA, runIdB: m.runIdB }
+}
+
+/** 对比卡 toolview：读 meta → wire compareRuns 受权取 diff → ComparePanel；失败回退文字。 */
+export function createDiffToolView(deps: { api: DiffApi; t: T }): (props: ToolViewProps) => ReactNode {
+  return function DiffToolView(props: ToolViewProps): ReactNode {
+    const { phase, block } = props
+    const t = deps.t
+    if (phase !== 'result') return h('div', { className: 'txri-note' }, t('reportPending'))
+    const fallback = h(
+      'div',
+      { className: 'txri-gov' },
+      h('p', { className: 'txri-note' }, t('reportFallback')),
+      h('pre', { className: 'txri-mono' }, fallbackText(block)),
+    )
+    if (block.isError === true) return fallback
+    const meta = parseDiffMeta(block.meta)
+    if (meta === null) return fallback
+    return h(DiffLoader, { meta, api: deps.api, t, fallback })
+  }
+}
+
+function DiffLoader(props: { meta: DiffMeta; api: DiffApi; t: T; fallback: ReactNode }): ReactNode {
+  const { meta, api, t, fallback } = props
+  const [diff, setDiff] = useState<RunDiffView | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      try {
+        const out = unwrap<{ diff: Parameters<typeof diffViewOf>[0] }>(
+          await api.compareRuns({ runIdA: meta.runIdA, runIdB: meta.runIdB }),
+        )
+        if (!live) return
+        setDiff(diffViewOf(out.diff))
+      } catch (e) {
+        if (!live) return
+        setError(errText(e))
+      }
+    })()
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.runIdA, meta.runIdB])
+
+  if (error !== '') {
+    return h('div', null, h('p', { className: 'txri-err' }, `${t('reportError')}: ${error}`), fallback)
+  }
+  if (diff === null) return h('p', { className: 'txri-note' }, t('reportLoading'))
+  return h(ComparePanel, { diff, t })
 }

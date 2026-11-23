@@ -652,3 +652,24 @@ test('批次 4：Input/Select / when.field / Table.filterBy', () => {
   )
   assert.equal(v7.ok, false)
 })
+
+test('批次 5：Compare 组件与 Table export', () => {
+  const ok = msg(node('cmp', 'Compare', { title: 'A/B 对比' }))
+  assert.equal(validateReportSurface(ok).ok, true)
+  assert.equal(validateReportSurface(msg(node('cmp', 'Compare', {}))).ok, true)
+
+  // Compare 固定布局：不接受 bind 等数据槽
+  const v1 = validateReportSurface(msg(node('cmp', 'Compare', { bind: '/diff' })))
+  assert.equal(v1.ok, false)
+  assert.ok(codes(v1).includes('SF_PROPS_UNKNOWN'))
+
+  const v2 = validateReportSurface(
+    msg(node('t', 'Table', { rowsBind: '/candidates', export: true, columns: [{ field: 'candidateId', header: 'ID' }] })),
+  )
+  assert.equal(v2.ok, true)
+
+  const v3 = validateReportSurface(
+    msg(node('t', 'Table', { rowsBind: '/candidates', export: 'yes', columns: [{ field: 'candidateId', header: 'ID' }] })),
+  )
+  assert.equal(v3.ok, false)
+})

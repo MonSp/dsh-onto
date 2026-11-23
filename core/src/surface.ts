@@ -36,6 +36,7 @@ export const SURFACE_COMPONENT_TYPES = [
   'Chart',
   'Input',
   'Select',
+  'Compare',
 ] as const
 export type SurfaceComponentType = (typeof SURFACE_COMPONENT_TYPES)[number]
 
@@ -69,7 +70,7 @@ export type SurfaceValidation =
   | { ok: false; errors: SurfaceDiagnostic[] }
 
 const LEAF_TYPES = new Set<SurfaceComponentType>([
-  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs', 'Chart', 'Input', 'Select',
+  'Stat', 'Text', 'Table', 'Accordion', 'Button', 'KeyValue', 'Badge', 'Callout', 'Progress', 'Timeline', 'Tabs', 'Chart', 'Input', 'Select', 'Compare',
 ])
 const NAVIGATE_TARGETS = new Set(['result-page'])
 const FILTER_OPS = new Set(['eq', 'ne', 'gte', 'lte', 'contains'])
@@ -261,7 +262,10 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
         break
       }
       case 'Table': {
-        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'filterBy', 'when'], where, err)
+        rejectUnknownKeys(props, ['columns', 'rowsBind', 'expandField', 'sort', 'filter', 'filterBy', 'export', 'when'], where, err)
+        if (props.export !== undefined && typeof props.export !== 'boolean') {
+          err('SF_SHAPE', `${where}.props.export`, 'export 必须是布尔')
+        }
         if (props.filterBy !== undefined && !isValidStateId(props.filterBy)) {
           err('SF_SHAPE', `${where}.props.filterBy`, 'filterBy 必须是非空短 id（input 的 id）')
         }
@@ -681,6 +685,14 @@ export function validateReportSurface(input: unknown): SurfaceValidation {
           err('SF_SHAPE', `${where}.props.options`, 'options 必须是 2–20 个非空字符串')
         } else if (props.value !== undefined && !opts.includes(props.value)) {
           err('SF_SHAPE', `${where}.props.value`, 'value 必须是 options 之一')
+        }
+        break
+      }
+      case 'Compare': {
+        // 对比面（report-export-compare S2.3）：固定布局，数据随上下文（diff 视图）绑定
+        rejectUnknownKeys(props, ['title', 'when'], where, err)
+        if (props.title !== undefined && !isNonEmptyString(props.title)) {
+          err('SF_SHAPE', `${where}.props.title`, 'title 必须是非空字符串')
         }
         break
       }
