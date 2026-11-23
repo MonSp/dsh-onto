@@ -91,6 +91,8 @@ export interface ReleaseHistoryEntry {
   to: string | null
   by: string
   packageDigest?: string
+  /** 批准卡凭证摘要（T2.1 留痕）：本条发布动作放行时的批次指纹，导出/回查可对账。 */
+  approvalDigest?: string
 }
 
 export interface ImportResult {
@@ -186,19 +188,20 @@ export class ReleaseStore {
 
   /**
    * 新运行选版断言：
-   * - 无 active.json：未受管包（无发布 manifest）放行（开发工作区语义，兼容 M0–M3）；
-   *   已受管（有 manifest）未激活 → RELEASE_NOT_ACTIVE（发布业务 v1：未激活拒绝）；
+   * - 无 active.json：未受管包（该名下无任何发布 manifest）放行（开发工作区语义，兼容 M0–M3）；
+   *   已受管（该名下任一版本有 manifest）未激活 → RELEASE_NOT_ACTIVE（发布业务 v1：包级受管，未激活一律拒）；
    * - 指针含该包 → version 必须等于活动版，否则 RELEASE_VERSION_NOT_ACTIVE；
    * - 指针存在但不含该包 → 未受管放行；已受管同上拒（未激活）。
    * - requireActive（strict）：一切未激活皆拒 + 激活后复核 manifest 锚点（反篡改）。
+   * - manifest 损坏（存在但不可解析）→ RELEASE_MALFORMED（fail-closed，不得退回「未受管」语义）。
    */
   assertActiveBinding(name: string, version: string): void {
     const a = this.readActive()
     const active = a && Object.hasOwn(a.packages, name) ? a.packages[name] : undefined
     if (active === undefined) {
-      // 发布业务 v1（平台免重启声明式发布）：已受管（有发布 manifest）的包未激活一律拒——
-      // 未激活 fail-closed；未受管包保持开发工作区语义（M0–M3）。requireActive 严格档不变（更严）。
-      if (this.requireActive || this.readManifest(name, version) !== null) {
+      // 发布业务 v1（平台免重启声明式发布）：已受管（该名下任一版本有发布 manifest）的包未激活一律拒——
+      // 未激活 fail-closed（包级受管，同名其它版本不得退回开发语义）；未受管包保持开发工作区语义（M0–M3）。
+      if (this.requireActive || this.hasAnyManifest(name)) {
         throw new ReleaseError('RELEASE_NOT_ACTIVE', `no active release for ${name}@${version}（已导入未激活，需授权人激活）`)
       }
       return
@@ -235,14 +238,26 @@ export class ReleaseStore {
     return join(this.manifestsDir, name, `${version}.json`)
   }
 
+  /**
+   * 读发布描述：文件缺失返回 null；**存在但损坏/结构非法抛 RELEASE_MALFORMED**——
+   * 受管闸不得把损坏 manifest 退回「未受管放行」（fail-open 面，须 fail-loud）。
+   */
   readManifest(name: string, version: string): ReleaseManifest | null {
     const p = this.manifestPath(name, version)
     if (!existsSync(p)) return null
     try {
       return parseReleaseManifest(JSON.parse(readFileSync(p, 'utf8')))
-    } catch {
-      return null
+    } catch (e) {
+      if (e instanceof ReleaseError) throw e
+      throw new ReleaseError('RELEASE_MALFORMED', `unreadable release manifest: ${name}@${version}（人工核对，不自动重建）`)
     }
+  }
+
+  /** 该包名下是否已有任一发布 manifest（包级受管判定）。损坏 manifest 同样 fail-loud。 */
+  hasAnyManifest(name: string): boolean {
+    const dir = join(this.manifestsDir, name)
+    if (!isDir(dir)) return false
+    return safeReaddir(dir).some((f) => f.endsWith('.json'))
   }
 
   listManifests(): ReleaseManifest[] {
@@ -254,8 +269,13 @@ export class ReleaseStore {
       for (const file of safeReaddir(nameDir)) {
         if (!file.endsWith('.json')) continue
         const version = file.slice(0, -5)
-        const m = this.readManifest(name, version)
-        if (m !== null) out.push(m)
+        // 列举面按条跳过损坏项（软面容错）；硬面（受管闸/激活）经 readManifest fail-loud。
+        try {
+          const m = this.readManifest(name, version)
+          if (m !== null) out.push(m)
+        } catch {
+          /* skip corrupt manifest */
+        }
       }
     }
     return out.sort((a, b) =>
@@ -269,9 +289,9 @@ export class ReleaseStore {
 
   /**
    * 受控导入：来源白名单 → 围栏 → 锚点链 → 幂等/冲突 → 写入版本化存储。
-   * **不**自动激活。
+   * **不**自动激活。opts.approvalDigest 为批准卡凭证摘要（T2.1 留痕入 history）。
    */
-  importRelease(source: ReleaseImportSource): ImportResult {
+  importRelease(source: ReleaseImportSource, opts?: { approvalDigest?: string }): ImportResult {
     const bundle = this.loadSourceBundle(source)
     const manifest = parseReleaseManifest(bundle.manifest)
     if (manifest.format !== RELEASE_FORMAT) {
@@ -348,8 +368,7 @@ export class ReleaseStore {
           // 补齐外层发布描述（幂等），不重写包文件
           const mp = this.manifestPath(name, version)
           if (!existsSync(mp)) {
-            mkdirSync(dirname(mp), { recursive: true })
-            writeFileSync(mp, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+            this.writeManifestFile(mp, manifest)
             this.appendHistory({
               at: new Date().toISOString(),
               action: 'import',
@@ -357,6 +376,7 @@ export class ReleaseStore {
               to: version,
               by: manifest.releasedBy,
               packageDigest: manifest.packageDigest,
+              ...(opts?.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
             })
           }
           return {
@@ -377,14 +397,17 @@ export class ReleaseStore {
       mkdirSync(dir, { recursive: true })
       for (const f of bundle.files) {
         const full = join(dir, f.path)
+        // 二次围栏（join 后；与 staging/自愈同口径，dir+sep 防 sibling 前缀误判）
+        if (!full.startsWith(dir + sep)) {
+          throw new ReleaseError('RELEASE_UNSAFE_PATH', `path escapes package dir: ${f.path}`)
+        }
         mkdirSync(dirname(full), { recursive: true })
         writeFileSync(full, f.content, 'utf8')
       }
 
       // 外层发布描述
       const mp = this.manifestPath(name, version)
-      mkdirSync(dirname(mp), { recursive: true })
-      writeFileSync(mp, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+      this.writeManifestFile(mp, manifest)
 
       this.appendHistory({
         at: new Date().toISOString(),
@@ -393,6 +416,7 @@ export class ReleaseStore {
         to: version,
         by: manifest.releasedBy,
         packageDigest: manifest.packageDigest,
+        ...(opts?.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
       })
 
       return {
@@ -449,7 +473,7 @@ export class ReleaseStore {
    * 授权激活：重验锚点 + 依赖 + 连接器能力 → 写活动指针（分记插件/core/runtime 版本）。
    * 不改写在途提案与历史 RunRecord。
    */
-  activate(name: string, version: string, opts: { authorizedBy: string }): ActivateResult {
+  activate(name: string, version: string, opts: { authorizedBy: string; approvalDigest?: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
     const manifest = this.validateActivation(name, version)
     const active = this.readActive()
@@ -478,6 +502,7 @@ export class ReleaseStore {
       to: version,
       by,
       packageDigest: manifest.packageDigest,
+      ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
     })
     return { ok: true, package: { name, version }, previous, versions: next.versions }
   }
@@ -509,7 +534,7 @@ export class ReleaseStore {
    * 目标版本不存在于存储 → RELEASE_NOT_FOUND（不虚构）。
    * 只影响新运行选版。
    */
-  rollback(name: string, opts: { authorizedBy: string }): ActivateResult {
+  rollback(name: string, opts: { authorizedBy: string; approvalDigest?: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
     const active = this.readActive()
     if (active === null || !Object.hasOwn(active.packages, name)) {
@@ -539,6 +564,7 @@ export class ReleaseStore {
       to: prev,
       by,
       packageDigest: manifest.packageDigest,
+      ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
     })
     return {
       ok: true,
@@ -592,6 +618,18 @@ export class ReleaseStore {
     try {
       writeFileSync(temp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
       renameSync(temp, this.activePath)
+    } finally {
+      rmSync(temp, { force: true })
+    }
+  }
+
+  /** 发布描述原子写（tmp+rename）：防半截文件——损坏 manifest 曾把受管闸退回 fail-open。 */
+  private writeManifestFile(path: string, manifest: ReleaseManifest): void {
+    mkdirSync(dirname(path), { recursive: true })
+    const temp = `${path}.${randomUUID()}.tmp`
+    try {
+      writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+      renameSync(temp, path)
     } finally {
       rmSync(temp, { force: true })
     }

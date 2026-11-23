@@ -2,8 +2,10 @@
  * 发布业务 v1 受控数据源配置：部署配置持久层 + 宿主启动恢复。
  *
  * 口径：
- * - apiBaseUrl / apiToken 是部署配置——不入包、不落发布台账（releases/manifests、history.jsonl）；
+ * - apiBaseUrl / apiTokenEnv 是部署配置——不入包、不落发布台账（releases/manifests、history.jsonl）；
  *   本模块的 `source-configs.json` 是独立部署配置面（与发布台账分离存放）。
+ * - 令牌只存**宿主 env 变量名**（apiTokenEnv），值不落盘、不过模型上下文——
+ *   恢复/登记时从 process.env 解析；env 缺失 → 该 sourceId 跳过登记（fail-closed）。
  * - 「免重启发布」只承诺生效即时性；重启存活靠宿主启动时 {@link restoreManagedDataSources}
  *   按本配置重建映射连接器登记（发布写入的运行中登记重启即失，不恢复则运行按未登记拒）。
  * - 恢复语义：已登记的 sourceId 不覆盖（部署 env / 插件自登记优先），只补缺——
@@ -21,15 +23,18 @@ import { createMappedDataConnector } from './data-source-map.js'
 
 export const SOURCE_CONFIGS_FORMAT = 'dsh-onto-source-configs/1'
 
-/** 受控数据源配置（部署配置；可能含静态令牌，与发布台账分离）。 */
+/** env 变量名语法（令牌引用只存名字，不存值）。 */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** 受控数据源配置（部署配置；令牌以 env 变量名引用，与发布台账分离）。 */
 export interface ManagedSourceConfig {
   sourceId: string
   /** 转换契约所在包（shape + source-maps 随包读取，不入本配置）。 */
   package: { name: string; version: string }
   sourceKind: 'simulated' | 'formal'
   apiBaseUrl: string
-  /** 可选静态令牌（部署配置；不入包、不落台账）。 */
-  apiToken?: string
+  /** 可选静态令牌的宿主 env 变量名（部署配置；值不落盘、不入包、不落台账）。 */
+  apiTokenEnv?: string
   registeredAt: string
 }
 
@@ -48,7 +53,9 @@ export function parseControlledBaseUrl(raw: string): URL {
   } catch {
     throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 不是合法 URL')
   }
-  const loopback = ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
+  // WHATWG URL 的 IPv6 hostname 带方括号（"[::1]"）——归一后再比对回环白名单。
+  const host = url.hostname.replace(/^\[|\]$/g, '')
+  const loopback = ['localhost', '127.0.0.1', '::1'].includes(host)
   if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))) {
     throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 仅允许 https 或回环 http（受控数据源配置）')
   }
@@ -61,15 +68,52 @@ export function parseSourceKind(raw: string): 'simulated' | 'formal' {
   throw new AgentToolError('INVALID_ARGS', 'sourceKind 只能是 simulated|formal')
 }
 
+/** 令牌 env 引用校验（只存名字；值由宿主 env 提供）。 */
+export function parseTokenEnvName(raw: string): string {
+  if (!ENV_NAME_RE.test(raw)) {
+    throw new AgentToolError('INVALID_ARGS', 'apiTokenEnv 须是合法 env 变量名（如 DSH_SRC_TOKEN）')
+  }
+  return raw
+}
+
+/** 从宿主 env 解析令牌值；env 缺失/为空返回 null（调用方按无鉴权或 fail-closed 处置）。 */
+export function resolveTokenEnv(name: string): string | null {
+  const v = process.env[name]
+  return typeof v === 'string' && v !== '' ? v : null
+}
+
 /** 配置落点（dataDir 根；与发布台账 releases/ 分离）。 */
 export function sourceConfigsPath(dataDir: string): string {
   return join(dataDir, 'source-configs.json')
 }
 
-function writeSourceConfigs(dataDir: string, configs: readonly ManagedSourceConfig[]): void {
+function parseSourceConfigsText(text: string | null): ManagedSourceConfig[] {
+  if (text === null) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new AgentToolError('INVALID_ARGS', '受控数据源配置损坏（source-configs.json 无法解析；人工核对，不自动重建）')
+  }
+  if (!isRecord(parsed) || parsed.format !== SOURCE_CONFIGS_FORMAT || !Array.isArray(parsed.sources)) {
+    throw new AgentToolError('INVALID_ARGS', '受控数据源配置结构非法（format/sources）')
+  }
+  return (parsed.sources as unknown[]).map((raw, i) => parseSourceConfigEntry(raw, i))
+}
+
+function readSourceConfigsRaw(dataDir: string): string | null {
+  const file = sourceConfigsPath(dataDir)
+  return existsSync(file) ? readFileSync(file, 'utf8') : null
+}
+
+function writeSourceConfigs(dataDir: string, configs: readonly ManagedSourceConfig[], expectedRaw: string | null): void {
   const file = sourceConfigsPath(dataDir)
   mkdirSync(dirname(file), { recursive: true })
   const body = `${JSON.stringify({ format: SOURCE_CONFIGS_FORMAT, sources: configs }, null, 2)}\n`
+  // 乐观并发：落盘前复核文件仍是读取时的内容，变了由调用方重试（跨进程并发 publish 不丢条目）
+  if (readSourceConfigsRaw(dataDir) !== expectedRaw) {
+    throw new AgentToolError('INVALID_ARGS', '受控数据源配置并发变更，请重试')
+  }
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, body, 'utf8')
   renameSync(tmp, file)
@@ -91,39 +135,40 @@ function parseSourceConfigEntry(raw: unknown, index: number): ManagedSourceConfi
   if (typeof rec.sourceKind !== 'string') configEntryError(index, 'sourceKind 须为字符串')
   parseSourceKind(rec.sourceKind)
   if (typeof rec.apiBaseUrl !== 'string') configEntryError(index, 'apiBaseUrl 须为字符串')
-  if (rec.apiToken !== undefined && typeof rec.apiToken !== 'string') configEntryError(index, 'apiToken 须为字符串')
+  if (rec.apiTokenEnv !== undefined && typeof rec.apiTokenEnv !== 'string') configEntryError(index, 'apiTokenEnv 须为字符串')
+  if (typeof rec.apiToken === 'string') configEntryError(index, 'apiToken 已废弃：令牌只存 env 变量名（apiTokenEnv），值不落盘')
   if (typeof rec.registeredAt !== 'string' || rec.registeredAt === '') configEntryError(index, 'registeredAt 须为非空字符串')
   return {
     sourceId: rec.sourceId,
     package: { name: pkg.name, version: pkg.version },
     sourceKind: rec.sourceKind as 'simulated' | 'formal',
     apiBaseUrl: rec.apiBaseUrl,
-    ...(typeof rec.apiToken === 'string' && rec.apiToken !== '' ? { apiToken: rec.apiToken } : {}),
+    ...(typeof rec.apiTokenEnv === 'string' && rec.apiTokenEnv !== ''
+      ? { apiTokenEnv: parseTokenEnvName(rec.apiTokenEnv) }
+      : {}),
     registeredAt: rec.registeredAt,
   }
 }
 
 /** 读取受控数据源配置；无文件返回空表，结构损坏抛错（调用方决定降级口径）。 */
 export function loadSourceConfigs(dataDir: string): ManagedSourceConfig[] {
-  const file = sourceConfigsPath(dataDir)
-  if (!existsSync(file)) return []
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
-    throw new AgentToolError('INVALID_ARGS', '受控数据源配置损坏（source-configs.json 无法解析；人工核对，不自动重建）')
-  }
-  if (!isRecord(parsed) || parsed.format !== SOURCE_CONFIGS_FORMAT || !Array.isArray(parsed.sources)) {
-    throw new AgentToolError('INVALID_ARGS', '受控数据源配置结构非法（format/sources）')
-  }
-  return (parsed.sources as unknown[]).map((raw, i) => parseSourceConfigEntry(raw, i))
+  return parseSourceConfigsText(readSourceConfigsRaw(dataDir))
 }
 
-/** 按 sourceId 写入/替换一条受控数据源配置（发布动作落盘面；原子写）。 */
+/** 按 sourceId 写入/替换一条受控数据源配置（发布动作落盘面；原子写 + 乐观并发重试）。 */
 export function upsertSourceConfig(dataDir: string, config: ManagedSourceConfig): void {
-  const configs = loadSourceConfigs(dataDir).filter((c) => c.sourceId !== config.sourceId)
-  configs.push(parseSourceConfigEntry(config, configs.length))
-  writeSourceConfigs(dataDir, configs)
+  const entry = parseSourceConfigEntry(config, 0)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const raw = readSourceConfigsRaw(dataDir)
+    const configs = parseSourceConfigsText(raw).filter((c) => c.sourceId !== entry.sourceId)
+    configs.push(entry)
+    try {
+      writeSourceConfigs(dataDir, configs, raw)
+      return
+    } catch (e) {
+      if (attempt === 2 || !(e instanceof AgentToolError) || !e.message.includes('并发变更')) throw e
+    }
+  }
 }
 
 /**
@@ -167,13 +212,21 @@ export function restoreManagedDataSources(dataDir: string): SourceRestoreReport 
       if (maps.length === 0) {
         throw new AgentToolError('INVALID_ARGS', `${cfg.sourceId} 所在包无 source-maps：映射契约缺失`)
       }
+      // 令牌从宿主 env 解析（值不落盘）；声明了 env 名但取不到值 → fail-closed 不登记。
+      let token: string | null = null
+      if (cfg.apiTokenEnv !== undefined) {
+        token = resolveTokenEnv(cfg.apiTokenEnv)
+        if (token === null) {
+          throw new AgentToolError('INVALID_ARGS', `${cfg.sourceId} 令牌 env ${cfg.apiTokenEnv} 缺失/为空：fail-closed 不登记`)
+        }
+      }
       dataSources.register(cfg.sourceId, createMappedDataConnector({
         sourceId: cfg.sourceId,
         baseUrl: cfg.apiBaseUrl,
         shape: src.shape,
         maps,
         kind: cfg.sourceKind,
-        ...(typeof cfg.apiToken === 'string' && cfg.apiToken !== '' ? { auth: { token: cfg.apiToken } } : {}),
+        ...(token !== null ? { auth: { token } } : {}),
       }))
       restored.push(cfg.sourceId)
     } catch (e) {

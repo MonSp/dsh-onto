@@ -2,12 +2,30 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { derivePackage, generatePlugin, loadPackage, readPackageMeta } from '../dist/index.js'
 import { mkWorkspace, rmWorkspace, REPO_ROOT } from './helpers.mjs'
 
 const SCN = 'SCN-WST-HAZARD-MIX'
+
+/**
+ * 真跑生成物 e2e（dataset/connector 两臂都要过）：把 @dsh-onto/core 以 junction 挂进
+ * 生成物 node_modules 后执行 tests/run-e2e.test.mjs——分支不只锚字符串在位。
+ */
+function runGeneratedE2E(outDir) {
+  const nm = join(outDir, 'node_modules', '@dsh-onto')
+  mkdirSync(nm, { recursive: true })
+  symlinkSync(join(REPO_ROOT, 'core'), join(nm, 'core'), 'junction')
+  try {
+    execFileSync(process.execPath, ['--test', join(outDir, 'tests', 'run-e2e.test.mjs')], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+  } catch (e) {
+    assert.fail(`生成物 e2e 失败:\n${e.stdout ?? ''}\n${e.stderr ?? ''}`)
+  }
+}
 
 function mapsYaml() {
   return `kind: O1SourceMaps
@@ -159,6 +177,8 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     const srcLine = seed.split('\n').find((l) => l.includes('const SRC_PKG_DIR'))
     assert.ok(srcLine !== undefined && !srcLine.includes('\\'), `SRC_PKG_DIR 应为正斜杠路径: ${String(srcLine)}`)
     execFileSync(process.execPath, ['--check', join(outDir, 'scripts', 'seed-release.mjs')])
+    // 生成物 e2e 真跑（connector 臂）：夹具→映射→场景→候选/规则/证据/人审断言
+    runGeneratedE2E(outDir)
     // 包零改动
     assert.equal(readFileSync(join(dir, 'package.yaml'), 'utf8'), before)
   } finally {
@@ -247,6 +267,8 @@ test('plugin generate dataset 模式：纯内容包出业务页（无 bindings�
     // e2e 模式分支在位
     const e2e = readFileSync(join(outDir, 'tests', 'run-e2e.test.mjs'), 'utf8')
     assert.ok(e2e.includes("config.dataMode === 'dataset'"), 'e2e 须按模式取夹具')
+    // 生成物 e2e 真跑（dataset 臂）：内联数据通道 → 场景 → 候选/规则/证据/人审断言
+    runGeneratedE2E(outDir)
     // 包零改动（ISSUED 只读）
     assert.equal(readFileSync(join(versionDir, 'package.yaml'), 'utf8'), before)
   } finally {
@@ -266,6 +288,24 @@ test('plugin generate dataset 模式：--fixture 指向不存在的文件 → �
           fixturePath: join(ws.root, 'no-such-fixture.json'),
         }),
       /fixture/i,
+    )
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
+test('plugin generate dataset 模式：--fixture 指向目录 → 拒绝（不 cpSync 整树）', () => {
+  const ws = mkWorkspace()
+  try {
+    assert.throws(
+      () =>
+        generatePlugin({
+          versionDir: join(REPO_ROOT, 'packages', 'ebike-charging', '1.0.0'),
+          scenarioId: 'SCN-EBC-CHARGE-RISK',
+          outDir: join(ws.root, 'gen-y'),
+          fixturePath: join(REPO_ROOT, 'examples'),
+        }),
+      /须是文件/,
     )
   } finally {
     rmWorkspace(ws.root)

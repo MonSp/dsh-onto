@@ -18,12 +18,13 @@ import { businessPolicy } from '../dist/business-policy.js'
 import {
   currentRuntimeContext, provideRuntimeContext, runtimeContextForHost,
   OntoRuntime, loadSourceConfigs, restoreManagedDataSources, upsertSourceConfig, sourceConfigsPath,
+  parseControlledBaseUrl,
 } from '@dsh-onto/runtime'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const WST_SRC = join(REPO, 'packages', 'wst', '1.0.0')
 
-function setupPublish() {
+function setupPublish(approvalOutcome = 'allowed-once') {
   const root = mkdtempSync(join(tmpdir(), 'dsh-onto-pub-'))
   const versionDir = join(root, 'dsh-onto', 'workspace', 'packages', 'wst-ops', '1.0.0')
   mkdirSync(join(versionDir, '..'), { recursive: true })
@@ -36,7 +37,7 @@ function setupPublish() {
   services.set('approval', {
     request: async () => {
       approvalRequests++
-      return 'allowed-once'
+      return approvalOutcome
     },
   })
   const tools = new Map()
@@ -52,6 +53,8 @@ function setupPublish() {
   }
   provideRuntimeContext(ctx.root, currentRuntimeContext())
   apply(ctx)
+  // 注册表是模块级共享：先清位，防上个用例残留登记污染断言
+  if (dataSources.has('SRC-WST-CORE')) dataSources.unregister('SRC-WST-CORE')
   return {
     root,
     tools,
@@ -175,18 +178,18 @@ test('发布业务 v1：缺配置/越权/回滚 三态 fail-closed', async () =>
       (e) => e.code === 'INVALID_ARGS' && /数据源未登记/.test(e.message),
     )
 
-    // 越权：身份缺席（可信宿主/认证服务缺席）→ 激活拒绝
+    // 越权：身份缺席（可信宿主/认证服务缺席）→ 激活拒绝（身份先于批准卡，确定性 OBJECT_NOT_GRANTED）
     businessPolicy.setIdentityProvider(null)
     await assert.rejects(
       () => chain.tools.get('activate_business').execute({ name: 'wst-ops', version: '1.0.0', humanApproved: true }, EXEC),
-      (e) => e.code === 'OBJECT_NOT_GRANTED' || e.code === 'APPROVAL_DENIED' || e.code === 'APPROVAL_UNAVAILABLE',
+      (e) => e.code === 'OBJECT_NOT_GRANTED',
     )
 
     // 回滚：无上一活动版本 → 拒绝（目标不存在），不静默
     businessPolicy.setIdentityProvider(() => IDENTITY)
     await assert.rejects(
       () => chain.tools.get('rollback_business').execute({ name: 'wst-ops', humanApproved: true }, EXEC),
-      (e) => e.code === 'RELEASE_NOT_FOUND' || /回滚/.test(e.message),
+      (e) => e.code === 'RELEASE_NOT_FOUND',
     )
   } finally {
     chain.dispose()
@@ -247,6 +250,11 @@ test('发布业务 v1：受控数据源配置与意图声明校验', async () =>
       (e) => e.code === 'INVALID_ARGS' && /humanApproved/.test(e.message),
     )
     assert.equal(chain.approvalCount(), 0, '校验不过不得弹批准卡')
+    // 回环白名单口径：IPv6 回环（[::1]）与 https 放行；非回环 http 已在上方拒绝
+    assert.doesNotThrow(() => parseControlledBaseUrl('http://[::1]:3912'), 'IPv6 回环 http 须放行')
+    assert.doesNotThrow(() => parseControlledBaseUrl('http://localhost:3912'))
+    assert.doesNotThrow(() => parseControlledBaseUrl('https://api.example.com'))
+    assert.throws(() => parseControlledBaseUrl('http://[::ffff:169.254.169.254]/'), /受控数据源配置/)
   } finally {
     chain.dispose()
   }
@@ -298,8 +306,9 @@ test('受管闸 wire 面（业务页 runScenario 入口）：未激活拒（onto
   }
 })
 
-test('发布业务 v1：受控数据源配置随宿主启动恢复（重启后 sourceId 自动再登记；令牌不入包/不落台账）', async () => {
+test('发布业务 v1：受控数据源配置随宿主启动恢复（重启后 sourceId 自动再登记；令牌只存 env 名不落盘）', async () => {
   const chain = setupPublish()
+  process.env.DSH_PUB_TOKEN_TEST = 'secret-token-42'
   try {
     businessPolicy.setIdentityProvider(() => IDENTITY)
     await chain.tools.get('publish_business').execute(
@@ -309,21 +318,24 @@ test('发布业务 v1：受控数据源配置随宿主启动恢复（重启后 s
         sourceId: 'SRC-WST-CORE',
         sourceKind: 'simulated',
         apiBaseUrl: 'http://127.0.0.1:3912',
-        apiToken: 'secret-token-42',
+        apiTokenEnv: 'DSH_PUB_TOKEN_TEST',
         humanApproved: true,
       },
       EXEC,
     )
     const dataDir = join(chain.root, 'dsh-onto')
-    // 部署配置落盘（与发布台账分离）；令牌不入包、不落台账
+    // 部署配置落盘（与发布台账分离）；令牌只存 env 变量名——值不入包、不落台账、不落配置
     assert.ok(existsSync(sourceConfigsPath(dataDir)), '受控数据源配置须落盘')
     const configs = loadSourceConfigs(dataDir)
     assert.equal(configs.length, 1)
-    assert.equal(configs[0].apiToken, 'secret-token-42')
+    assert.equal(configs[0].apiTokenEnv, 'DSH_PUB_TOKEN_TEST')
+    const configRaw = readFileSync(sourceConfigsPath(dataDir), 'utf8')
+    assert.ok(!configRaw.includes('secret-token-42'), '令牌值不得落 source-configs.json')
     const manifestRaw = readFileSync(join(dataDir, 'releases', 'manifests', 'wst-ops', '1.0.0.json'), 'utf8')
     assert.ok(!manifestRaw.includes('secret-token-42'), '令牌不得入发布台账 manifest')
     const historyRaw = readFileSync(join(dataDir, 'releases', 'history.jsonl'), 'utf8')
     assert.ok(!historyRaw.includes('secret-token-42'), '令牌不得落 history 台账')
+    assert.ok(historyRaw.includes('approvalDigest'), '批准卡凭证摘要须留痕入 history（T2.1）')
     const pkgRaw = readFileSync(join(dataDir, 'workspace', 'packages', 'wst-ops', '1.0.0', 'package.yaml'), 'utf8')
     assert.ok(!pkgRaw.includes('secret-token-42'), '令牌不得入包')
 
@@ -344,6 +356,7 @@ test('发布业务 v1：受控数据源配置随宿主启动恢复（重启后 s
       for (const dispose of disposers) dispose()
     }
   } finally {
+    delete process.env.DSH_PUB_TOKEN_TEST
     chain.dispose()
   }
 })
@@ -391,6 +404,120 @@ test('启动恢复 fail-closed：配置复核失败/包契约缺失不登记；�
     const corrupt = restoreManagedDataSources(dataDir)
     assert.equal(corrupt.loadError !== undefined, true, '配置损坏须报 loadError')
     assert.deepEqual(corrupt.restored, [])
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('发布业务 v1：rollback 成功路径 + 回滚后闸状态（回滚版放行/新版拒）', async () => {
+  const chain = setupPublish()
+  // 二版同名（wst-ops 1.0.0 / 1.0.1，均随仓已签发）：回滚 = 活动指针回上一活动版
+  cpSync(join(REPO, 'packages', 'wst-ops', '1.0.1'), join(chain.root, 'dsh-onto', 'workspace', 'packages', 'wst-ops', '1.0.1'), { recursive: true })
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    const pubArgs = (version) => ({
+      name: 'wst-ops', version, sourceId: 'SRC-WST-CORE',
+      sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912', humanApproved: true,
+    })
+    await chain.tools.get('publish_business').execute(pubArgs('1.0.0'), EXEC)
+    await chain.tools.get('activate_business').execute({ name: 'wst-ops', version: '1.0.0', humanApproved: true }, EXEC)
+    await chain.tools.get('publish_business').execute(pubArgs('1.0.1'), EXEC)
+    await chain.tools.get('activate_business').execute({ name: 'wst-ops', version: '1.0.1', humanApproved: true }, EXEC)
+
+    const rolled = await chain.tools.get('rollback_business').execute({ name: 'wst-ops', humanApproved: true }, EXEC)
+    assert.equal(rolled.rolledBackTo, '1.0.0')
+
+    // 回滚后闸状态：回滚版放行（新运行绑 1.0.0）；被回滚版拒（指针绑定）
+    const run = await chain.tools.get('run_scenario').execute(
+      { name: 'wst-ops', version: '1.0.0', scenarioId: 'SCN-WST-HAZARD-MIX', dataset: DATASET },
+      EXEC,
+    )
+    const value = run.values?.[0] ?? run.value ?? run
+    assert.equal(JSON.parse(JSON.stringify(value)).humanReviewRequired, true)
+    await assert.rejects(
+      () => chain.tools.get('run_scenario').execute(
+        { name: 'wst-ops', version: '1.0.1', scenarioId: 'SCN-WST-HAZARD-MIX', dataset: DATASET },
+        EXEC,
+      ),
+      (e) => e.code === 'RELEASE_VERSION_NOT_ACTIVE',
+    )
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('发布业务 v1：批准卡 rejected → 零状态变更（fail-closed）', async () => {
+  const chain = setupPublish('rejected')
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    await assert.rejects(
+      () =>
+        chain.tools.get('publish_business').execute(
+          {
+            name: 'wst-ops', version: '1.0.0', sourceId: 'SRC-WST-CORE',
+            sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912', humanApproved: true,
+          },
+          EXEC,
+        ),
+      (e) => e.code === 'APPROVAL_DENIED',
+    )
+    const dataDir = join(chain.root, 'dsh-onto')
+    assert.ok(!existsSync(join(dataDir, 'releases', 'manifests', 'wst-ops', '1.0.0.json')), '未放行不得写发布台账')
+    assert.equal(dataSources.has('SRC-WST-CORE'), false, '未放行不得登记连接器')
+    assert.ok(!existsSync(sourceConfigsPath(dataDir)), '未放行不得落受控数据源配置')
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('发布业务 v1：sourceId 归属冲突 → 拒（幂等替换只留给同包重发布）', async () => {
+  const chain = setupPublish()
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    const dataDir = join(chain.root, 'dsh-onto')
+    upsertSourceConfig(dataDir, {
+      sourceId: 'SRC-WST-CORE',
+      package: { name: 'other-ops', version: '2.0.0' },
+      sourceKind: 'simulated',
+      apiBaseUrl: 'http://127.0.0.1:3912',
+      registeredAt: new Date().toISOString(),
+    })
+    await assert.rejects(
+      () =>
+        chain.tools.get('publish_business').execute(
+          {
+            name: 'wst-ops', version: '1.0.0', sourceId: 'SRC-WST-CORE',
+            sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912', humanApproved: true,
+          },
+          EXEC,
+        ),
+      (e) => e.code === 'INVALID_ARGS' && /占用/.test(e.message),
+    )
+    assert.equal(chain.approvalCount(), 0, '归属冲突不得弹批准卡')
+  } finally {
+    chain.dispose()
+  }
+})
+
+test('发布业务 v1：apiTokenEnv 声明但宿主 env 缺失 → fail-closed（不登记不落盘）', async () => {
+  const chain = setupPublish()
+  delete process.env.DSH_MISSING_TOKEN_TEST
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    await assert.rejects(
+      () =>
+        chain.tools.get('publish_business').execute(
+          {
+            name: 'wst-ops', version: '1.0.0', sourceId: 'SRC-WST-CORE',
+            sourceKind: 'simulated', apiBaseUrl: 'http://127.0.0.1:3912',
+            apiTokenEnv: 'DSH_MISSING_TOKEN_TEST', humanApproved: true,
+          },
+          EXEC,
+        ),
+      (e) => e.code === 'INVALID_ARGS' && /令牌 env/.test(e.message),
+    )
+    assert.equal(chain.approvalCount(), 0, '令牌缺失不得弹批准卡')
+    assert.equal(dataSources.has('SRC-WST-CORE'), false)
   } finally {
     chain.dispose()
   }

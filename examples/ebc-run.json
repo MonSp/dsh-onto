@@ -16,7 +16,8 @@
     { "id": "B-002", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-01", "objectRef": "BLD-01", "occurredAt": "2026-11-08T20:10:00Z" },
     { "id": "B-003", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-01", "objectRef": "BLD-01", "occurredAt": "2026-11-15T18:45:00Z" },
     { "id": "B-004", "type": "BHV-EBC-INDOOR", "anchorRef": "BLD-02", "objectRef": "BLD-02", "occurredAt": "2026-11-12T22:05:00Z" },
-    { "id": "B-005", "type": "BHV-EBC-BLOCKAGE", "anchorRef": "BLD-03", "objectRef": "BLD-03", "occurredAt": "2026-11-16T08:20:00Z" }
+    { "id": "B-005", "type": "BHV-EBC-BLOCKAGE", "anchorRef": "BLD-03", "objectRef": "BLD-03", "occurredAt": "2026-11-16T08:20:00Z" },
+    { "id": "B-006", "type": "BHV-EBC-FLYCHARGE", "anchorRef": "BLD-04", "objectRef": "BLD-04", "occurredAt": "2026-11-09T20:30:00Z" }
   ],
   "candidates": [
     {

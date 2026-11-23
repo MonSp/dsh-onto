@@ -122,5 +122,10 @@ function mount(ctx: Context): void {
   }
   // 发布业务 v1：受控数据源配置随宿主启动恢复（免重启发布只保即时生效；重启存活靠此重建登记）。
   // 已登记 sourceId 不覆盖（env/部署登记优先）；配置缺失或复核失败 fail-closed（跳过登记，运行按未登记拒）。
-  restoreManagedDataSources(resolveDataDir(ctx))
+  // 恢复失败不得拖垮整个 mount（如 profileContext 缺席）：降级为不登记，运行面照常未登记拒。
+  try {
+    restoreManagedDataSources(resolveDataDir(ctx))
+  } catch (e) {
+    console.warn(`[dsh-onto] 受控数据源启动恢复未执行（fail-closed，全部不登记）：${e instanceof Error ? e.message : String(e)}`)
+  }
 }

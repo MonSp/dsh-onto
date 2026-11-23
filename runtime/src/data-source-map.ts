@@ -83,6 +83,8 @@ async function getJson(
   try {
     res = await fetchImpl(url, {
       method: 'GET',
+      // 受控数据源不跟随重定向（fail-closed）：防 https 源 30x 跳内网/降级 http 的 SSRF 变道。
+      redirect: 'error',
       ...(tokens !== null ? { headers: { authorization: `Bearer ${await tokens.getToken()}` } } : {}),
       signal: AbortSignal.timeout(requestTimeoutMs),
     })

@@ -26,8 +26,10 @@ export const ID_TYPES = [
 export type IdType = (typeof ID_TYPES)[number]
 
 /** 允许未被引用的派生端点前缀（§7.1 warn 豁免）。 */
-/** 入口/派生物天然无上游引用，豁免 ID_UNREFERENCED（SCN 是场景入口，同理）。 */
-export const UNREFERENCED_EXEMPT_PREFIXES = ['AGT-', 'AUD-', 'TOOL-', 'SCN-'] as const
+/** 入口/派生物天然无上游引用，豁免 ID_UNREFERENCED（SCN 是场景入口，同理；
+ *  SRC-/SM- 是绑定入口层：api-source/源映射由转换引擎与发布工具消费，
+ *  包内没有也不会有引用位——待 source-map 增加 source 回引字段后可收紧）。 */
+export const UNREFERENCED_EXEMPT_PREFIXES = ['AGT-', 'AUD-', 'TOOL-', 'SCN-', 'SRC-', 'SM-'] as const
 
 const ID_PATTERN = /^[A-Z]+-[A-Z0-9]+(?:-[A-Z0-9]+)*$/
 const DICT_PATTERN = /^dict-[a-z0-9]+(?:-[a-z0-9]+)*$/

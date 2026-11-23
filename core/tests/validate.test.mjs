@@ -218,6 +218,14 @@ test('SCN-* 入口豁免 ID_UNREFERENCED；behaviorRefs/exclusionRefs 引用位�
   assert.ok(v3.errors.some((e) => e.code === 'REF_UNCLOSED' && e.message.includes('exclusionRefs')))
 })
 
+test('SRC-/SM- 绑定入口层豁免 ID_UNREFERENCED（api-source/源映射无上游引用位）', () => {
+  const p = minimalPkg()
+  p.sourceMaps = [{ id: 'SM-TST-BIN', collection: 'bins', objectType: 'OBJ-TST-A', idTemplate: '<binId>' }]
+  const v = validatePackage(p)
+  assert.ok(!v.errors.some((e) => e.code === 'REF_UNCLOSED'), JSON.stringify(v.errors))
+  assert.ok(!v.warnings.some((w) => w.code === 'ID_UNREFERENCED' && (w.where === 'SRC-TST-1' || w.where === 'SM-TST-BIN')), JSON.stringify(v.warnings))
+})
+
 test('scoreRefs 引用位：闭合校验 + 悬空/错类型 → REF_UNCLOSED', () => {
   const base = minimalPkg()
   // 有效：scoreRefs 指向打分规则

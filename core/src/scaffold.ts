@@ -249,15 +249,21 @@ export const BINDINGS = {
     .filter((n) => n !== '')
     .map((n) => join(versionDir, 'fixtures', n))
     .find((p) => existsSync(p))
-  const fixtureSrc = input.fixturePath !== undefined && input.fixturePath !== ''
+  const explicitFixture = input.fixturePath !== undefined && input.fixturePath !== ''
     ? resolve(input.fixturePath)
-    : packagedFixture
-  if (fixtureSrc !== undefined && existsSync(fixtureSrc)) {
+    : undefined
+  const fixtureSrc = explicitFixture ?? packagedFixture
+  if (explicitFixture !== undefined) {
+    // --fixture 显式指定：须存在且是文件（目录会 cpSync 整树，夹具语义是单个数据集/快照 JSON）
+    if (!existsSync(explicitFixture)) throw new Error(`--fixture 文件不存在: ${input.fixturePath ?? ''}`)
+    if (!statSync(explicitFixture).isFile()) throw new Error(`--fixture 须是文件（不能是目录）: ${input.fixturePath ?? ''}`)
+    mkdirSync(join(outDir, 'tests', 'fixtures'), { recursive: true })
+    cpSync(explicitFixture, fixtureDst)
+    files.push('tests/fixtures/replay.json')
+  } else if (fixtureSrc !== undefined && existsSync(fixtureSrc)) {
     mkdirSync(join(outDir, 'tests', 'fixtures'), { recursive: true })
     cpSync(fixtureSrc, fixtureDst)
     files.push('tests/fixtures/replay.json')
-  } else if (input.fixturePath !== undefined && input.fixturePath !== '') {
-    throw new Error(`--fixture 文件不存在: ${input.fixturePath}`)
   } else {
     warnings.push(
       datasetMode

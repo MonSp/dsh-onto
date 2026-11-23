@@ -437,6 +437,11 @@ test('发布业务 v1：已受管（有 manifest）未激活 → RELEASE_NOT_ACT
       () => store.assertActiveBinding('test-pkg', '1.0.0'),
       (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
     )
+    // 包级受管：同名未发布版本（无 manifest）同样拒，不得退回开发语义
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '9.9.9'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
     // 激活后放行；同包其它版本仍拒（指针绑定）
     store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
     store.assertActiveBinding('test-pkg', '1.0.0')
@@ -444,6 +449,45 @@ test('发布业务 v1：已受管（有 manifest）未激活 → RELEASE_NOT_ACT
       () => store.assertActiveBinding('test-pkg', '9.9.9'),
       (e) => e instanceof ReleaseError && e.code === 'RELEASE_VERSION_NOT_ACTIVE',
     )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('受管闸 fail-closed：manifest 损坏（存在不可解析）→ 仍按受管拒，不退回未受管放行', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    // 损坏 manifest（模拟半截写/磁盘故障）——闸不得把损坏当「无 manifest」放行
+    const mp = store.manifestPath('test-pkg', '1.0.0')
+    writeFileSync(mp, '{corrupt', 'utf8')
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
+    // 读面显式报损坏（人工核对，不自动重建）
+    assert.throws(
+      () => store.readManifest('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_MALFORMED',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('发布留痕：importRelease 可携批准卡凭证摘要入 history（T2.1）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease(
+      { kind: 'controlled-upload', bundle: makeBundle(dir) },
+      { approvalDigest: 'appr-digest-1' },
+    )
+    const hist = store.readHistory()
+    assert.equal(hist.length, 1)
+    assert.equal(hist[0].action, 'import')
+    assert.equal(hist[0].approvalDigest, 'appr-digest-1')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

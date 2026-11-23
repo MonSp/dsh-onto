@@ -27,7 +27,12 @@ function fixtureBody() {
  */
 function fixtureDataset() {
   const body = fixtureBody()
-  if (DATA_MODE === 'dataset') return { dataset: body, diagnostics: [] }
+  if (DATA_MODE === 'dataset') {
+    // dataset 模式夹具即数据集本体：显式断言形状（否则下方 diagnostics 断言在本臂恒真）
+    assert.ok(Array.isArray(body.objects) && body.objects.length > 0, 'dataset 夹具须含对象')
+    assert.ok(Array.isArray(body.candidates) && body.candidates.length > 0, 'dataset 夹具须含候选')
+    return { dataset: body, diagnostics: [] }
+  }
   if (config.shape.mode === 'snapshot') return transformSourceRows({ rows: extractSnapshotRows(body, config.shape), maps: config.maps })
   const rows = {}
   for (const [c, v] of Object.entries(body)) {

@@ -139,7 +139,7 @@ import {
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
 import { createMappedDataConnector } from './data-source-map.js'
-import { parseControlledBaseUrl, parseSourceKind, upsertSourceConfig } from './source-config.js'
+import { loadSourceConfigs, parseControlledBaseUrl, parseSourceKind, parseTokenEnvName, resolveTokenEnv, upsertSourceConfig } from './source-config.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
   persistReviewDecision,
@@ -4361,7 +4361,10 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         sourceId: { type: 'string', required: true, description: '数据源 id（须在包 apiSources 声明 shape）' },
         sourceKind: { type: 'string', required: true, description: '连接器性质：simulated（演练）| formal（正式）' },
         apiBaseUrl: { type: 'string', required: true, description: '数据源基址（受控配置）：https 任意；http 仅回环' },
-        apiToken: { type: 'string', description: '可选静态令牌（部署配置；不入包、不落台账）' },
+        apiTokenEnv: {
+          type: 'string',
+          description: '可选静态令牌的宿主 env 变量名（部署配置；只传名字，令牌值不入对话/不入包/不落盘）',
+        },
         humanApproved: {
           type: 'boolean',
           required: true,
@@ -4397,7 +4400,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             sourceId: string
             sourceKind: string
             apiBaseUrl: string
-            apiToken?: string
+            apiTokenEnv?: string
             humanApproved: boolean
           },
           exec,
@@ -4405,6 +4408,23 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           assertHumanApproved(args.humanApproved, '发布')
           const kind = parseSourceKind(args.sourceKind)
           const url = parseControlledBaseUrl(args.apiBaseUrl)
+          // 令牌只传 env 变量名（值不过模型面）；声明了名但宿主 env 取不到值 → fail-closed。
+          const tokenEnv = args.apiTokenEnv !== undefined && args.apiTokenEnv !== ''
+            ? parseTokenEnvName(args.apiTokenEnv)
+            : undefined
+          const token = tokenEnv !== undefined ? resolveTokenEnv(tokenEnv) : null
+          if (tokenEnv !== undefined && token === null) {
+            throw new AgentToolError('INVALID_ARGS', `令牌 env ${tokenEnv} 缺失/为空：请先在宿主 env 配置后重试`)
+          }
+          // sourceId 归属（受控数据源全局命名空间）：已被其它包占用 → 拒（幂等替换只留给同包重发布）。
+          const owner = loadSourceConfigs(dataDir).find((c) => c.sourceId === args.sourceId)
+          if (owner !== undefined && owner.package.name !== args.name) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `sourceId ${args.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
+            )
+          }
+          // 先验后批（T2.1）：ISSUED/锚点/契约不过不劳烦批准卡；包内容指纹进批准摘要。
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
           const src = pkg.apiSources.find((s) => s.id === args.sourceId)
@@ -4415,30 +4435,50 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (maps.length === 0) {
             throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
           }
-          // 人审闸（T2.1）：批准卡绑定发布指纹（包/版本/源/性质/基址）
+          const manifestOpts = {
+            coreCompat: { min: '0.2.0' },
+            runtimeCompat: { min: '0.2.0' },
+            releasedBy: `publish@${args.name}`,
+          } as const
+          const manifest = buildReleaseManifest(dir, manifestOpts)
+          // 人审闸（T2.1）：批准卡绑定发布指纹（包/版本/内容摘要/源/性质/基址）
           const digest = actionDigest({
             op: 'publish_business',
             name: args.name,
             version: args.version,
+            packageDigest: manifest.packageDigest,
             sourceId: args.sourceId,
             kind,
             apiBaseUrl: `${url.origin}${url.pathname}`,
           })
-          await approve(exec, {
+          const grant = await approve(exec, {
             toolName: 'publish_business',
             action: `发布业务域 ${args.name}@${args.version}`,
             digest,
-            summary: `数据源 ${args.sourceId}（${kind}）→ ${url.origin}${url.pathname}，发布后须人工激活`,
+            summary: `数据源 ${args.sourceId}（${kind}）→ ${url.origin}${url.pathname}，内容摘要 ${manifest.packageDigest.slice(0, 12)}，发布后须人工激活`,
           })
+          // 批准回执后复核指纹——批准与收编之间包内容漂移 → 凭证作废（APPROVAL_STALE）。
+          const fresh = buildReleaseManifest(dir, manifestOpts)
+          if (fresh.packageDigest !== manifest.packageDigest) {
+            throw new AgentToolError(
+              'APPROVAL_STALE',
+              '批准后包内容已变化（内容摘要不匹配），本次人审凭证作废——请重新核对包内容并重新批准',
+            )
+          }
           // 收编发布台账（同摘要幂等；不同内容 RELEASE_CONFLICT → fork 新版本）
-          const manifest = buildReleaseManifest(dir, {
-            coreCompat: { min: '0.2.0' },
-            runtimeCompat: { min: '0.2.0' },
-            releasedBy: `publish@${args.name}`,
-          })
-          const imported = releases.importRelease({
-            kind: 'controlled-upload',
-            bundle: buildReleaseBundle(dir, manifest),
+          const imported = releases.importRelease(
+            { kind: 'controlled-upload', bundle: buildReleaseBundle(dir, fresh) },
+            { approvalDigest: grant.approvalDigest },
+          )
+          // 受控数据源配置落盘先行（部署配置，与发布台账分离；落盘失败不留「内存有登记、磁盘无配置」半态，
+          // 下次宿主启动按配置恢复）。令牌只落 env 变量名，值不落盘。
+          upsertSourceConfig(dataDir, {
+            sourceId: args.sourceId,
+            package: { name: args.name, version: args.version },
+            sourceKind: kind,
+            apiBaseUrl: args.apiBaseUrl,
+            ...(tokenEnv !== undefined ? { apiTokenEnv: tokenEnv } : {}),
+            registeredAt: new Date().toISOString(),
           })
           // 登记连接器（免重启：运行中 registry 即时生效；同 id 先注销再登记 = 幂等替换）
           if (dataSources.has(args.sourceId)) dataSources.unregister(args.sourceId)
@@ -4450,18 +4490,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               shape: src.shape,
               maps,
               kind,
-              ...(typeof args.apiToken === 'string' && args.apiToken !== '' ? { auth: { token: args.apiToken } } : {}),
+              ...(token !== null ? { auth: { token } } : {}),
             }),
           )
-          // 受控数据源配置落盘（部署配置，与发布台账分离）：宿主重启后按此恢复登记。
-          upsertSourceConfig(dataDir, {
-            sourceId: args.sourceId,
-            package: { name: args.name, version: args.version },
-            sourceKind: kind,
-            apiBaseUrl: args.apiBaseUrl,
-            ...(typeof args.apiToken === 'string' && args.apiToken !== '' ? { apiToken: args.apiToken } : {}),
-            registeredAt: new Date().toISOString(),
-          })
           return toolOut(
             enforceOutputPolicy(
               {
@@ -4518,16 +4549,20 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       execute: toolExecute(
         async (args: { name: string; version: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '激活')
+          // 授权人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）。
+          // 身份先于批准卡：身份缺席时不劳烦授权人批卡。
+          const identity = requireBusinessIdentity('history')
           const digest = actionDigest({ op: 'activate_business', name: args.name, version: args.version })
-          await approve(exec, {
+          const grant = await approve(exec, {
             toolName: 'activate_business',
             action: `激活业务域 ${args.name}@${args.version}`,
             digest,
             summary: `授权人激活后新运行绑定 ${args.version}`,
           })
-          // 授权人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）
-          const identity = requireBusinessIdentity('history')
-          const act = releases.activate(args.name, args.version, { authorizedBy: identity.userId })
+          const act = releases.activate(args.name, args.version, {
+            authorizedBy: identity.userId,
+            approvalDigest: grant.approvalDigest,
+          })
           return toolOut(
             enforceOutputPolicy(
               {
@@ -4579,15 +4614,19 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       execute: toolExecute(
         async (args: { name: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '回滚')
+          // 身份先于批准卡（同 activate_business 口径）。
+          const identity = requireBusinessIdentity('history')
           const digest = actionDigest({ op: 'rollback_business', name: args.name })
-          await approve(exec, {
+          const grant = await approve(exec, {
             toolName: 'rollback_business',
             action: `回滚业务域 ${args.name}`,
             digest,
             summary: `活动指针回上一版本（仅 ${args.name} 自身）`,
           })
-          const identity = requireBusinessIdentity('history')
-          const act = releases.rollback(args.name, { authorizedBy: identity.userId })
+          const act = releases.rollback(args.name, {
+            authorizedBy: identity.userId,
+            approvalDigest: grant.approvalDigest,
+          })
           const rolled = (act as { package?: { version?: string } }).package?.version ?? ''
           return toolOut(
             enforceOutputPolicy(

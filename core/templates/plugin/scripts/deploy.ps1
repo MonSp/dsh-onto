@@ -33,14 +33,28 @@ $ApiEnvName = $Config.env.apiUrl
 function Step([string]$msg) { Write-Host ''; Write-Host ('==> ' + $msg) -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ('FAILED: ' + $msg) -ForegroundColor Red; exit 1 }
 
+# 信任边界：plugin.config.json 是生成期数据（跨人交接），不是代码。
+# profile 名进入命令行/进程匹配，限定安全字符集；harness 路径进入 -Command 时按单引号转义。
+if ($Profile -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    Fail ('profileName 含非法字符（仅允许 [A-Za-z0-9._-]）: ' + $Profile)
+}
+if (-not (Test-Path -LiteralPath $HarnessDir)) {
+    Fail ('harnessDir 不存在: ' + $HarnessDir)
+}
+
 # 0) optional deploy env file (KEY=VALUE lines; applies to this chain and the target host process)
 if ($EnvFile -ne '') {
     if (-not (Test-Path $EnvFile)) { Fail ('EnvFile not found: ' + $EnvFile) }
+    $blockedKeys = @('NODE_OPTIONS','NODE_PATH','PATH','PATHEXT','COMSPEC','PSModulePath','POWERSHELL_UPDATECHECK')
     Get-Content $EnvFile | ForEach-Object {
         $line = $_.Trim()
         if ($line -eq '' -or $line.StartsWith('#')) { return }
         $kv = $line -split '=', 2
-        if ($kv.Count -eq 2) { Set-Item -Path ('Env:' + $kv[0].Trim()) -Value $kv[1].Trim() }
+        if ($kv.Count -ne 2) { Fail ('EnvFile 行须是 KEY=VALUE: ' + $line) }
+        $k = $kv[0].Trim()
+        if ($k -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { Fail ('EnvFile 键名非法: ' + $k) }
+        if ($blockedKeys -contains $k) { Fail ('EnvFile 键被拒绝（可注入进程启动链）: ' + $k) }
+        Set-Item -Path ('Env:' + $k) -Value $kv[1].Trim()
     }
     Write-Host ('env loaded from ' + $EnvFile)
 }
@@ -95,12 +109,23 @@ if ($Restart) {
     Step ('controlled restart on port ' + $Port)
     $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     if ($listeners) {
-        $listeners | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
+        foreach ($procId in ($listeners | Select-Object -ExpandProperty OwningProcess -Unique)) {
+            # 只杀「本插件 profile 宿主」：核对进程命令行含 --profile <本 profile>，否则拒绝（不误杀端口上的其它进程）
+            $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $procId) -ErrorAction SilentlyContinue
+            $cmdline = if ($proc -and $proc.CommandLine) { $proc.CommandLine } else { '' }
+            if ($cmdline -notmatch ('--profile\s+' + [regex]::Escape($Profile))) {
+                Fail ('port ' + $Port + ' 上进程 ' + $procId + ' 不是本 profile（' + $Profile + '）宿主，拒绝杀进程: ' + $cmdline)
+            }
+            Stop-Process -Id $procId -Force
+        }
         Start-Sleep -Seconds 2
     }
     $outLog = Join-Path $Root ('deploy-' + $Port + '.out.log')
     $errLog = Join-Path $Root ('deploy-' + $Port + '.err.log')
-    $cmd = "Set-Location '" + $HarnessDir + "'; pnpm dsh --profile " + $Profile + " --no-open --port " + $Port
+    # 数据（plugin.config.json / 参数）不拼代码：单引号转义 + -LiteralPath；profile 已过字符集校验并同样加引号
+    $harnessQ = $HarnessDir.Replace("'", "''")
+    $profileQ = $Profile.Replace("'", "''")
+    $cmd = "Set-Location -LiteralPath '" + $harnessQ + "'; pnpm dsh --profile '" + $profileQ + "' --no-open --port " + [int]$Port
     Start-Process -FilePath 'powershell' -ArgumentList '-ExecutionPolicy', 'Bypass', '-Command', $cmd `
         -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden
     Write-Host ('host starting: profile=' + $Profile + ' port=' + $Port + ' log=' + $outLog)
@@ -125,6 +150,9 @@ if ($Data -ne '') {
     $accept = Get-Content $expectedPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Write-Host 'anchor source: packaged replay baseline (verified by step 2)'
 } else {
+    if ($isDataset) {
+        Fail 'no anchor source: dataset 模式无回放基线——用 -Data <dataset.json> 指定验收数据集（或包内 tests/fixtures/replay.json 已就位）'
+    }
     Fail 'no anchor source (missing replay baseline and no -Data)'
 }
 Write-Host ''
