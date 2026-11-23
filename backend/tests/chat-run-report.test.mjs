@@ -330,7 +330,7 @@ test('wire getRunReport：strict 越权身份拒绝，同身份放行', async ()
 })
 
 test('沙箱分类：报表工具登记为 onto 能力（onto 预设放行面）', () => {
-  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages', 'show_run_diff']) {
+  for (const name of ['show_run_report', 'save_report_page', 'list_report_pages', 'show_run_diff', 'publish_business', 'activate_business', 'rollback_business']) {
     assert.equal(classifyToolCapability(name), 'onto', `${name} 须归 onto`)
   }
 })

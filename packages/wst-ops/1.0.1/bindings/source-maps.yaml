@@ -1,0 +1,48 @@
+﻿kind: O1SourceMaps
+maps:
+  # 对象：bins 行 → 桶位实例
+  - id: SM-WST-BIN
+    collection: bins
+    objectType: OBJ-WST-BIN
+    idTemplate: <binId>
+    timeField: lastEmptiedAt
+  # 对象：routes 行 → 路线实例
+  - id: SM-WST-ROUTE
+    collection: routes
+    objectType: OBJ-WST-ROUTE
+    idTemplate: <routeId>
+  # 关系：routes.covers 数组外键 → 路线覆盖桶位
+  - id: SM-WST-COVERS
+    kind: relation
+    collection: routes
+    relationType: REL-WST-COVERS
+    from: self
+    to: { field: covers }
+    targetCollection: bins
+  # 候选：alerts 上游风险信号
+  - id: SM-WST-ALERT
+    kind: candidate
+    collection: alerts
+    idField: alertId
+    objectRefField: binId
+    objectType: OBJ-WST-BIN
+    features:
+      fillRatio: features.fillRatio
+      mixCount: features.mixCount
+      hazardFlag: features.hazardFlag
+    tagsField: tags
+  # 行为：dumps 独立集合即事件行
+  - id: SM-WST-DUMP
+    kind: behavior
+    collection: dumps
+    behaviorType: BHV-WST-DUMP
+    objectRefTemplate: <binId>
+    timeField: at
+  # 行为：bins.mixEvents 行内嵌套事件数组
+  - id: SM-WST-MIX
+    kind: behavior-list
+    collection: bins
+    behaviorType: BHV-WST-MIX
+    objectRefTemplate: <binId>
+    eventsPath: mixEvents
+    timeField: at

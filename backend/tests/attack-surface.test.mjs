@@ -826,7 +826,7 @@ test('I4 收权：新工具面 objectId/objectRef 入参同过 guard，未命中
   assert.equal(grantGuardDecision('export_audit', { runId: 'run-a' }, () => []), undefined)
   assert.equal(grantGuardDecision('show_run_diff', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
   // 注入 objectId：同 guard 收口，未收权即拒
-  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'show_run_diff', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
+  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'show_run_diff', 'publish_business', 'activate_business', 'rollback_business', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
     const denial = grantGuardDecision(tool, { runId: 'run-a', objectId: 'OBJ-NOPE' }, () => [])
     assert.ok(typeof denial === 'string' && denial.includes('OBJECT_NOT_GRANTED'), `${tool} 应拒: ${String(denial)}`)
   }
@@ -989,6 +989,9 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   assert.ok(ONTOOL_NAMES.has('show_run_diff'), 'show_run_diff 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('list_report_pages'), 'list_report_pages 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('publish_business'), 'publish_business 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('activate_business'), 'activate_business 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('rollback_business'), 'rollback_business 须入 ONTOOL_NAMES')
 })
 
 test('A-2 参数校验：hops 超界、seedIds 空/超限/错型、坏 direction、recipes 超限 → INVALID_ARGS', () => {
@@ -1261,9 +1264,9 @@ test('T2.1-3 摘要绑定：指纹键序/ID 序无关；载荷/版本一变指�
   assert.notEqual(actionDigest({ a: 1 }), actionDigest({ a: 2 }))
 })
 
-test('T2.1-4 源断言：六个人审写工具闭包先过批准卡才落动作；批准后复核指纹 + 凭证留痕在场', () => {
+test('T2.1-4 源断言：人审写工具同族（建模六工具 + 发布业务三工具）闭包先过批准卡才落动作；批准后复核指纹 + 凭证留痕在场', () => {
   const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
-  for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience']) {
+  for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience', 'publish_business', 'activate_business', 'rollback_business']) {
     const head = src.indexOf(`name: '${tool}'`)
     assert.ok(head > 0, `${tool} 登记应在场`)
     const next = src.indexOf("name: '", head + 10)

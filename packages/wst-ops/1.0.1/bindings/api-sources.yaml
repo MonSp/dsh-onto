@@ -1,0 +1,16 @@
+﻿kind: O1ApiSources
+sources:
+  - id: SRC-WST-CORE
+    name: 校园废弃物快照服务
+    sourceType: SCHEMA_API
+    endpoint: "api://wst-snapshot"
+    description: 垃圾桶、清运路线、清运记录与上游告警快照的只读查询（部署侧按 sourceId 登记连接器，地址与凭据不进包）
+    shape:
+      mode: snapshot
+      path: /api/v1/bin-snapshot
+      collectionPaths:
+        bins: bins
+        routes: routes
+        dumps: dumps
+        alerts: alerts
+      pagination: { mode: none }

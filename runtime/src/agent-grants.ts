@@ -63,6 +63,10 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   'create_action_proposal',
   // D 包人工对账：unknown/在途记录按外部回执处置（不自动重跑）
   'reconcile_action',
+  // 发布业务（平台免重启声明式发布 v1）：发布/激活/回滚（批准卡 + 宿主身份；控制面无对象收权）
+  'publish_business',
+  'activate_business',
+  'rollback_business',
 ])
 
 /** tool-contracts 条目；只保留 grant 相关字段（输出投影）。 */

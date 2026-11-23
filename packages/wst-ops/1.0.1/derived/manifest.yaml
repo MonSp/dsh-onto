@@ -1,0 +1,56 @@
+kind: DerivedManifest
+package: wst-ops
+version: 1.0.1
+domain: WST
+generatedAt: 2026-11-23T08:03:43.743Z
+sourceDigest: 95377df6457fa67798af0bb1812ce385d6d6da60621ce9f0ef0ec159e7e63345
+sources:
+  - path: package.yaml
+    sha256: d5bceb3d2f97dafc78825c3921b1a1c9616dea52ad98836164a636ca4bee7d26
+  - path: o1-objects/object-types.yaml
+    sha256: cedb6f6fdbc294bb4673454a762e64b1a2a9cf8396922bc1ba2a015800bc7f56
+  - path: o1-objects/relation-types.yaml
+    sha256: ba05ac7dbaa8e61ab01bf88b1092f5191f27e330962038095de7ccb695ce2029
+  - path: o1-objects/dictionaries/dict-wst-waste-type.yaml
+    sha256: 6ba71fb513ecbc6cb47234993a2911540bd51eb9d24294a59ec0b057e79396a3
+  - path: o1-objects/dictionaries/dict-wst-zone.yaml
+    sha256: 0724ff339135cb3883b19890f7bd17fea625f45c0184ca82fce32d682d8e3893
+  - path: o2-behavior-rules/behavior-types.yaml
+    sha256: 8897dc763ddc5a3bf94f4932b3139eece450854d573dcda6bfe345310e46364d
+  - path: o2-behavior-rules/rules/score-rules.yaml
+    sha256: 9d429e063ebae5f0958d8935c4704de1147e716d9d57dda2d56ebcf74ff7065a
+  - path: o2-behavior-rules/rules/exclusion-rules.yaml
+    sha256: 86068c0e356aab07b570c454486c2c256825ad7da8ff7e76212b111bb1a1cc2b
+  - path: o2-behavior-rules/skill-templates/SKL-WST-HAZARD-MIX-NARRATIVE.yaml
+    sha256: 3c2595a2766dc8f9411040b4954e6d1e2f6a5b2aab55cb52f9f5c923b88cdfb7
+    layer: L3
+  - path: o3-scenarios/SCN-WST-HAZARD-MIX.yaml
+    sha256: d28cb9458229b14df22357a3b270c8cb9c19dab6afd48e3a9164436e27c91265
+  - path: bindings/field-maps.yaml
+    sha256: 02fd93955240d5080db74bb44a2fdb752e46a89a9ad9f2e80e2fbd6df32e6d9c
+    layer: L2
+  - path: bindings/api-sources.yaml
+    sha256: c2c6349ecc94b22ba7bf81a30d155bbdd0d62404a7ac9a5fd1acd46a171155a7
+    layer: L2
+  - path: bindings/source-maps.yaml
+    sha256: 61e5b72546aca4f37c526e1e323fea5843beef2ba2f8bcd21c7c0c4caba79709
+    layer: L2
+  - path: fixtures/replay-SCN-WST-HAZARD-MIX.expected.json
+    sha256: ca0b54ab10419f2f0ab477d024e819b2c0d4da0f8064218aef775b3a9ae69a82
+  - path: fixtures/replay-SCN-WST-HAZARD-MIX.json
+    sha256: 5f0bb2b72d0cb016be81912767ef24bb472ae1845e686f356e84cc89f6ed4ccd
+derived:
+  - path: derived/tool-contracts/tool-contracts.yaml
+    sha256: 711fc24b95aa739330dca1d7a194396851dd5373dd2b1c1e1650267064ff26d7
+    layer: L2
+  - path: derived/rule-engine-config/rule-engine-config.yaml
+    sha256: 0ef66e891cc8c8a3782e1d6c4028ce332ef68f6d9e372f10ef505a01da1fecb5
+  - path: derived/agent-duties.yaml
+    sha256: 2789e19ba230bf380c93868ba7264f40277dc6d84429c6cb7af650f0db27a524
+    layer: L4
+  - path: derived/audit-checks.yaml
+    sha256: d30b45e90a249b0779f6360ea8dc9101cef107d6bc4214d077fa6a38ab11693f
+    layer: L4
+  - path: derived/scenario-orchestration.yaml
+    sha256: 0d66885d5804c8daf04a7e66a155fe35aa8eab21f5ae794c3da835107ea410f5
+    layer: L4

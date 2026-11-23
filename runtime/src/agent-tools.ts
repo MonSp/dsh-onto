@@ -131,13 +131,14 @@ import {
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
-import { ReleaseError } from './release.js'
+import { ReleaseError, buildReleaseBundle, buildReleaseManifest } from './release.js'
 import {
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, businessPolicy, parseTargetRef,
   requireBusinessIdentity, requireBizAuth, runAccessBinding, scopeDataQuery, type ExistenceChecks,
 } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
+import { createMappedDataConnector } from './data-source-map.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
   persistReviewDecision,
@@ -4337,6 +4338,265 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         [],
         (args) => redlines(args),
+      ),
+    }))
+
+  // ── 发布业务（平台免重启声明式发布 v1，2026-11-23）────────────────────────
+  // 三态分离：包可见（工作区）≠ 版本已激活（授权人）≠ 数据源可用（连接器登记）。
+  // publish 收编已签发包进发布台账（同摘要幂等）+ 按受控数据源配置登记映射连接器（免重启，
+  // 运行中 registry 即时生效）；不激活。activate/rollback 为独立人工动作（系统批准卡），
+  // 授权人记宿主用户 id（不收模型自称）。已导入未激活的包拒绝运行（受管闸，见 assertActiveBinding）。
+  reg('dev', () => defineTool({
+      name: 'publish_business',
+      description:
+        '发布业务域到运行中平台（免重启声明式发布 v1）：把工作区已签发包收编进发布台账（同摘要幂等，'
+        + '不改写包内容），并按受控数据源配置登记映射连接器（转换契约随包 shape + source-maps）。'
+        + '不激活——激活是独立人工动作（activate_business）。发布后未激活的包拒绝运行（fail-closed）但保持可见；'
+        + '同名同版本不同内容拒绝（须 fork 新版本）。回滚用 rollback_business，只动自身指针，不影响已有业务。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（工作区已有该版本且已签发）' },
+        version: { type: 'string', required: true, description: '包版本' },
+        sourceId: { type: 'string', required: true, description: '数据源 id（须在包 apiSources 声明 shape）' },
+        sourceKind: { type: 'string', required: true, description: '连接器性质：simulated（演练）| formal（正式）' },
+        apiBaseUrl: { type: 'string', required: true, description: '数据源基址（受控配置）：https 任意；http 仅回环' },
+        apiToken: { type: 'string', description: '可选静态令牌（部署配置；不入包、不落台账）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            sourceId: { type: 'string', required: true },
+            imported: { type: 'string', required: true },
+            activated: { type: 'boolean', required: true, const: false },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { name: string; version: string; sourceId: string; imported: string }
+          return textBlock(
+            `业务域已发布（未激活）：${v.name}@${v.version} · 数据源 ${v.sourceId}（${v.imported}）。`
+            + '激活是独立人工动作：activate_business（系统批准卡）。未激活前该包运行一律拒绝。',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            name: string
+            version: string
+            sourceId: string
+            sourceKind: string
+            apiBaseUrl: string
+            apiToken?: string
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '发布')
+          const kind = args.sourceKind === 'formal' ? 'formal' : args.sourceKind === 'simulated' ? 'simulated' : null
+          if (kind === null) throw new AgentToolError('INVALID_ARGS', 'sourceKind 只能是 simulated|formal')
+          let url: URL
+          try {
+            url = new URL(args.apiBaseUrl)
+          } catch {
+            throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 不是合法 URL')
+          }
+          const loopback = ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
+          if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))) {
+            throw new AgentToolError('INVALID_ARGS', 'apiBaseUrl 仅允许 https 或回环 http（受控数据源配置）')
+          }
+          const dir = ws.versionDir(args.name, args.version)
+          const pkg = loadPackage(dir)
+          const src = pkg.apiSources.find((s) => s.id === args.sourceId)
+          if (src === undefined || src.shape === undefined) {
+            throw new AgentToolError('INVALID_ARGS', `${args.sourceId} 未在包 apiSources 声明 shape`)
+          }
+          const maps = pkg.sourceMaps ?? []
+          if (maps.length === 0) {
+            throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
+          }
+          // 人审闸（T2.1）：批准卡绑定发布指纹（包/版本/源/性质/基址）
+          const digest = actionDigest({
+            op: 'publish_business',
+            name: args.name,
+            version: args.version,
+            sourceId: args.sourceId,
+            kind,
+            apiBaseUrl: `${url.origin}${url.pathname}`,
+          })
+          await approve(exec, {
+            toolName: 'publish_business',
+            action: `发布业务域 ${args.name}@${args.version}`,
+            digest,
+            summary: `数据源 ${args.sourceId}（${kind}）→ ${url.origin}${url.pathname}，发布后须人工激活`,
+          })
+          // 收编发布台账（同摘要幂等；不同内容 RELEASE_CONFLICT → fork 新版本）
+          const manifest = buildReleaseManifest(dir, {
+            coreCompat: { min: '0.2.0' },
+            runtimeCompat: { min: '0.2.0' },
+            releasedBy: `publish@${args.name}`,
+          })
+          const imported = releases.importRelease({
+            kind: 'controlled-upload',
+            bundle: buildReleaseBundle(dir, manifest),
+          })
+          // 登记连接器（免重启：运行中 registry 即时生效；同 id 先注销再登记 = 幂等替换）
+          if (dataSources.has(args.sourceId)) dataSources.unregister(args.sourceId)
+          dataSources.register(
+            args.sourceId,
+            createMappedDataConnector({
+              sourceId: args.sourceId,
+              baseUrl: args.apiBaseUrl,
+              shape: src.shape,
+              maps,
+              kind,
+              ...(typeof args.apiToken === 'string' && args.apiToken !== '' ? { auth: { token: args.apiToken } } : {}),
+            }),
+          )
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                name: args.name,
+                version: args.version,
+                sourceId: args.sourceId,
+                sourceKind: kind,
+                imported: imported.idempotent === true ? 'idempotent' : 'new',
+                activated: false as const,
+                humanReviewRequired: true as const,
+              },
+              [],
+            ),
+          )
+        },
+        [],
+      ),
+    }))
+
+  reg('dev', () => defineTool({
+      name: 'activate_business',
+      description:
+        '人工激活已发布的业务域（发布业务 v1）：激活后新运行只绑活动版本；同包其它版本拒绝（RELEASE_VERSION_NOT_ACTIVE）。'
+        + '激活是授权人动作——实际放行以系统批准卡为准，授权人记宿主用户 id（不收模型自称）。回滚用 rollback_business。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求激活时传 true。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '要激活的版本（须已 publish）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求激活时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            activated: { type: 'boolean', required: true, const: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as unknown as { name: string; version: string; previous: string | null }
+          return textBlock(
+            `业务域已激活：${v.name}@${v.version}${v.previous === null || v.previous === undefined ? '' : `（此前 ${v.previous}）`}。`
+            + '新运行绑定该版本；未激活的受管包仍拒绝。humanReviewRequired=true。',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (args: { name: string; version: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '激活')
+          const digest = actionDigest({ op: 'activate_business', name: args.name, version: args.version })
+          await approve(exec, {
+            toolName: 'activate_business',
+            action: `激活业务域 ${args.name}@${args.version}`,
+            digest,
+            summary: `授权人激活后新运行绑定 ${args.version}`,
+          })
+          // 授权人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）
+          const identity = requireBusinessIdentity('history')
+          const act = releases.activate(args.name, args.version, { authorizedBy: identity.userId })
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                name: args.name,
+                version: args.version,
+                activated: true as const,
+                authorizedBy: identity.userId,
+                previous: (act as { previous?: string | null }).previous ?? null,
+                humanReviewRequired: true as const,
+              },
+              [],
+            ),
+          )
+        },
+        [],
+      ),
+    }))
+
+  reg('dev', () => defineTool({
+      name: 'rollback_business',
+      description:
+        '回滚业务域的活动指针到上一活动版本（发布业务 v1）：只动该包自身的活动指针（历史保留），'
+        + '不影响已有业务与其它包；连接器登记随源配置保留（版本回滚不注销数据源）。'
+        + '无上一版本拒绝（RELEASE_NOT_FOUND）。放行以系统批准卡为准，授权人记宿主用户 id。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求回滚时传 true。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求回滚时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            rolledBackTo: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as unknown as { name: string; rolledBackTo: string }
+          return textBlock(`业务域已回滚：${v.name} → ${v.rolledBackTo}。新运行绑定回滚后版本；其它业务不受影响。humanReviewRequired=true。`)
+        },
+      },
+      execute: toolExecute(
+        async (args: { name: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '回滚')
+          const digest = actionDigest({ op: 'rollback_business', name: args.name })
+          await approve(exec, {
+            toolName: 'rollback_business',
+            action: `回滚业务域 ${args.name}`,
+            digest,
+            summary: `活动指针回上一版本（仅 ${args.name} 自身）`,
+          })
+          const identity = requireBusinessIdentity('history')
+          const act = releases.rollback(args.name, { authorizedBy: identity.userId })
+          const rolled = (act as { package?: { version?: string } }).package?.version ?? ''
+          return toolOut(
+            enforceOutputPolicy(
+              { name: args.name, rolledBackTo: rolled, humanReviewRequired: true as const },
+              [],
+            ),
+          )
+        },
+        [],
       ),
     }))
 

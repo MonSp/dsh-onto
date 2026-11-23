@@ -425,6 +425,30 @@ test('P4: 无 active.json 时保持既有行为（不过滤、不拒绝）', () 
   }
 })
 
+test('发布业务 v1：已受管（有 manifest）未激活 → RELEASE_NOT_ACTIVE；未受管保持放行', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    // 未受管：开发工作区语义放行
+    store.assertActiveBinding('test-pkg', '1.0.0')
+    // 收编发布台账（同摘要幂等）→ 受管：未激活一律拒
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
+    // 激活后放行；同包其它版本仍拒（指针绑定）
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    store.assertActiveBinding('test-pkg', '1.0.0')
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '9.9.9'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_VERSION_NOT_ACTIVE',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('strict publishing requires a valid active pointer and rejects unmanaged packages', () => {
   const { root, ws, dir } = setupIssuedPkg()
   try {

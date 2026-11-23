@@ -186,15 +186,21 @@ export class ReleaseStore {
 
   /**
    * 新运行选版断言：
-   * - 无 active.json → 放行（开发工作区语义，兼容 M0–M3）；
+   * - 无 active.json：未受管包（无发布 manifest）放行（开发工作区语义，兼容 M0–M3）；
+   *   已受管（有 manifest）未激活 → RELEASE_NOT_ACTIVE（发布业务 v1：未激活拒绝）；
    * - 指针含该包 → version 必须等于活动版，否则 RELEASE_VERSION_NOT_ACTIVE；
-   * - 指针存在但不含该包 → 放行（该包未纳入发布管理，保持既有行为）。
+   * - 指针存在但不含该包 → 未受管放行；已受管同上拒（未激活）。
+   * - requireActive（strict）：一切未激活皆拒 + 激活后复核 manifest 锚点（反篡改）。
    */
   assertActiveBinding(name: string, version: string): void {
     const a = this.readActive()
     const active = a && Object.hasOwn(a.packages, name) ? a.packages[name] : undefined
     if (active === undefined) {
-      if (this.requireActive) throw new ReleaseError('RELEASE_NOT_ACTIVE', `no active release for ${name}`)
+      // 发布业务 v1（平台免重启声明式发布）：已受管（有发布 manifest）的包未激活一律拒——
+      // 未激活 fail-closed；未受管包保持开发工作区语义（M0–M3）。requireActive 严格档不变（更严）。
+      if (this.requireActive || this.readManifest(name, version) !== null) {
+        throw new ReleaseError('RELEASE_NOT_ACTIVE', `no active release for ${name}@${version}（已导入未激活，需授权人激活）`)
+      }
       return
     }
     if (active !== version) {
