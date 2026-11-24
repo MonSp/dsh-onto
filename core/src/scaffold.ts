@@ -183,7 +183,9 @@ export function generatePlugin(input: GeneratePluginInput): GeneratePluginResult
     }
     const target = join(outDir, ...rel.split('/'))
     mkdirSync(dirname(target), { recursive: true })
-    writeFileSync(target, replaced, 'utf8')
+    // Windows PowerShell 5.1 无 BOM 的 UTF-8 .ps1 按 ANSI 读——中文注释/字符串会咬掉引号致解析失败；
+    // .ps1 落盘加 BOM（文档口径 `powershell -File` 可直接跑）。
+    writeFileSync(target, rel.endsWith('.ps1') ? '\uFEFF' + replaced : replaced, 'utf8')
     files.push(rel)
   }
 
