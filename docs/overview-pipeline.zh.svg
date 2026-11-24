@@ -132,6 +132,6 @@
   <path d="M200,1038 L120,1038 L120,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M44,1216 C 26,1150 26,980 200,916" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M420,1174 C 500,1182 580,1182 640,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
-  <path d="M836,1222 C 868,1100 868,420 846,283 L 720,283" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
+  <path d="M836,1222 C 868,1100 868,420 730,283" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <text x="24" y="1310" class="sm" text-anchor="start">蓝=建模线　橙=交付线　青=运行线　紫=原料来源（按需选取）</text>
 </svg>
