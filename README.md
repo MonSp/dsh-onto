@@ -80,12 +80,23 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
   decision→proposal ledger, external receipts + reconciliation (no receipt ⇒ `unknown`),
   ticket-sim & test adapters · lives in **`@dsh-onto/runtime`** · `record_review_decision` /
   `create_action_proposal` / `execute_behavior_action` / `reconcile_action`
+- **Declarative release (no restart)** — `publish_business` / `activate_business` /
+  `rollback_business`: an issued package joins the release ledger (idempotent by content
+  digest) and the active pointer binds new runs; imported-but-not-activated packages are
+  rejected **fail-closed** (managed gate); controlled source config (`simulated|formal`,
+  https or loopback http, token kept as an env reference) survives restarts via boot restore
+  and is written under a cross-process lock · `@dsh-onto/runtime` · main chat
+- **Business pages & deploy rails** — `plugin generate` turns an issued package into a
+  business run page (**dataset mode** by default: inline data channel, same `runScenario` as
+  the Agent; `--source` picks the API-mapping mode; `--fixture` for an explicit run fixture);
+  `deploy.ps1` ships an independent-customer rail: build → fixture e2e → replay → profile
+  install → import → **human activation** → controlled restart → dual-entry anchors
 - **Experience loop** — run records → recall hints → human annotation → SkillTemplate
   upgrades · `dsh-onto exp *` · Web
 - **Expert presets** — AML / TAX / MED picked before chat; `expert_agent` dispatches expert
   sub-agents · hero chip · main chat
-- **Multi-domain** — AML + MED + TAX ship as package content only, zero engine changes ·
-  `packages/`
+- **Multi-domain** — AML + MED + TAX + WST + EBC ship as package content only, zero engine
+  changes · `packages/`
 
 ## Repository layout
 
@@ -94,14 +105,14 @@ backend over remote services only · business plugins (`apps/*`) depend on runti
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 236 node --test acceptance tests)
+  core/       @dsh-onto/core — pure engine library + CLI (zero harness deps; 307 node --test acceptance tests)
   runtime/    @dsh-onto/runtime — shared run & governance library: data connectors,
               identity/authorization, run records, review/approval, action ledger,
-              reconciliation (no auto dsh assembly; backend and business
-              plugins depend on it — never the reverse)
-  backend/    @dsh-onto/backend — dsh bundle: development wires (model/knowledge/issue)
-              + assembly shell over @dsh-onto/runtime (onto* landing point; 289 tests)
-  workbench/  @dsh-onto/workbench — dsh bundle: Web UI (six tabs + persistent right-rail ontology graph)
+              reconciliation, release ledger & controlled sources (no auto dsh assembly;
+              backend and business plugins depend on it — never the reverse)
+  backend/    @dsh-onto/backend — dsh bundle: development wires (model/knowledge/issue/release)
+              + assembly shell over @dsh-onto/runtime (onto* landing point; 328 tests)
+  workbench/  @dsh-onto/workbench — dsh bundle: Web UI (seven tabs + persistent right-rail ontology graph)
   apps/       business plugins as separate dsh bundles:
                 aml/  @dsh-aml/app  — governance workbench (review queue, actions)
                 tax/  @dsh-tax/app  — RUN-only minimal run page + Agent same path
@@ -109,8 +120,10 @@ dsh-onto/
               ticket-sim — standalone ticket simulation service (self-persisting SQLite,
               idempotent across processes, fault injection, reconciliation; receipts always `simulated`)
               tax-api — read-only TAX query mock for the second-plugin cold start
-  packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0, tax/1.0.0
-  examples/   scenario run fixtures (aml-run.json / med-run.json / tax-run.json)
+              wst-api — read-only WST snapshot API for the self-service onboarding acceptance
+  packages/   example business ontology packages (first-class deliverables): aml/1.0.0, med/1.0.0,
+              tax/1.0.0, wst/1.0.0, wst-ops/1.0.1, ebike-charging/1.0.0
+  examples/   scenario run fixtures (aml-run.json / med-run.json / tax-run.json / ebc-run.json)
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
               setup-tax-profile.ps1 / dump-tax-config.ps1 / m-tax-seed-release.mjs
               ensure-expert-presets.ps1 (+ expert-presets.json, preset-plugins.standard.yaml: idempotent expert-preset block)
@@ -140,8 +153,8 @@ dsh-onto\scripts\dump-config.ps1
 dsh-onto\scripts\dev-web.ps1
 ```
 
-The workbench exposes six tabs: **Packages · Modeling · Knowledge · Validate & Derive ·
-Scenarios · Experience** (plus a persistent **Ontology graph** in the right rail).
+The workbench exposes seven tabs: **Packages · Modeling · Knowledge · Validate & Derive ·
+Scenarios · Access · Experience** (plus a persistent **Ontology graph** in the right rail).
 
 ### Second sample: TAX business plugin (RUN-only)
 

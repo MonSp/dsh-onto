@@ -47,9 +47,17 @@
 - **可信业务执行** —— 三状态数据面、六元组鉴权、决定→提案台账、外部回执与对账（无回执 ⇒ `unknown`）、
   ticket-sim 与测试适配器 · 实现在 **`@dsh-onto/runtime`** · `record_review_decision` /
   `create_action_proposal` / `execute_behavior_action` / `reconcile_action`
+- **免重启声明式发布** —— `publish_business` / `activate_business` / `rollback_business`：
+  已签发包按内容摘要幂等收编进发布台账，活动指针绑定新运行；已导入未激活一律拒
+  **fail-closed**（受管闸）；受控数据源配置（`simulated|formal`、https 或回环 http、
+  令牌只存 env 引用）随宿主启动恢复、跨进程互斥落盘 · `@dsh-onto/runtime` · 主对话
+- **业务页与部署双轨** —— `plugin generate` 把已签发包生成业务运行页（缺省 **dataset 模式**：
+  内联数据通道，与 Agent 同一条 `runScenario`；`--source` 走 API 映射模式，`--fixture`
+  显式指定运行夹具）；`deploy.ps1` 独立客户轨：构建 → 夹具 e2e → replay → 装 profile →
+  导入 → **人工激活** → 受控重启 → 双入口锚
 - **经验循环** —— 运行留痕 → 召回提示 → 人工回填 → 技能模板升级 · `dsh-onto exp *` · Web
 - **专家 preset** —— 对话前选 AML / TAX / MED；`expert_agent` 派专家子 agent · hero 芯片 · 主对话
-- **第二域零改引擎** —— AML + MED + TAX 只换包内容 · `packages/`
+- **多域零改引擎** —— AML + MED + TAX + WST + EBC 只换包内容 · `packages/`
 
 ## 目录
 
@@ -58,13 +66,13 @@
 
 ```
 dsh-onto/
-  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，236 项 node --test 验收测试）
+  core/       @dsh-onto/core — 纯引擎库 + CLI（零 harness 依赖，307 项 node --test 验收测试）
   runtime/    @dsh-onto/runtime — 公共运行与治理库：数据连接器、身份权限、运行留痕、
-              复核/批准、动作台账与对账（无 dsh 自动装配；backend 与业务插件
+              复核/批准、动作台账与对账、发布台账与受控数据源（无 dsh 自动装配；backend 与业务插件
               依赖它，禁止反向依赖）
-  backend/    @dsh-onto/backend — dsh bundle：开发面 wire（建模/知识/签发）+
-              对 @dsh-onto/runtime 的装配外壳（onto* 落点，289 项测试）
-  workbench/  @dsh-onto/workbench — dsh bundle：Web UI 六 tab + 右栏常驻本体图谱
+  backend/    @dsh-onto/backend — dsh bundle：开发面 wire（建模/知识/签发/发布）+
+              对 @dsh-onto/runtime 的装配外壳（onto* 落点，328 项测试）
+  workbench/  @dsh-onto/workbench — dsh bundle：Web UI 七 tab + 右栏常驻本体图谱
   apps/       业务插件（独立 dsh bundle）：
                 aml/  @dsh-aml/app  — 治理工作台（复核队列、动作）
                 tax/  @dsh-tax/app  — RUN-only 最小运行页 + Agent 同源
@@ -72,8 +80,10 @@ dsh-onto/
               ticket-sim —— 独立工单模拟服务（SQLite 自身持久化、跨进程幂等、
               故障注入、对账补偿；回执恒为 simulated）
               tax-api —— 第二插件冷启动用只读税务查询 mock
-  packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0、tax/1.0.0
-  examples/   场景运行样例数据（aml-run.json / med-run.json / tax-run.json）
+              wst-api —— 自助接入验收用只读 WST 快照 API
+  packages/   业务本体包示例（一等交付物）：aml/1.0.0、med/1.0.0、tax/1.0.0、
+              wst/1.0.0、wst-ops/1.0.1、ebike-charging/1.0.0
+  examples/   场景运行样例数据（aml-run.json / med-run.json / tax-run.json / ebc-run.json）
   scripts/    setup-profile.ps1 / dev-web.ps1 / dump-config.ps1
               setup-tax-profile.ps1 / dump-tax-config.ps1 / m-tax-seed-release.mjs
               ensure-expert-presets.ps1（+ expert-presets.json、preset-plugins.standard.yaml：专家 preset 块幂等管理）
@@ -100,7 +110,7 @@ dsh-onto\scripts\dump-config.ps1
 dsh-onto\scripts\dev-web.ps1
 ```
 
-工作台六个 tab：**包管理 · 建模 · 知识库 · 校验派生 · 场景运行 · 经验**（右栏另有常驻「本体图谱」）。
+工作台七个 tab：**包管理 · 建模 · 知识库 · 校验派生 · 场景运行 · 接入 · 经验**（右栏另有常驻「本体图谱」）。
 
 ### 第二样例：TAX 业务插件（RUN-only）
 
