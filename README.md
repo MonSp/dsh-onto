@@ -20,16 +20,19 @@ Any domain swaps package content only — the skeleton stays the same.
 ![Methodology pipeline: three lanes — modeling (problem definition → on-demand sources → O1/O2/O3 ontology → pre-issue validation → human issue) · delivery (gates · acceptance · activation) · operations (dual entry → rule judgment → human determination → feedback)](docs/overview-pipeline.en.svg)
 
 > Three lanes, not one pipeline. **Modeling** starts from the business problem (goals · scope ·
-> expected results · counter-examples), picks source types on demand, builds the O1/O2/O3
-> ontology with in-package bindings (API data contract), then validates before issue —
-> structure check, business replay, verified derive + load gate — and only then human issue;
-> the post-issue re-derive records fingerprints (= loadable). **Delivery** takes an issued
-> version through publish/deploy, the managed gate, go-live acceptance (per rail) and human
-> activation: ISSUED ≠ loadable ≠ active. **Operations** run from the dual entry (expert
-> agent / business page system) through query · analyze · act (approval card) · review ·
-> reports — output contract defined at design time, result projections at run time — into
-> rule-engine judgment and human determination, with feedback loops (pending verification,
-> queue return, new version for rule changes; never write back into ISSUED).
+> expected results · counter-examples), picks source types on demand (LLM drafts only —
+> candidates materialize after human approval), builds the O1/O2/O3 ontology with in-package
+> bindings (API data contract), then validates before issue — structure check, derived
+> artifacts + load check, business replay (a recommended review step, not a hard issue
+> gate) — and only then human issue; the post-issue re-derive records fingerprints (= loadable).
+> **Delivery** takes an issued version through publish/deploy, the managed gate, go-live
+> acceptance (per rail) and human activation: ISSUED ≠ loadable ≠ active. **Operations** run
+> from the dual entry (expert agent / business page system) through query & analyze into
+> rule-engine judgment and human determination — act (approval card), review and reports are
+> post-determination outputs (output contract defined at design time, result projections at
+> run time) — with two feedback loops: insufficient evidence → pending verification (stays
+> with the run, back to query/analyze); human corrections → experience backfill → candidate
+> drafts → approval → a new version (never into ISSUED).
 >
 > Chinese original: [README.zh.md](README.zh.md) · [docs/overview-pipeline.zh.svg](docs/overview-pipeline.zh.svg)
 
