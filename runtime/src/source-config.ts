@@ -8,13 +8,16 @@
  *   恢复/登记时从 process.env 解析；env 缺失 → 该 sourceId 跳过登记（fail-closed）。
  * - 「免重启发布」只承诺生效即时性；重启存活靠宿主启动时 {@link restoreManagedDataSources}
  *   按本配置重建映射连接器登记（发布写入的运行中登记重启即失，不恢复则运行按未登记拒）。
+ * - 写路径（{@link upsertSourceConfig}）持跨进程互斥锁：「读配置 → 校验 sourceId 归属
+ *   → 合并 → 原子替换」同一临界区（check 与 rename 之间的窗口也会后写覆盖先写）；
+ *   同名 sourceId 归属其它包 → 拒（幂等替换只留给同包，最终判定在锁内）。
  * - 恢复语义：已登记的 sourceId 不覆盖（部署 env / 插件自登记优先），只补缺——
  *   显式 publish（人工批准）可幂等替换；被动恢复只补空位。
  * - 恢复期逐条复核受控配置（sourceKind 白名单、基址 https 或回环 http）与包内转换契约
  *   （apiSources shape + source-maps）；任一缺失 fail-closed：该 sourceId 不登记，运行按未登记拒。
  * @module @dsh-onto/runtime/source-config
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { PackageWorkspace, loadPackage } from '@dsh-onto/core'
 import { AgentToolError, isRecord } from './agent-policy.js'
@@ -106,17 +109,58 @@ function readSourceConfigsRaw(dataDir: string): string | null {
   return existsSync(file) ? readFileSync(file, 'utf8') : null
 }
 
-function writeSourceConfigs(dataDir: string, configs: readonly ManagedSourceConfig[], expectedRaw: string | null): void {
+/** 原子替换（tmp+rename）。调用方须持有跨进程锁。 */
+function writeSourceConfigs(dataDir: string, configs: readonly ManagedSourceConfig[]): void {
   const file = sourceConfigsPath(dataDir)
   mkdirSync(dirname(file), { recursive: true })
   const body = `${JSON.stringify({ format: SOURCE_CONFIGS_FORMAT, sources: configs }, null, 2)}\n`
-  // 乐观并发：落盘前复核文件仍是读取时的内容，变了由调用方重试（跨进程并发 publish 不丢条目）
-  if (readSourceConfigsRaw(dataDir) !== expectedRaw) {
-    throw new AgentToolError('INVALID_ARGS', '受控数据源配置并发变更，请重试')
-  }
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
   writeFileSync(tmp, body, 'utf8')
   renameSync(tmp, file)
+}
+
+const LOCK_STALE_MS = 30_000
+const LOCK_WAIT_MS = 10_000
+
+function sleepMs(ms: number): void {
+  // 同步等待（本模块写路径是同步 API）：Atomics.wait 主线程可用（Node）
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 跨进程互斥（lockfile，`openSync(..., 'wx')` 原子创建）：把「读配置 → 校验 sourceId 归属
+ * → 合并 → 原子替换」放进同一临界区——check 与 rename 之间的窗口也会造成后写覆盖先写。
+ * 持锁进程死亡 → 按 mtime 超时打破陈锁（打破后重新竞争，不直接进临界区）。
+ */
+function withSourceConfigsLock<T>(dataDir: string, fn: () => T): T {
+  const lockFile = `${sourceConfigsPath(dataDir)}.lock`
+  mkdirSync(dirname(lockFile), { recursive: true })
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    let fd: number
+    try {
+      fd = openSync(lockFile, 'wx')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+      try {
+        if (Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS) rmSync(lockFile, { force: true })
+      } catch {
+        /* 锁已被并发方移除：下轮重新竞争 */
+      }
+      if (Date.now() > deadline) {
+        throw new AgentToolError('INVALID_ARGS', '受控数据源配置写入锁超时（并发争用）：请重试')
+      }
+      sleepMs(5)
+      continue
+    }
+    try {
+      writeFileSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), 'utf8')
+      return fn()
+    } finally {
+      closeSync(fd)
+      rmSync(lockFile, { force: true })
+    }
+  }
 }
 
 function configEntryError(index: number, why: string): never {
@@ -155,20 +199,26 @@ export function loadSourceConfigs(dataDir: string): ManagedSourceConfig[] {
   return parseSourceConfigsText(readSourceConfigsRaw(dataDir))
 }
 
-/** 按 sourceId 写入/替换一条受控数据源配置（发布动作落盘面；原子写 + 乐观并发重试）。 */
+/**
+ * 按 sourceId 写入/替换一条受控数据源配置（发布动作落盘面）。
+ * 跨进程互斥下完成「读 → sourceId 归属判定 → 合并 → 原子替换」：
+ * 同名 sourceId 归属其它包 → 拒（幂等替换只留给同包；最终判定在锁内，调用方的提前检查不作数）。
+ */
 export function upsertSourceConfig(dataDir: string, config: ManagedSourceConfig): void {
   const entry = parseSourceConfigEntry(config, 0)
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = readSourceConfigsRaw(dataDir)
-    const configs = parseSourceConfigsText(raw).filter((c) => c.sourceId !== entry.sourceId)
-    configs.push(entry)
-    try {
-      writeSourceConfigs(dataDir, configs, raw)
-      return
-    } catch (e) {
-      if (attempt === 2 || !(e instanceof AgentToolError) || !e.message.includes('并发变更')) throw e
+  withSourceConfigsLock(dataDir, () => {
+    const configs = parseSourceConfigsText(readSourceConfigsRaw(dataDir))
+    const owner = configs.find((c) => c.sourceId === entry.sourceId)
+    if (owner !== undefined && owner.package.name !== entry.package.name) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `sourceId ${entry.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
+      )
     }
-  }
+    const merged = configs.filter((c) => c.sourceId !== entry.sourceId)
+    merged.push(entry)
+    writeSourceConfigs(dataDir, merged)
+  })
 }
 
 /**

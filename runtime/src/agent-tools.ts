@@ -4346,7 +4346,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
   // 三态分离：包可见（工作区）≠ 版本已激活（授权人）≠ 数据源可用（连接器登记）。
   // publish 收编已签发包进发布台账（同摘要幂等）+ 按受控数据源配置登记映射连接器（免重启，
   // 运行中 registry 即时生效）；不激活。activate/rollback 为独立人工动作（系统批准卡），
-  // 授权人记宿主用户 id（不收模型自称）。已导入未激活的包拒绝运行（受管闸，见 assertActiveBinding）。
+  // authorizedBy 记宿主发起人 id（审计口径：非点卡人留痕，不收模型自称）。已导入未激活的包拒绝运行（受管闸，见 assertActiveBinding）。
   reg('dev', () => defineTool({
       name: 'publish_business',
       description:
@@ -4416,7 +4416,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (tokenEnv !== undefined && token === null) {
             throw new AgentToolError('INVALID_ARGS', `令牌 env ${tokenEnv} 缺失/为空：请先在宿主 env 配置后重试`)
           }
-          // sourceId 归属（受控数据源全局命名空间）：已被其它包占用 → 拒（幂等替换只留给同包重发布）。
+          // sourceId 归属（受控数据源全局命名空间）：提前检查省批准卡；最终判定在 upsertSourceConfig 锁内复核。
           const owner = loadSourceConfigs(dataDir).find((c) => c.sourceId === args.sourceId)
           if (owner !== undefined && owner.package.name !== args.name) {
             throw new AgentToolError(
@@ -4516,7 +4516,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       name: 'activate_business',
       description:
         '人工激活已发布的业务域（发布业务 v1）：激活后新运行只绑活动版本；同包其它版本拒绝（RELEASE_VERSION_NOT_ACTIVE）。'
-        + '激活是授权人动作——实际放行以系统批准卡为准，授权人记宿主用户 id（不收模型自称）。回滚用 rollback_business。'
+        + '激活的放行条件唯一是系统批准卡；authorizedBy 记宿主发起人 ID（审计口径：非批准卡点卡人留痕，不收模型自称）。回滚用 rollback_business。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求激活时传 true。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
@@ -4549,8 +4549,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       execute: toolExecute(
         async (args: { name: string; version: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '激活')
-          // 授权人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）。
-          // 身份先于批准卡：身份缺席时不劳烦授权人批卡。
+          // 发起人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）。
+          // 审计口径：authorizedBy 是宿主发起人 ID，**不是**批准卡实际点卡人；放行条件唯一是系统批准卡。
+          // 身份先于批准卡：身份缺席时不劳烦批卡。若后续要收紧，另定发布角色 + 点卡人留痕。
           const identity = requireBusinessIdentity('history')
           const digest = actionDigest({ op: 'activate_business', name: args.name, version: args.version })
           const grant = await approve(exec, {
@@ -4586,7 +4587,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       description:
         '回滚业务域的活动指针到上一活动版本（发布业务 v1）：只动该包自身的活动指针（历史保留），'
         + '不影响已有业务与其它包；连接器登记随源配置保留（版本回滚不注销数据源）。'
-        + '无上一版本拒绝（RELEASE_NOT_FOUND）。放行以系统批准卡为准，授权人记宿主用户 id。'
+        + '无上一版本拒绝（RELEASE_NOT_FOUND）。放行以系统批准卡为准；authorizedBy 记宿主发起人 ID（审计口径：非批准卡点卡人留痕）。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求回滚时传 true。',
       parameters: {
         name: { type: 'string', required: true, description: '包名' },
@@ -4614,7 +4615,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       execute: toolExecute(
         async (args: { name: string; humanApproved: boolean }, exec) => {
           assertHumanApproved(args.humanApproved, '回滚')
-          // 身份先于批准卡（同 activate_business 口径）。
+          // 身份先于批准卡（同 activate_business 口径）；authorizedBy 记宿主发起人 ID（非点卡人留痕）。
           const identity = requireBusinessIdentity('history')
           const digest = actionDigest({ op: 'rollback_business', name: args.name })
           const grant = await approve(exec, {
