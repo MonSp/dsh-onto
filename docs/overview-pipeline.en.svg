@@ -1,215 +1,111 @@
-<svg viewBox="0 0 940 1040" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 880 980" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
   <defs>
     <marker id="a1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
       <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="#4A6FA5" stroke-width="1.2"/>
     </marker>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="#B07D2B" stroke-width="1.2"/>
+    </marker>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="#8A8A82" stroke-width="1.2"/>
+    </marker>
   </defs>
   <style>
-    .hd { font: 16px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .tt { font: 12.5px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .bd { font: 10.5px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#3A4A5C; }
-    .sm { font: 10.5px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#6B7B8C; }
-    .kw { font: 12px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#FFFFFF; }
-    .chip { font: 10px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#FFFFFF; }
-    .lgT { font: 11.5px/500 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#1B2430; }
-    .lgB { font: 10px/400 -apple-system,'Segoe UI','Helvetica Neue',Arial,sans-serif; fill:#4A5B6D; }
+    text { font-family: -apple-system,'PingFang SC','Microsoft YaHei',sans-serif; }
+    .hd { font-size: 17px; font-weight: 500; fill: #1B2430; }
+    .tt { font-size: 13px; font-weight: 500; fill: #1B2430; }
+    .bd { font-size: 11px; font-weight: 400; fill: #3A4A5C; }
+    .sm { font-size: 11px; font-weight: 400; fill: #6B7B8C; }
+    .kw { font-size: 12px; font-weight: 500; fill: #FFFFFF; }
+    .chip { font-size: 10px; font-weight: 500; fill: #FFFFFF; }
+    .tag { font-size: 10.5px; font-weight: 500; fill: #633806; }
   </style>
-
-  <text x="24" y="30" class="hd">Universal: Knowledge → Ontology → Platform → Decision support</text>
-  <text x="24" y="50" class="sm">Any domain: Finance / Hospitals / Research / Logistics / Manufacturing…  ·  Purple = raw  ·  Blue = rules  ·  Orange = executors</text>
-
-  <!-- Left column -->
-  <rect x="24" y="72" width="236" height="600" rx="10" fill="#EDE4F5" stroke="#B799D4" stroke-width="1"/>
-  <text x="38" y="98" class="tt">LLM parsing</text>
-  <text x="38" y="116" class="sm">Read legacy → draft + confidence</text>
-
-  <rect x="36" y="132" width="212" height="100" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="152" class="lgT">Legacy business systems</text>
-  <rect x="48" y="162" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="173" class="chip" text-anchor="middle">O2</text>
-  <rect x="78" y="162" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="173" class="chip" text-anchor="middle">O3</text>
-  <text x="48" y="194" class="lgB">Extract: rules in algorithms</text>
-  <text x="48" y="210" class="sm">Features / algorithms / labels</text>
-  <text x="48" y="224" class="sm">Implicit risk / anomaly logic</text>
-
-  <rect x="36" y="244" width="212" height="88" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="264" class="lgT">Historical cases / samples</text>
-  <rect x="48" y="274" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="285" class="chip" text-anchor="middle">O1</text>
-  <rect x="78" y="274" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="285" class="chip" text-anchor="middle">O2</text>
-  <text x="48" y="308" class="lgB">Extract: objects / behaviors</text>
-  <text x="48" y="324" class="sm">Entities, actions, metrics</text>
-
-  <rect x="36" y="344" width="212" height="88" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="364" class="lgT">Policies / standards</text>
-  <rect x="48" y="374" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="385" class="chip" text-anchor="middle">O2</text>
-  <rect x="78" y="374" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="91" y="385" class="chip" text-anchor="middle">O3</text>
-  <text x="48" y="408" class="lgB">Extract: rules + red lines</text>
-  <text x="48" y="424" class="sm">Thresholds, weights, ban list</text>
-
-  <rect x="36" y="444" width="212" height="90" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="464" class="lgT">Schema / API docs</text>
-  <rect x="48" y="474" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="485" class="chip" text-anchor="middle">O1</text>
-  <text x="48" y="508" class="lgB">Extract: attributes / fields</text>
-  <text x="48" y="524" class="sm">For data-source binding</text>
-
-  <rect x="36" y="546" width="212" height="90" rx="8" fill="#FFFFFF" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="48" y="566" class="lgT">Work orders / tasks</text>
-  <rect x="48" y="576" width="26" height="15" rx="4" fill="#5B7CFA"/><text x="61" y="587" class="chip" text-anchor="middle">O3</text>
-  <text x="48" y="610" class="lgB">Extract: scenarios / outputs</text>
-  <text x="48" y="626" class="sm">What to query, what to return</text>
-
-  <text x="38" y="654" class="sm">Humans only: confirm / merge / reject</text>
-
-  <!-- Middle column -->
-  <text x="470" y="62" class="tt" text-anchor="middle">Main flow</text>
-
-  <rect x="270" y="72" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="280" y="87" class="kw" text-anchor="middle">1</text>
-  <rect x="298" y="78" width="344" height="88" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="312" y="102" class="tt">Experts explain how the business runs</text>
-  <text x="312" y="122" class="bd">Spoken, or fed as knowledge-base docs</text>
-  <text x="312" y="140" class="bd">What exists / does / judges / cannot say</text>
-  <rect x="312" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="162" class="chip" text-anchor="middle">O1</text>
-  <rect x="342" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="162" class="chip" text-anchor="middle">O2</text>
-  <rect x="372" y="150" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="162" class="chip" text-anchor="middle">O3</text>
-
-  <line x1="470" y1="166" x2="470" y2="186" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="202" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="280" y="217" class="kw" text-anchor="middle">2</text>
-  <rect x="298" y="198" width="344" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="312" y="220" class="tt">AI drafts — advises, never decides</text>
-  <text x="312" y="238" class="bd">Guesses objects / rules / scenarios</text>
-  <text x="312" y="254" class="bd">With confidence · humans confirm / merge</text>
-  <rect x="312" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="274" class="chip" text-anchor="middle">O1</text>
-  <rect x="342" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="274" class="chip" text-anchor="middle">O2</text>
-  <rect x="372" y="262" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="274" class="chip" text-anchor="middle">O3</text>
-
-  <line x1="470" y1="278" x2="470" y2="298" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="314" width="20" height="20" rx="5" fill="#5B7CFA"/>
-  <text x="280" y="329" class="kw" text-anchor="middle">3</text>
-  <rect x="298" y="310" width="344" height="80" rx="9" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <text x="312" y="332" class="tt">Human stamp takes effect (issue)</text>
-  <text x="312" y="350" class="bd">Machine validation + human issue = live</text>
-  <text x="312" y="366" class="bd">After issue, nobody may tamper</text>
-  <rect x="312" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="386" class="chip" text-anchor="middle">O1</text>
-  <rect x="342" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="386" class="chip" text-anchor="middle">O2</text>
-  <rect x="372" y="374" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="385" y="386" class="chip" text-anchor="middle">O3</text>
-
-  <line x1="470" y1="390" x2="470" y2="410" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="426" width="20" height="20" rx="5" fill="#2E9E6B"/>
-  <text x="280" y="441" class="kw" text-anchor="middle">4</text>
-  <rect x="298" y="422" width="344" height="86" rx="9" fill="#F0FAF6" stroke="#BFE5D4" stroke-width="0.8"/>
-  <text x="312" y="444" class="tt">System auto-derives the work guide</text>
-  <text x="312" y="462" class="bd">O-layer rules compile to L-layer executors</text>
-  <text x="312" y="478" class="bd">Read-only; hand edits refuse to run</text>
-  <rect x="312" y="488" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="500" class="chip" text-anchor="middle">O3</text>
-  <rect x="342" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="355" y="500" class="chip" text-anchor="middle">L2</text>
-  <rect x="372" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="385" y="500" class="chip" text-anchor="middle">L3</text>
-  <rect x="402" y="488" width="26" height="16" rx="4" fill="#E8933A"/><text x="415" y="500" class="chip" text-anchor="middle">L4</text>
-
-  <text x="470" y="532" class="sm" text-anchor="middle">── Rules built · below is execution ──</text>
-
-  <rect x="270" y="552" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="280" y="567" class="kw" text-anchor="middle">5</text>
-  <rect x="298" y="548" width="344" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="312" y="570" class="tt">Frontline staff raise a request</text>
-  <text x="312" y="588" class="bd">“Help me look at this customer / case / order…”</text>
-  <text x="312" y="604" class="bd">Enters via assistant or business system</text>
-  <rect x="312" y="612" width="26" height="16" rx="4" fill="#E8933A"/><text x="325" y="624" class="chip" text-anchor="middle">L5</text>
-  <rect x="342" y="612" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="624" class="chip" text-anchor="middle">O3</text>
-
-  <line x1="470" y1="628" x2="470" y2="648" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="664" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="280" y="679" class="kw" text-anchor="middle">6</text>
-  <rect x="298" y="660" width="344" height="86" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="312" y="682" class="tt">AI experts with tools dig for clues</text>
-  <text x="312" y="700" class="bd">Query data, compute features, find links</text>
-  <text x="312" y="716" class="bd">Produces “candidate list + reasons”</text>
-  <rect x="312" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="325" y="738" class="chip" text-anchor="middle">L4</text>
-  <rect x="342" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="355" y="738" class="chip" text-anchor="middle">L3</text>
-  <rect x="372" y="726" width="26" height="16" rx="4" fill="#E8933A"/><text x="385" y="738" class="chip" text-anchor="middle">L2</text>
-  <rect x="402" y="726" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="415" y="738" class="chip" text-anchor="middle">O1</text>
-
-  <line x1="470" y1="746" x2="470" y2="766" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="782" width="20" height="20" rx="5" fill="#E8933A"/>
-  <text x="280" y="797" class="kw" text-anchor="middle">7</text>
-  <rect x="298" y="778" width="344" height="80" rx="9" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <text x="312" y="800" class="tt">Machine scores + checks red lines</text>
-  <text x="312" y="818" class="bd">Every score maps to a rule</text>
-  <text x="312" y="834" class="bd">Bad phrasing rejected · AI never scores</text>
-  <rect x="312" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="854" class="chip" text-anchor="middle">O2</text>
-  <rect x="342" y="842" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="355" y="854" class="chip" text-anchor="middle">O3</text>
-
-  <line x1="470" y1="858" x2="470" y2="878" stroke="#4A6FA5" stroke-width="1.2" marker-end="url(#a1)"/>
-
-  <rect x="270" y="894" width="20" height="20" rx="5" fill="#D64545"/>
-  <text x="280" y="909" class="kw" text-anchor="middle">8</text>
-  <rect x="298" y="890" width="344" height="80" rx="9" fill="#FDF0F0" stroke="#F0C4C4" stroke-width="0.8"/>
-  <text x="312" y="912" class="tt">Finally, humans decide</text>
-  <text x="312" y="930" class="bd">Candidates + scores + evidence + pending</text>
-  <text x="312" y="946" class="bd">Determination / approval — humans only</text>
-  <rect x="312" y="954" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="325" y="966" class="chip" text-anchor="middle">O3</text>
-
-  <!-- Right column -->
-  <line x1="668" y1="68" x2="668" y2="1000" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="682" y="88" class="hd">Legend</text>
-  <text x="682" y="106" class="sm">Swap domain: words change, skeleton stays</text>
-
-  <rect x="678" y="120" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="690" y="132" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="144" class="chip" text-anchor="middle">O1</text>
-  <text x="724" y="144" class="lgT">Object layer · What exists</text>
-  <text x="690" y="164" class="lgB">Entities / relations / dicts</text>
-  <text x="690" y="182" class="sm">Unified identity &amp; metrics</text>
-
-  <rect x="678" y="200" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="690" y="212" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="224" class="chip" text-anchor="middle">O2</text>
-  <text x="724" y="224" class="lgT">Rule layer · How to judge</text>
-  <text x="690" y="244" class="lgB">Behaviors / scoring / exclusions</text>
-  <text x="690" y="262" class="sm">Sole scoring basis; auditable</text>
-
-  <rect x="678" y="280" width="238" height="72" rx="8" fill="#F4F7FF" stroke="#C9D6FA" stroke-width="0.8"/>
-  <rect x="690" y="292" width="26" height="16" rx="4" fill="#5B7CFA"/><text x="703" y="304" class="chip" text-anchor="middle">O3</text>
-  <text x="724" y="304" class="lgT">Scenario layer · Bounds</text>
-  <text x="690" y="324" class="lgB">Scenarios / contracts / review</text>
-  <text x="690" y="342" class="sm">Candidates only — no verdicts</text>
-
-  <rect x="678" y="360" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="690" y="372" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="384" class="chip" text-anchor="middle">L1</text>
-  <text x="724" y="384" class="lgT">Application · Entry point</text>
-  <text x="690" y="406" class="sm">Entry in business systems</text>
-
-  <rect x="678" y="428" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="690" y="440" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="452" class="chip" text-anchor="middle">L2</text>
-  <text x="724" y="452" class="lgT">Tool pool · The gear</text>
-  <text x="690" y="474" class="sm">Query / compute / APIs</text>
-
-  <rect x="678" y="496" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="690" y="508" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="520" class="chip" text-anchor="middle">L3</text>
-  <text x="724" y="520" class="lgT">Skills · How to combine</text>
-  <text x="690" y="542" class="sm">Tool-calling methodology</text>
-
-  <rect x="678" y="564" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="690" y="576" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="588" class="chip" text-anchor="middle">L4</text>
-  <text x="724" y="588" class="lgT">Experts · Who does work</text>
-  <text x="690" y="610" class="sm">Multi-skill + explores links</text>
-
-  <rect x="678" y="632" width="238" height="56" rx="8" fill="#FFF8EC" stroke="#F0D9A8" stroke-width="0.8"/>
-  <rect x="690" y="644" width="26" height="16" rx="4" fill="#E8933A"/><text x="703" y="656" class="chip" text-anchor="middle">L5</text>
-  <text x="724" y="656" class="lgT">Assistant · Facade</text>
-  <text x="690" y="678" class="sm">Persona / anchors / chat</text>
-
-  <rect x="678" y="700" width="238" height="76" rx="8" fill="#F5F0FA" stroke="#D4C4E8" stroke-width="0.8"/>
-  <text x="690" y="722" class="lgT">Knowledge · Legacy sediment</text>
-  <text x="690" y="742" class="lgB">Algorithms / labels = rules</text>
-  <text x="690" y="760" class="sm">LLM parse → draft → review</text>
-
-  <text x="678" y="804" class="sm">Swap domain = package, not grammar:</text>
-  <text x="678" y="824" class="sm">Finance: accounts / txns</text>
-  <text x="678" y="844" class="sm">Hospitals: patients / orders</text>
-  <text x="678" y="864" class="sm">Logistics: goods / waybills</text>
-  <text x="678" y="884" class="sm">— skeleton runs as-is</text>
+  <text x="24" y="30" class="hd" text-anchor="start">Universal: six source types → ontology base → scenario derivation → dual delivery</text>
+  <text x="24" y="50" class="sm" text-anchor="start">Any domain: finance / hospitals / research / logistics / manufacturing…   purple=sources  blue=ontology &amp; rules  teal=derived  amber=delivery  gray=release &amp; runtime loop</text>
+  <rect x="24" y="72" width="832" height="100" rx="10" fill="#EDE4F5" stroke="#B799D4" stroke-width="1"/>
+  <text x="38" y="94" class="tt" text-anchor="start">① Sources · six knowledge types</text>
+  <rect x="36" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="100.0" y="124" class="kw" text-anchor="middle">Legacy systems</text>
+  <text x="100.0" y="142" class="chip" text-anchor="middle">LEGACY_SYS</text>
+  <rect x="172" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="236.0" y="124" class="kw" text-anchor="middle">Case samples</text>
+  <text x="236.0" y="142" class="chip" text-anchor="middle">CASE_SAMPLE</text>
+  <rect x="308" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="372.0" y="124" class="kw" text-anchor="middle">Policies</text>
+  <text x="372.0" y="142" class="chip" text-anchor="middle">POLICY</text>
+  <rect x="444" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="508.0" y="124" class="kw" text-anchor="middle">Schema / API</text>
+  <text x="508.0" y="142" class="chip" text-anchor="middle">SCHEMA_API</text>
+  <rect x="580" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="644.0" y="124" class="kw" text-anchor="middle">Work orders</text>
+  <text x="644.0" y="142" class="chip" text-anchor="middle">WORK_ORDER</text>
+  <rect x="716" y="104" width="128" height="52" rx="7" fill="#B799D4" stroke="#B799D4" stroke-width="1"/>
+  <text x="780.0" y="124" class="kw" text-anchor="middle">Conversation</text>
+  <text x="780.0" y="142" class="chip" text-anchor="middle">CONVERSATION</text>
+  <text x="38" y="168" class="sm" text-anchor="start">Raw material never writes the package: LLM parse → candidate queue → human approval → skeleton gate → validate → derive → human issue</text>
+  <line x1="440" y1="172" x2="440" y2="194" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <rect x="24" y="196" width="832" height="232" rx="10" fill="#E4EDF6" stroke="#8FB4D9" stroke-width="1"/>
+  <text x="38" y="218" class="tt" text-anchor="start">② Ontology model · semantic base (O1 · O2 · O3)</text>
+  <rect x="36" y="230" width="246" height="62" rx="8" fill="#FFFFFF" stroke="#8FB4D9" stroke-width="1"/>
+  <text x="48" y="252" class="tt" text-anchor="start">O1 Objects</text>
+  <text x="48" y="274" class="bd" text-anchor="start">objects · relations · dictionaries</text>
+  <rect x="296" y="230" width="246" height="62" rx="8" fill="#FFFFFF" stroke="#8FB4D9" stroke-width="1"/>
+  <text x="308" y="252" class="tt" text-anchor="start">O2 Rules</text>
+  <text x="308" y="274" class="bd" text-anchor="start">Action · scoring · exclusion · skills</text>
+  <rect x="556" y="230" width="246" height="62" rx="8" fill="#FFFFFF" stroke="#8FB4D9" stroke-width="1"/>
+  <text x="568" y="252" class="tt" text-anchor="start">O3 Scenarios</text>
+  <text x="568" y="274" class="bd" text-anchor="start">scenario · contract · review gate</text>
+  <rect x="36" y="302" width="766" height="30" rx="7" fill="#FFFFFF" stroke="#8FB4D9" stroke-width="1"/>
+  <text x="46" y="322" class="bd" text-anchor="start">Human issue ISSUED (read-only) → derive L-layer contracts: rule-engine-config · tool-contracts · scenario-orchestration · agent-duties · audit-checks</text>
+  <text x="38" y="356" class="bd" text-anchor="start">In-package bindings: api-sources + source-maps / field-maps — carry the API data contract (attached at runtime by controlled connectors)</text>
+  <text x="38" y="378" class="bd" text-anchor="start">Database tables are exposed via API; a direct DB connector is still to be added ◻</text>
+  <text x="38" y="408" class="sm" text-anchor="start">O1/O2/O3 are the semantic source for the L-layer: judgment in the rule engine, determination by humans</text>
+  <line x1="440" y1="428" x2="440" y2="450" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <rect x="24" y="452" width="832" height="118" rx="10" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="1"/>
+  <text x="38" y="474" class="tt" text-anchor="start">③ Scenario derivation (per business scenario, incl. reports)</text>
+  <rect x="36" y="486" width="246" height="52" rx="7" fill="#2E8B74" stroke="#2E8B74" stroke-width="1"/>
+  <text x="159.0" y="506" class="kw" text-anchor="middle">Skill templates</text>
+  <text x="159.0" y="524" class="chip" text-anchor="middle">SkillTemplate</text>
+  <rect x="296" y="486" width="246" height="52" rx="7" fill="#2E8B74" stroke="#2E8B74" stroke-width="1"/>
+  <text x="419.0" y="506" class="kw" text-anchor="middle">Workflow SOP</text>
+  <text x="419.0" y="524" class="chip" text-anchor="middle">six-slot pipeline</text>
+  <rect x="556" y="486" width="246" height="52" rx="7" fill="#2E8B74" stroke="#2E8B74" stroke-width="1"/>
+  <text x="679.0" y="506" class="kw" text-anchor="middle">Output contract</text>
+  <text x="679.0" y="524" class="chip" text-anchor="middle">fields · banned phrases · review gate</text>
+  <text x="38" y="556" class="sm" text-anchor="start">Reports = projections over run results (same RunReport / getRunReport projection + saved report pages)</text>
+  <line x1="440" y1="570" x2="232" y2="592" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <line x1="440" y1="570" x2="648" y2="592" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <rect x="36" y="594" width="388" height="128" rx="10" fill="#FAEEDA" stroke="#EF9F27" stroke-width="1"/>
+  <text x="52" y="618" class="tt" text-anchor="start">④a Business expert agent</text>
+  <rect x="316" y="600" width="96" height="22" rx="11" fill="#EF9F27" stroke="#EF9F27" stroke-width="1"/>
+  <text x="364" y="615" class="tag" text-anchor="middle">shipped</text>
+  <text x="52" y="646" class="bd" text-anchor="start">Same chat entry (pick a preset domain first)</text>
+  <text x="52" y="668" class="bd" text-anchor="start">Natural-language ops &amp; analysis · expert_agent delegates</text>
+  <rect x="440" y="594" width="404" height="128" rx="10" fill="#FAEEDA" stroke="#EF9F27" stroke-width="1"/>
+  <text x="456" y="618" class="tt" text-anchor="start">④b Business page system (plugin)</text>
+  <rect x="740" y="600" width="92" height="22" rx="11" fill="#EF9F27" stroke="#EF9F27" stroke-width="1"/>
+  <text x="786" y="615" class="tag" text-anchor="middle">target · 4 gaps</text>
+  <text x="456" y="646" class="bd" text-anchor="start">scenarios / SOP ✓   reports ✓   review ✓ (wire)</text>
+  <text x="456" y="668" class="bd" text-anchor="start">object views ◻   controlled sources ◻   action start ◻</text>
+  <text x="456" y="698" class="sm" text-anchor="start">Directly operable: query · analyze · act · review · report</text>
+  <line x1="232" y1="722" x2="232" y2="744" stroke="#B07D2B" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+  <line x1="640" y1="722" x2="640" y2="744" stroke="#B07D2B" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+  <rect x="36" y="746" width="808" height="56" rx="10" fill="#FAEEDA" stroke="#EF9F27" stroke-width="1" stroke-dasharray="6 4"/>
+  <text x="52" y="768" class="tt" text-anchor="start">⑤ Release / delivery rails</text>
+  <text x="52" y="790" class="bd" text-anchor="start">Platform rail: publish → activate (no restart · managed gate fail-closed)　｜　Customer rail: deploy.ps1 (human activation · controlled restart · dual-entry anchors)</text>
+  <rect x="24" y="822" width="832" height="104" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="38" y="846" class="tt" text-anchor="start">Runtime loop (one execution path for both delivery forms)</text>
+  <rect x="30" y="856" width="196" height="54" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="128" y="878" class="tt" text-anchor="middle">① Frontline request</text>
+  <text x="128" y="898" class="bd" text-anchor="middle">chat / business page</text>
+  <rect x="238" y="856" width="196" height="54" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="336" y="878" class="tt" text-anchor="middle">② Dig for clues</text>
+  <text x="336" y="898" class="bd" text-anchor="middle">query · compute · links</text>
+  <rect x="446" y="856" width="196" height="54" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="544" y="878" class="tt" text-anchor="middle">③ Score + red lines</text>
+  <text x="544" y="898" class="bd" text-anchor="middle">AI never scores</text>
+  <rect x="654" y="856" width="196" height="54" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="752" y="878" class="tt" text-anchor="middle">④ Humans decide</text>
+  <text x="752" y="898" class="bd" text-anchor="middle">humanReviewRequired=true</text>
+  <text x="24" y="952" class="sm" text-anchor="start">purple=sources  blue=ontology &amp; rules  teal=derived  amber=delivery  gray=release &amp; runtime loop    ✓=shipped  ◻=to be added</text>
 </svg>

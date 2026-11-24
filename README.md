@@ -17,8 +17,14 @@ O1 objects / O2 behavior rules / O3 scenario cards. One line to remember:
 Universal pipeline: **Knowledge → Ontology → Platform assembly → Decision support**.
 Any domain swaps package content only — the skeleton stays the same.
 
-![Universal pipeline: Knowledge → Ontology → Platform assembly → Decision support](docs/overview-pipeline.en.svg)
+![Methodology pipeline: six source types → ontology base (O1/O2/O3 + bindings) → scenario derivation (skills · SOP · output contract) → dual delivery (expert agent / business page system) → release rails](docs/overview-pipeline.en.svg)
 
+> Six sources feed the ontology base; O1/O2/O3 carry the semantics and the in-package bindings
+> carry the API data contract; scenarios derive skills, SOPs and output contracts (reports are
+> projections over run results); two delivery forms sit on top — a natural-language expert agent
+> and a business page system (target state: query · analyze · act · review · report); release runs
+> on two rails (platform `publish → activate`, customer `deploy.ps1`).
+>
 > Chinese original: [README.zh.md](README.zh.md) · [docs/overview-pipeline.zh.svg](docs/overview-pipeline.zh.svg)
 
 ## From one sentence to a self-running loop
@@ -131,7 +137,7 @@ dsh-onto/
               architecture.md — self-contained concepts & rules (Chinese)
               plugin-authoring.zh.md — second-domain plugin cold-start checklist
               ops-manual.md — formal-action gates & reconciliation
-              overview-pipeline.{zh,en}.svg — end-to-end pipeline diagrams
+              overview-pipeline.{zh,en}.svg — methodology pipeline (sources → ontology → derivation → delivery → release rails)
 ```
 
 ## Requirements

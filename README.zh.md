@@ -11,10 +11,14 @@
 
 ## 总览
 
-通用链路：**知识库 → 本体 → 平台装配 → 辅助决策**。任意领域只换包内容，不换骨架。
+通用链路：**六类原料 → 本体基座 → 场景派生 → 双形态交付**。任意领域只换包内容，不换骨架。
 
-![通用版：知识库 → 本体 → 平台装配 → 辅助决策](docs/overview-pipeline.zh.svg)
+![通用方法论管线：六类原料 → 本体基座（O1/O2/O3 + bindings）→ 场景派生（技能 · SOP · 输出契约）→ 双形态交付（业务专家 agent / 业务页面系统）→ 发布轨](docs/overview-pipeline.zh.svg)
 
+> 六类原料喂本体基座；O1/O2/O3 承载语义、包内 bindings 承载 API 数据契约；场景派生技能、SOP 与输出契约
+> （报表＝运行结果之上的投影）；之上两种交付形态——自然语言业务专家 agent、业务页面系统（目标态：
+> 查询 · 分析 · 动作 · 复核 · 报表）；发布走双轨（平台轨 `publish → activate`、独立客户轨 `deploy.ps1`）。
+>
 > 英文版见 [README.md](README.md) / [docs/overview-pipeline.en.svg](docs/overview-pipeline.en.svg)。
 
 ## 从一句话到自运转
@@ -91,7 +95,7 @@ dsh-onto/
               architecture.md（自包含架构与规则）
               plugin-authoring.zh.md（第二域插件冷启动卡点表）
               ops-manual.md（正式动作门槛与对账）
-              overview-pipeline.{zh,en}.svg（端到端链路图）
+              overview-pipeline.{zh,en}.svg（方法论管线图：原料 → 本体 → 派生 → 交付 → 发布轨）
 ```
 
 ## 快速开始
