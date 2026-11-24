@@ -49,7 +49,7 @@
   <text x="754.0" y="231" class="kw" text-anchor="middle">Conversation</text>
   <text x="754.0" y="247" class="chip" text-anchor="middle">CONVERSATION</text>
   <line x1="440" y1="268" x2="440" y2="288" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
-  <text x="456" y="281" class="sm" text-anchor="start">sources → candidates (LLM drafts) → materialize after approval</text>
+  <text x="456" y="281" class="sm" text-anchor="start">sources → candidates (LLM) → materialize after approval</text>
   <rect x="44" y="290" width="792" height="104" rx="8" fill="#FFFFFF" stroke="#8FB4D9" stroke-width="1"/>
   <text x="60" y="312" class="tt" text-anchor="start">③ Model the ontology O1 · O2 · O3</text>
   <rect x="56" y="320" width="244" height="44" rx="6" fill="#E4EDF6" stroke="#8FB4D9" stroke-width="1"/>
@@ -122,6 +122,7 @@
   <rect x="656" y="1134" width="180" height="40" rx="8" fill="#FFFFFF" stroke="#5DCAA5" stroke-width="1"/>
   <text x="746" y="1158" class="bd" text-anchor="middle">Act (approval card)</text>
   <line x1="640" y1="1154" x2="656" y2="1154" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <text x="652" y="1128" class="sm" text-anchor="start">approved candidates only</text>
   <rect x="44" y="1194" width="380" height="56" rx="8" fill="#FFFFFF" stroke="#5DCAA5" stroke-width="1" stroke-dasharray="5 4"/>
   <text x="234" y="1216" class="bd" text-anchor="middle">① Evidence short → pending verification</text>
   <text x="234" y="1238" class="sm" text-anchor="middle">stays with the run · back to query/analyze</text>
@@ -131,6 +132,6 @@
   <path d="M200,1038 L120,1038 L120,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M44,1216 C 26,1150 26,980 200,916" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M420,1174 C 500,1182 580,1182 640,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
-  <path d="M836,1222 C 868,1100 868,420 856,262" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
+  <path d="M836,1222 C 868,1100 868,420 846,283 L 812,283" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <text x="24" y="1310" class="sm" text-anchor="start">blue=modeling  amber=delivery  teal=operations  purple=sources (on demand)</text>
 </svg>

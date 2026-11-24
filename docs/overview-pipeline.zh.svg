@@ -122,6 +122,7 @@
   <rect x="656" y="1134" width="180" height="40" rx="8" fill="#FFFFFF" stroke="#5DCAA5" stroke-width="1"/>
   <text x="746" y="1158" class="bd" text-anchor="middle">动作（过批准卡）</text>
   <line x1="640" y1="1154" x2="656" y2="1154" stroke="#4A6FA5" stroke-width="1.4" marker-end="url(#a1)"/>
+  <text x="652" y="1128" class="sm" text-anchor="start">仅获准候选</text>
   <rect x="44" y="1194" width="380" height="56" rx="8" fill="#FFFFFF" stroke="#5DCAA5" stroke-width="1" stroke-dasharray="5 4"/>
   <text x="234" y="1216" class="bd" text-anchor="middle">① 证据不足 → 待核实（pendingChecks）</text>
   <text x="234" y="1238" class="sm" text-anchor="middle">随 run 留存 · 回查询/分析补数</text>
@@ -131,6 +132,6 @@
   <path d="M200,1038 L120,1038 L120,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M44,1216 C 26,1150 26,980 200,916" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <path d="M420,1174 C 500,1182 580,1182 640,1194" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
-  <path d="M836,1222 C 868,1100 868,420 856,262" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
+  <path d="M836,1222 C 868,1100 868,420 846,283 L 720,283" fill="none" stroke="#2E8B74" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a3)"/>
   <text x="24" y="1310" class="sm" text-anchor="start">蓝=建模线　橙=交付线　青=运行线　紫=原料来源（按需选取）</text>
 </svg>
