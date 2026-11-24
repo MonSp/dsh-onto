@@ -108,6 +108,8 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'prepareAction', true, 'RPA', 'Issue a UI approval challenge (two-phase approval card).'),
       desc('ontoRuntime', 'executeAction', true, 'REA', 'Execute an action with UI approval proof (page face).'),
       desc('ontoRuntime', 'reconcileAction', true, 'RRL', 'Manual reconcile of an unknown/in-flight action record.'),
+      desc('ontoRuntime', 'browseObjects', true, 'RBO', 'Browse entity instances (paged, by type).'),
+      desc('ontoRuntime', 'expandEntity', true, 'REX2', 'Expand entity neighborhood subgraph from seeds.'),
     ]
 
     const React = require('react') as typeof import('react')

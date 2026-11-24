@@ -92,7 +92,7 @@ test('真实 wire 实例：保留 Remote 标记，调用绑定到所属宿主', 
         async fetch() { throw new Error(`wire-host-${index}`) },
       }))
       const service = new OntoRuntime(ctx)
-      assert.equal(remoteMethods(service).length, 20)
+      assert.equal(remoteMethods(service).length, 22)
       await assert.rejects(
         () => service.remoteExportRunScenario({
           name: 'aml-analysis', version: '1.0.0',

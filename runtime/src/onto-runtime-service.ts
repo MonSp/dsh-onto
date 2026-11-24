@@ -14,6 +14,7 @@ import {
   buildRunReport,
   compareRunRecords,
   exportRunArchive,
+  expandEntity,
   isSafeRunId,
   listExperienceNotes,
   listReportPages,
@@ -28,6 +29,7 @@ import {
   saveRunRecord,
   verifyDerived,
   type DataBasisInput,
+  type ExpandResult,
   type OntologyPackage,
   type ReportPage,
   type RunDiff,
@@ -886,6 +888,125 @@ export class OntoRuntime extends RuntimeRemoteService {
         ...(res.note !== undefined ? { note: res.note } : {}),
         humanReviewRequired: true as const,
       }
+    })
+  }
+
+  /* ── 对象视图面（issue #30 WP-D）：实体浏览 / 邻域跳转 ─────────────────────
+   * 实例数据走双通道（dataset 内联 XOR sourceId 受控取数，与 runScenario 同互斥口径）；
+   * RunRecord 只留摘要不留全量 dataset——浏览面以通道数据为准。 */
+
+  /** 浏览数据集解析（双通道互斥；sourceId 通道走服务端连接器 + 范围收窄）。 */
+  private async resolveBrowseDataset(request: {
+    name: string
+    version: string
+    dataset?: RuntimeDataset
+    sourceId?: string
+    query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
+  }): Promise<RuntimeDataset> {
+    const hasSource = typeof request.sourceId === 'string' && request.sourceId !== ''
+    if (hasSource === (request.dataset !== undefined && request.dataset !== null)) {
+      throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset（探索通道）必须且只能提供一个')
+    }
+    if (hasSource) {
+      const identity = this.strict ? requireBusinessIdentity('read') : undefined
+      const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
+      const fetched = await dataSources.fetch({
+        sourceId: request.sourceId as string,
+        query: identity ? scopeDataQuery(identity, request.query ?? {}) : request.query ?? {},
+        tenant: identity?.tenant ?? 'default',
+        dataScope: identity?.dataScope,
+        authorizeDataset: identity ? (d) => assertBusinessDataset(identity, pkg, d) : undefined,
+        root: this.ws.root,
+      })
+      return fetched.dataset
+    }
+    const dataset = request.dataset as RuntimeDataset
+    if (!isRecord(dataset) || !Array.isArray(dataset.objects) || !Array.isArray(dataset.relations)) {
+      throw new AgentToolError('INVALID_ARGS', 'dataset 必须是 JSON 对象（objects/relations 数组）')
+    }
+    return dataset
+  }
+
+  /**
+   * 实体浏览（WP-D）：按类型过滤 + 分页返回实例对象与类型计数（探索/正式双通道）。
+   */
+  @Remote('browseObjects')
+  async remoteExportBrowseObjects(request: {
+    name: string
+    version: string
+    dataset?: RuntimeDataset
+    sourceId?: string
+    query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
+    typeFilter?: string
+    offset?: number
+    limit?: number
+  }): Promise<{
+    objects: Array<{ id: string; type: string; attrs?: Record<string, unknown> }>
+    types: Array<{ type: string; count: number }>
+    total: number
+  }> {
+    return guard(async () => {
+      this.assertActive(request.name, request.version)
+      const dataset = await this.resolveBrowseDataset(request)
+      const counts = new Map<string, number>()
+      for (const o of dataset.objects) {
+        counts.set(o.type, (counts.get(o.type) ?? 0) + 1)
+      }
+      const filtered = request.typeFilter !== undefined && request.typeFilter !== ''
+        ? dataset.objects.filter((o) => o.type === request.typeFilter)
+        : dataset.objects
+      const offset = Math.max(0, Math.floor(request.offset ?? 0))
+      const limit = Math.min(200, Math.max(1, Math.floor(request.limit ?? 50)))
+      return {
+        objects: filtered.slice(offset, offset + limit).map((o) => ({
+          id: o.id,
+          type: o.type,
+          ...(o.attrs !== undefined ? { attrs: o.attrs } : {}),
+        })),
+        types: [...counts.entries()].map(([type, count]) => ({ type, count })),
+        total: filtered.length,
+      }
+    })
+  }
+
+  /**
+   * 邻域跳转（WP-D）：种子 BFS 扩出邻域子 dataset（hops≤3）——missingSeedIds / truncated
+   * 显式呈现（不静默吞）。逐种子过 expand 面授权（包对象表 + 数据面实例）。
+   */
+  @Remote('expandEntity')
+  async remoteExportExpandEntity(request: {
+    name: string
+    version: string
+    dataset?: RuntimeDataset
+    sourceId?: string
+    query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
+    seedIds: string[]
+    hops?: number
+    direction?: 'out' | 'in' | 'both'
+    relationTypes?: string[]
+  }): Promise<ExpandResult> {
+    return guard(async () => {
+      this.assertActive(request.name, request.version)
+      const dataset = await this.resolveBrowseDataset(request)
+      const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
+      const types = new Set(pkg.objects.map((o) => o.id))
+      const byId = new Map(dataset.objects.map((o) => [o.id, o]))
+      const plane = new Set(dataset.objects.map((o) => `${o.type}:${o.id}`))
+      // M1-C：扩图（expand）——种子逐实例授权（explore 读面口径，与工具面同）
+      for (const seed of request.seedIds ?? []) {
+        const o = byId.get(String(seed))
+        requireBizAuth(
+          'expand',
+          { type: o?.type ?? '', instance: String(seed) },
+          { typeExists: (t) => types.has(t), instanceExists: (t, i) => plane.has(`${t}:${i}`) },
+          { analysisMode: 'explore' },
+        )
+      }
+      return expandEntity(dataset, request.seedIds ?? [], {
+        ...(request.hops !== undefined ? { hops: request.hops } : {}),
+        ...(request.direction !== undefined ? { direction: request.direction } : {}),
+        ...(request.relationTypes !== undefined ? { relationTypes: request.relationTypes } : {}),
+      })
     })
   }
 

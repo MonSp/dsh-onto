@@ -158,6 +158,8 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'prepareAction', true, 'RPA', 'Issue a UI approval challenge (two-phase approval card).'),
       desc('ontoRuntime', 'executeAction', true, 'REA', 'Execute an action with UI approval proof (page face).'),
       desc('ontoRuntime', 'reconcileAction', true, 'RRL', 'Manual reconcile of an unknown/in-flight action record.'),
+      desc('ontoRuntime', 'browseObjects', true, 'RBO', 'Browse entity instances (paged, by type).'),
+      desc('ontoRuntime', 'expandEntity', true, 'REX2', 'Expand entity neighborhood subgraph from seeds.'),
       desc('ontoRuntime', 'listExperiences', false, 'EXL', 'List experience notes (summary).'),
       desc('ontoRuntime', 'showExperience', true, 'EXS', 'Show one experience note (human-review face).'),
       desc('ontoRuntime', 'reviewExperience', true, 'EXR', 'Human review write-back: outcome / misTransfer / reviewFocus.'),

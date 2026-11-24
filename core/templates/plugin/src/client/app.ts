@@ -1192,8 +1192,8 @@ interface ApprovalCardState {
   connector: { id: string; env: string; kind?: string }
 }
 
-function ActionPanel(props: { t: (k: string) => string; ctx: Ctx }) {
-  const { t, ctx } = props
+function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: string }) {
+  const { t, ctx, prefill } = props
   const api = ctx.remote['ontoRuntime']
   const [runs, setRuns] = useState<RunRow[]>([])
   const [runId, setRunId] = useState('')
@@ -1207,6 +1207,14 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
+
+  // 对象视图「按对象发起动作」→ 预填锚点对象
+  useEffect(() => {
+    if (prefill !== undefined && prefill !== '') {
+      setObjectRef(prefill)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill])
 
   const loadRuns = () => {
     if (!api) return
@@ -1654,6 +1662,362 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   )
 }
 
+/* ── 对象视图面（issue #30 WP-D）：实体浏览 → 邻域跳转 → 按对象发起动作 ── */
+
+interface BrowseRow {
+  id: string
+  type: string
+  attrs?: Record<string, unknown>
+}
+
+interface ExpandView {
+  seedId: string
+  hops: number
+  direction: string
+  objects: BrowseRow[]
+  relations: Array<{ id: string; type: string; from: string; to: string }>
+  seedIds: string[]
+  missingSeedIds: string[]
+  truncated: boolean
+  stats: { seeds: number; objects: number; relations: number; candidates: number }
+}
+
+function ObjectPanel(props: { t: (k: string) => string; ctx: Ctx; onActFromObject: (objectRef: string) => void }) {
+  const { t, ctx, onActFromObject } = props
+  const api = ctx.remote['ontoRuntime']
+  const [channel, setChannel] = useState<'dataset' | 'source'>(DATA_MODE === 'dataset' ? 'dataset' : 'source')
+  const [datasetText, setDatasetText] = useState('')
+  const [sourceId, setSourceId] = useState(SOURCE_ID)
+  const [sources, setSources] = useState<SourceRow[]>([])
+  const [typeFilter, setTypeFilter] = useState('')
+  const [rows, setRows] = useState<BrowseRow[]>([])
+  const [types, setTypes] = useState<Array<{ type: string; count: number }>>([])
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const [expanded, setExpanded] = useState<ExpandView | null>(null)
+  const [hops, setHops] = useState(1)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const pageSize = 50
+
+  useEffect(() => {
+    if (!api) return
+    void (async () => {
+      try {
+        const out = unwrap<{ sources: SourceRow[] }>(
+          await api.listSourceConfigs({ name: PKG_NAME, version: PKG_VERSION }),
+        )
+        const list = [...(out.sources ?? [])]
+        if (SOURCE_ID !== '' && !list.some((s) => s.sourceId === SOURCE_ID)) {
+          list.unshift({ sourceId: SOURCE_ID })
+        }
+        setSources(list)
+        if (list.length > 0 && !list.some((s) => s.sourceId === sourceId)) {
+          setSourceId(list[0].sourceId)
+        }
+      } catch {
+        setSources(SOURCE_ID !== '' ? [{ sourceId: SOURCE_ID }] : [])
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!api) {
+    return h('div', { className: 'txri-gov' }, h('p', { className: 'txri-err' }, 'remote.ontoRuntime missing'))
+  }
+
+  const channelRequest = (): Record<string, unknown> => {
+    if (channel === 'dataset') {
+      if (datasetText.trim() === '') throw new Error(t('datasetRequired'))
+      try {
+        return { dataset: JSON.parse(datasetText) }
+      } catch {
+        throw new Error(t('datasetInvalid'))
+      }
+    }
+    if (sourceId === '') throw new Error(t('sourceRequired'))
+    return { sourceId }
+  }
+
+  const browse = (nextOffset: number) => {
+    void (async () => {
+      setError('')
+      setBusy('browse')
+      setExpanded(null)
+      try {
+        const out = unwrap<{ objects: BrowseRow[]; types: Array<{ type: string; count: number }>; total: number }>(
+          await api.browseObjects({
+            name: PKG_NAME,
+            version: PKG_VERSION,
+            ...channelRequest(),
+            ...(typeFilter !== '' ? { typeFilter } : {}),
+            offset: nextOffset,
+            limit: pageSize,
+          }),
+        )
+        setRows(out.objects ?? [])
+        setTypes(out.types ?? [])
+        setTotal(out.total ?? 0)
+        setOffset(nextOffset)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const expand = (seed: BrowseRow) => {
+    void (async () => {
+      setError('')
+      setBusy('expand')
+      try {
+        const out = unwrap<{
+          dataset: { objects: BrowseRow[]; relations: Array<{ id: string; type: string; from: string; to: string }> }
+          seedIds: string[]
+          missingSeedIds: string[]
+          truncated: boolean
+          stats: { seeds: number; objects: number; relations: number; candidates: number }
+        }>(
+          await api.expandEntity({
+            name: PKG_NAME,
+            version: PKG_VERSION,
+            ...channelRequest(),
+            seedIds: [seed.id],
+            hops,
+            direction: 'both',
+          }),
+        )
+        // missingSeedIds / truncated 显式呈现（不静默吞）
+        setExpanded({
+          seedId: seed.id,
+          hops,
+          direction: 'both',
+          objects: out.dataset?.objects ?? [],
+          relations: out.dataset?.relations ?? [],
+          seedIds: out.seedIds ?? [],
+          missingSeedIds: out.missingSeedIds ?? [],
+          truncated: out.truncated === true,
+          stats: out.stats ?? { seeds: 0, objects: 0, relations: 0, candidates: 0 },
+        })
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const expandView = (): ReactNode[] => {
+    if (!expanded) return []
+    return [
+      h(
+        'div',
+        { key: 'ex', className: 'txri-card' },
+        h('h4', null, `${t('neighborhood')}: ${expanded.seedId} (hops=${expanded.hops})`),
+        h(
+          'div',
+          { key: 'st', className: 'txri-bar' },
+          h('span', { className: 'txri-note' },
+            `${t('objects')}: ${expanded.stats.objects} · ${t('relations')}: ${expanded.stats.relations} · candidates: ${expanded.stats.candidates}`),
+          expanded.truncated ? h(Tag, { text: t('truncatedBadge'), tone: 'warn' }) : null,
+          expanded.missingSeedIds.length > 0
+            ? h(Tag, { text: `${t('missingSeeds')}: ${expanded.missingSeedIds.join(',')}`, tone: 'err' })
+            : null,
+        ),
+        h('h5', null, t('objects')),
+        h(
+          'ul',
+          { key: 'ol' },
+          ...expanded.objects.map((o) =>
+            h(
+              'li',
+              { key: `${o.type}:${o.id}` },
+              h('span', { className: 'txri-mono' }, `${o.type}:${o.id} `),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  disabled: !!busy,
+                  onClick: () => onActFromObject(`${o.type}:${o.id}`),
+                },
+                t('actOnObject'),
+              ),
+            ),
+          ),
+        ),
+        h('h5', null, t('relations')),
+        expanded.relations.length === 0
+          ? h('p', { className: 'txri-note' }, t('relationsEmpty'))
+          : h(
+              'table',
+              { key: 'rl' },
+              h(
+                'thead',
+                null,
+                h('tr', null, h('th', null, 'id'), h('th', null, 'type'), h('th', null, 'from'), h('th', null, 'to')),
+              ),
+              h(
+                'tbody',
+                null,
+                ...expanded.relations.map((r) =>
+                  h(
+                    'tr',
+                    { key: r.id },
+                    h('td', { className: 'txri-mono' }, r.id),
+                    h('td', { className: 'txri-mono' }, r.type),
+                    h('td', { className: 'txri-mono' }, r.from),
+                    h('td', { className: 'txri-mono' }, r.to),
+                  ),
+                ),
+              ),
+            ),
+      ),
+    ]
+  }
+
+  return h(
+    'div',
+    { className: 'txri-gov' },
+    h('h3', null, t('objectsTitle')),
+    h('p', { className: 'txri-sub' }, t('objectsSubtitle')),
+    error ? h('p', { className: 'txri-err' }, `${t('error')}: ${error}`) : null,
+    h(
+      'div',
+      { className: 'txri-bar' },
+      h('span', { className: 'txri-note' }, `${t('channel')}:`),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: channel === 'dataset' ? 'txri-primary' : '',
+          disabled: busy !== '',
+          onClick: () => setChannel('dataset'),
+        },
+        t('channelExplore'),
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: channel === 'source' ? 'txri-primary' : '',
+          disabled: busy !== '',
+          onClick: () => setChannel('source'),
+        },
+        t('channelFormal'),
+      ),
+      channel === 'source' && sources.length > 0
+        ? h(
+            'select',
+            {
+              value: sourceId,
+              disabled: busy !== '',
+              onChange: (e: { target: { value: string } }) => setSourceId(e.target.value),
+            },
+            ...sources.map((s) =>
+              h('option', { key: s.sourceId, value: s.sourceId }, s.sourceKind ? `${s.sourceId} · ${s.sourceKind}` : s.sourceId),
+            ),
+          )
+        : null,
+      h('label', null, `${t('entityType')}: `),
+      h(
+        'select',
+        {
+          value: typeFilter,
+          disabled: busy !== '',
+          onChange: (e: { target: { value: string } }) => setTypeFilter(e.target.value),
+        },
+        h('option', { value: '' }, '—'),
+        ...types.map((x) => h('option', { key: x.type, value: x.type }, `${x.type} (${x.count})`)),
+      ),
+      h('label', null, `${t('hops')}: `),
+      h(
+        'select',
+        { value: String(hops), disabled: busy !== '', onChange: (e: { target: { value: string } }) => setHops(Number(e.target.value) || 1) },
+        h('option', { value: '0' }, '0'),
+        h('option', { value: '1' }, '1'),
+        h('option', { value: '2' }, '2'),
+        h('option', { value: '3' }, '3'),
+      ),
+      h(
+        'button',
+        { type: 'button', className: 'txri-primary', disabled: !!busy, onClick: () => browse(0) },
+        t('browse'),
+      ),
+    ),
+    channel === 'dataset'
+      ? h('textarea', {
+          className: 'txri-mono',
+          rows: 5,
+          style: { width: '100%', boxSizing: 'border-box' as const },
+          value: datasetText,
+          disabled: busy !== '',
+          placeholder: '{ "objects": [], "relations": [] }',
+          onChange: (e: { target: { value: string } }) => setDatasetText(e.target.value),
+        })
+      : null,
+    h(
+      'div',
+      { className: 'txri-bar' },
+      h('span', { className: 'txri-note' }, `${t('objects')}: ${total}`),
+      h(
+        'button',
+        { type: 'button', disabled: !!busy || offset === 0, onClick: () => browse(Math.max(0, offset - pageSize)) },
+        t('pagePrev'),
+      ),
+      h('span', { className: 'txri-note' }, `${offset + 1}–${Math.min(offset + pageSize, total)}`),
+      h(
+        'button',
+        { type: 'button', disabled: !!busy || offset + pageSize >= total, onClick: () => browse(offset + pageSize) },
+        t('pageNext'),
+      ),
+    ),
+    rows.length > 0
+      ? h(
+          'table',
+          null,
+          h(
+            'thead',
+            null,
+            h('tr', null, h('th', null, t('objectRef')), h('th', null, t('entityType')), h('th', null, '')),
+          ),
+          h(
+            'tbody',
+            null,
+            ...rows.map((o) =>
+              h(
+                'tr',
+                { key: `${o.type}:${o.id}` },
+                h('td', { className: 'txri-mono' }, `${o.type}:${o.id}`),
+                h('td', { className: 'txri-mono' }, o.type),
+                h(
+                  'td',
+                  null,
+                  h(
+                    'button',
+                    { type: 'button', disabled: !!busy, onClick: () => expand(o) },
+                    t('expand'),
+                  ),
+                  ' ',
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: !!busy,
+                      onClick: () => onActFromObject(`${o.type}:${o.id}`),
+                    },
+                    t('actOnObject'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        )
+      : h('p', { className: 'txri-note' }, t('empty')),
+    ...expandView(),
+  )
+}
+
 export function createPlugin(React: typeof import('react')): PluginModule {
   setReact(React)
 
@@ -1681,11 +2045,13 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       }
 
       function Panel() {
-        const [tab, setTab] = useState<'run' | 'review' | 'action' | 'pages'>('run')
-        const tabs: Array<['run' | 'review' | 'action' | 'pages', string]> = [
+        const [tab, setTab] = useState<'run' | 'review' | 'action' | 'objects' | 'pages'>('run')
+        const [actionPrefill, setActionPrefill] = useState('')
+        const tabs: Array<['run' | 'review' | 'action' | 'objects' | 'pages', string]> = [
           ['run', t('tabRun')],
           ['review', t('tabReview')],
           ['action', t('tabAction')],
+          ['objects', t('tabObjects')],
           ['pages', t('tabPages')],
         ]
         return h(
@@ -1709,7 +2075,17 @@ export function createPlugin(React: typeof import('react')): PluginModule {
           ),
           tab === 'run' ? h(RunPanel, { t, ctx }) : null,
           tab === 'review' ? h(ReviewPanel, { t, ctx }) : null,
-          tab === 'action' ? h(ActionPanel, { t, ctx }) : null,
+          tab === 'action' ? h(ActionPanel, { t, ctx, prefill: actionPrefill }) : null,
+          tab === 'objects'
+            ? h(ObjectPanel, {
+                t,
+                ctx,
+                onActFromObject: (objectRef: string) => {
+                  setActionPrefill(objectRef)
+                  setTab('action')
+                },
+              })
+            : null,
           tab === 'pages' ? h(ReportPages, { t, ctx }) : null,
         )
       }
