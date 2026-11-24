@@ -47,6 +47,8 @@ export interface ApprovalAsk {
 export interface ApprovalGrant {
   approvalDigest: string
   approvedAt: string
+  /** 批准人宿主身份（页面批准卡面留痕；宿主 ApprovalService 面可缺省）。 */
+  approvedBy?: string
 }
 
 /**

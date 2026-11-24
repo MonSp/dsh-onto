@@ -127,6 +127,8 @@ export interface ActionRecord {
   compensationError?: string
   approvalDigest: string
   approvedAt: string
+  /** 批准人宿主身份（页面批准卡面；宿主批准卡面可缺省）。 */
+  approvedBy?: string
   executedAt: string
   compensatedAt?: string
   /** D 包链条：业务复核决定 / 动作提案（decision → proposal → approval → externalRef 可串联）。 */
@@ -931,6 +933,7 @@ export async function executeBehaviorAction(
     ...current,
     approvalDigest: grant.approvalDigest,
     approvedAt: grant.approvedAt,
+    ...(grant.approvedBy !== undefined ? { approvedBy: grant.approvedBy } : {}),
   })
 
   // 派发（先持久 dispatched 相位，再调连接器——崩溃窗口可对账）

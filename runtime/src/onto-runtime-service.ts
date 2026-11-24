@@ -26,7 +26,9 @@ import {
   reviewExperienceNote,
   runScenario,
   saveRunRecord,
+  verifyDerived,
   type DataBasisInput,
+  type OntologyPackage,
   type ReportPage,
   type RunDiff,
   type RunRecord,
@@ -35,13 +37,28 @@ import {
   type ScenarioRunResult,
 } from '@dsh-onto/core'
 import { runtimeContextForHost } from './context.js'
-import { AgentToolError } from './agent-policy.js'
+import { AgentToolError, isRecord } from './agent-policy.js'
+import { actionDigest } from './agent-approval.js'
+import {
+  approvalContextDigest,
+  connectorNature,
+  currentConnectorIdentity,
+  digestAction,
+  executeBehaviorAction,
+  reconcileActionRecord,
+  validateActionIntent,
+  type ActionIntent,
+} from './action-executor.js'
+import { checkGrant, readToolContracts } from './agent-grants.js'
+import { consumeUiApprovalChallenge, issueUiApprovalChallenge } from './ui-approval.js'
 import { dataSources } from './data-sources.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError } from './release.js'
 import {
-  assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
+  actChecks,
+  assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, parseTargetRef,
+  requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery,
 } from './business-policy.js'
 import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
 import { loadSourceConfigs } from './source-config.js'
@@ -572,6 +589,304 @@ export class OntoRuntime extends RuntimeRemoteService {
         || (a.proposalId !== undefined && proposalIds.has(a.proposalId)),
     )
     return { decisions, proposals, actions }
+  }
+
+  /* ── 动作面（issue #30 WP-C）：页面提案 / 两段式批准卡 / 执行 / 对账 ─────
+   * 与 agent 工具面同源（同一 action store / runstore / 执行器），wire 面批准卡
+   * 以 {@link consumeUiApprovalChallenge} 充当 requestGrant：单次、TTL、摘要绑定、
+   * 批准人宿主身份留痕（fail-closed）。身份先行（防探测）：requireBusinessIdentity('act')
+   * 先于包内容/台账查询类错误。 */
+
+  /** 动作面包加载（工具面 loadToolPackage 同闸：派生门禁 DERIVED_DRIFT）。 */
+  private loadActionPackage(name: string, version: string): OntologyPackage {
+    let dir: string
+    let pkg: OntologyPackage
+    try {
+      dir = this.ws.versionDir(name, version)
+      pkg = loadPackage(dir)
+    } catch {
+      throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${name}@${version}`)
+    }
+    let gate: ReturnType<typeof verifyDerived>
+    try {
+      gate = verifyDerived(dir)
+    } catch {
+      throw new AgentToolError('DERIVED_DRIFT', '拒绝加载: 派生门禁不可读')
+    }
+    if (!gate.ok) {
+      throw new AgentToolError('DERIVED_DRIFT', `拒绝加载: ${gate.reason}`)
+    }
+    return pkg
+  }
+
+  /** 动作面公共前置：身份 → 包（过门禁）→ 意图校验（O2 闭合/锚点/载荷契约）→ 六元组 act。 */
+  private actionFace(request: {
+    name: string
+    version: string
+    behaviorId: string
+    objectRef: string
+    payload: unknown
+  }): { pkg: OntologyPackage; intent: ActionIntent; behavior: { id: string; anchor?: string; name?: string; relations?: string[]; states?: string[] } } {
+    // 身份先行（fail-closed，无身份不得靠 INVALID_ARGS/NOT_FOUND 探测包内容）
+    requireBusinessIdentity('act')
+    if (!isRecord(request.payload)) {
+      throw new AgentToolError('INVALID_ARGS', 'payload 必须是 JSON 对象')
+    }
+    const pkg = this.loadActionPackage(request.name, request.version)
+    const intent: ActionIntent = {
+      behaviorId: request.behaviorId,
+      objectRef: request.objectRef,
+      payload: request.payload as Record<string, unknown>,
+    }
+    validateActionIntent(pkg.behaviors, intent, {
+      isGranted: (ref) =>
+        checkGrant(readToolContracts(this.ws.versionDir(request.name, request.version)), ref) === undefined,
+    })
+    const behavior = pkg.behaviors.find((b) => b.id === request.behaviorId)
+    if (behavior === undefined) {
+      throw new AgentToolError('INVALID_ARGS', `行为 ${request.behaviorId} 未在包内声明（O2 闭合）`)
+    }
+    // M1-C 六元组：动作面（act）——权限判定在批准卡之前（批准卡不授予权限）
+    requireBizAuth(
+      'act',
+      parseTargetRef(request.objectRef),
+      actChecks(new Set(pkg.objects.map((o) => o.id)), runPlaneInstances(this.ws.root)),
+    )
+    return {
+      pkg,
+      intent,
+      behavior: {
+        id: behavior.id,
+        ...(behavior.anchor !== undefined ? { anchor: behavior.anchor } : {}),
+        ...(behavior.name !== undefined ? { name: behavior.name } : {}),
+        ...(behavior.relations !== undefined ? { relations: behavior.relations } : {}),
+        ...(behavior.states !== undefined ? { states: behavior.states } : {}),
+      },
+    }
+  }
+
+  /**
+   * 动作提案（WP-C）：对已获准复核决定内的候选立受治理提案——服务端 operationId、单次消费。
+   * 提案 ≠ 执行批准：执行仍过批准卡（executeAction 提 proposalId + approval.challengeId）。
+   */
+  @Remote('createActionProposal')
+  async remoteExportCreateActionProposal(request: {
+    decisionId: string
+    runId: string
+    candidateId: string
+    name: string
+    version: string
+    behaviorId: string
+    objectRef: string
+    payload: unknown
+  }): Promise<{
+    proposalId: string
+    decisionId: string
+    operationId: string
+    runId: string
+    candidateId: string
+    behaviorId: string
+    objectRef: string
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      const identity = requireBusinessIdentity('act')
+      if (this.strict) assertBusinessRun(identity, loadRunRecord(this.ws.root, request.runId))
+      const { intent } = this.actionFace(request)
+      const connIdentity = currentConnectorIdentity()
+      const proposal = actionStoreFor(this.ws.root).createProposal({
+        decisionId: request.decisionId,
+        runId: request.runId,
+        candidateId: request.candidateId,
+        behaviorId: request.behaviorId,
+        objectRef: request.objectRef,
+        payload: intent.payload,
+        intentDigest: digestAction(intent),
+        connectorId: connIdentity.id,
+        connectorEnv: connIdentity.env,
+        connectorKind: connIdentity.kind ?? 'dryrun',
+      })
+      return {
+        proposalId: proposal.proposalId,
+        decisionId: proposal.decisionId,
+        operationId: proposal.operationId,
+        runId: proposal.runId,
+        candidateId: proposal.candidateId,
+        behaviorId: proposal.behaviorId,
+        objectRef: proposal.objectRef,
+        humanReviewRequired: true as const,
+      }
+    })
+  }
+
+  /**
+   * 页面批准卡第一步（WP-C 两段式）：服务端签发带 contextDigest 的批准挑战，
+   * 页面据此弹批准卡。挑战绑定 intent/载荷/对象/连接器目标；TTL 内单次消费。
+   */
+  @Remote('prepareAction')
+  async remoteExportPrepareAction(request: {
+    name: string
+    version: string
+    behaviorId: string
+    objectRef: string
+    payload: unknown
+    proposalId?: string
+  }): Promise<{
+    challengeId: string
+    contextDigest: string
+    expiresAt: string
+    approvalCard: {
+      behaviorId: string
+      objectRef: string
+      payload: Record<string, unknown>
+      package: { name: string; version: string }
+      connector: { id: string; env: string; kind?: string }
+      operationId?: string
+    }
+    humanReviewRequired: true
+  }> {
+    return guard(async () => {
+      const { intent, behavior, pkg } = this.actionFace(request)
+      const identity = currentConnectorIdentity()
+      const contextDigest = approvalContextDigest(
+        intent,
+        identity,
+        { name: pkg.meta.name, version: pkg.meta.version },
+        behavior,
+      )
+      let operationId: string | undefined
+      if (request.proposalId !== undefined) {
+        const proposal = actionStoreFor(this.ws.root).getProposal(request.proposalId)
+        if (proposal === null) {
+          throw new AgentToolError('PROPOSAL_NOT_FOUND', `动作提案 ${request.proposalId} 不存在——执行须引用服务端保存的提案`)
+        }
+        if (proposal.status !== 'pending') {
+          throw new AgentToolError('PROPOSAL_NOT_PENDING', `动作提案 ${request.proposalId} 状态 ${proposal.status}——须为 pending 才能批准`)
+        }
+        operationId = proposal.operationId
+      }
+      const challenge = issueUiApprovalChallenge(contextDigest)
+      return {
+        challengeId: challenge.challengeId,
+        contextDigest,
+        expiresAt: challenge.expiresAt,
+        approvalCard: {
+          behaviorId: intent.behaviorId,
+          objectRef: intent.objectRef,
+          payload: intent.payload,
+          package: { name: pkg.meta.name, version: pkg.meta.version },
+          connector: {
+            id: identity.id,
+            env: identity.env,
+            ...(identity.kind !== undefined ? { kind: identity.kind } : {}),
+          },
+          ...(operationId !== undefined ? { operationId } : {}),
+        },
+        humanReviewRequired: true as const,
+      }
+    })
+  }
+
+  /**
+   * 动作执行（WP-C）：页面批准卡消费挑战充当 requestGrant，其余与工具面同源——
+   * 意图校验 → 六元组 act → 原子占位 → 批准（挑战单次/摘要绑定）→ 连接器执行 → 补偿/对账。
+   * 演练/模拟性质显式上墙（simulated=true 不得当作真实业务成功）。
+   */
+  @Remote('executeAction')
+  async remoteExportExecuteAction(request: {
+    name: string
+    version: string
+    behaviorId: string
+    objectRef: string
+    payload: unknown
+    proposalId?: string
+    approval: { challengeId: string; contextDigest: string }
+  }): Promise<{
+    actionId: string
+    status: string
+    replayed: boolean
+    behaviorId: string
+    objectRef: string
+    externalRef?: string
+    note?: string
+    connectorKind: string
+    simulated: boolean
+    approvedBy?: string
+    humanReviewRequired: true
+  }> {
+    return guard(async () => {
+      const { intent, behavior, pkg } = this.actionFace(request)
+      const res = await executeBehaviorAction({
+        root: this.ws.root,
+        intent,
+        pkg: { name: pkg.meta.name, version: pkg.meta.version },
+        behavior,
+        ...(request.proposalId !== undefined ? { proposalId: request.proposalId } : {}),
+        // 页面批准卡 = requestGrant 替代源：消费单次挑战（身份/TTL/摘要绑定 fail-closed）
+        requestGrant: async (contextDigest) => {
+          const grant = consumeUiApprovalChallenge(
+            { challengeId: request.approval.challengeId, contextDigest: request.approval.contextDigest },
+            contextDigest,
+          )
+          return {
+            approvalDigest: grant.approvalDigest,
+            approvedAt: grant.approvedAt,
+            approvedBy: grant.approvedBy,
+          }
+        },
+      })
+      const record = res.record
+      const nature = connectorNature(record.connector)
+      return {
+        actionId: record.actionId,
+        status: record.status,
+        replayed: res.replayed,
+        behaviorId: record.behaviorId,
+        objectRef: record.objectRef,
+        ...(record.externalRef !== undefined ? { externalRef: record.externalRef } : {}),
+        ...(res.note !== undefined ? { note: res.note } : {}),
+        connectorKind: nature.kind,
+        simulated: nature.simulated,
+        ...(record.approvedBy !== undefined ? { approvedBy: record.approvedBy } : {}),
+        humanReviewRequired: true as const,
+      }
+    })
+  }
+
+  /**
+   * 人工对账（WP-C）：unknown / dispatched 在途记录按外部回执处置——成功恢复 / 未执行按失败留痕 /
+   * 无确定回执保持 unknown。不自动重跑、不产生二次外部效应；UI 点击即人审事件（同 recordReviewDecision
+   * 口径，身份先行 + 六元组 act；无外部效应故不再叠批准卡）。
+   */
+  @Remote('reconcileAction')
+  async remoteExportReconcileAction(request: { actionId: string }): Promise<{
+    actionId: string
+    status: string
+    externalRef?: string
+    note?: string
+    humanReviewRequired: true
+  }> {
+    return guard(async () => {
+      requireReviewerHostId()
+      const store = actionStoreFor(this.ws.root)
+      const record = store.listActions().find((a) => a.actionId === request.actionId)
+      if (record === undefined) {
+        throw new AgentToolError('INVALID_ARGS', `动作台账 ${request.actionId} 不存在`)
+      }
+      requireBizAuth(
+        'act',
+        parseTargetRef(record.objectRef),
+        actChecks(null, runPlaneInstances(this.ws.root), record.objectRef),
+      )
+      const res = await reconcileActionRecord(this.ws.root, record.businessKey)
+      return {
+        actionId: res.record.actionId,
+        status: res.record.status,
+        ...(res.record.externalRef !== undefined ? { externalRef: res.record.externalRef } : {}),
+        ...(res.note !== undefined ? { note: res.note } : {}),
+        humanReviewRequired: true as const,
+      }
+    })
   }
 
   /* ── 经验闭环（experience-loop P2）：人审面 wire ── */

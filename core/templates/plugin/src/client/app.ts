@@ -519,6 +519,7 @@ interface ChainData {
     objectRef: string
     operationId: string
     status: string
+    payload: Record<string, unknown>
   }>
   actions: Array<{
     actionId: string
@@ -1165,6 +1166,494 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   )
 }
 
+/* ── 动作面（issue #30 WP-C）：仅获准候选 → 提案 → 系统批准卡 → 执行 → 对账 ── */
+
+interface ProposalRow {
+  proposalId: string
+  decisionId: string
+  candidateId: string
+  behaviorId: string
+  objectRef: string
+  operationId: string
+  status: string
+  /** 提案绑定载荷（执行须与提案一致——指纹不符 fail-closed）。 */
+  payload: Record<string, unknown>
+}
+
+interface ApprovalCardState {
+  challengeId: string
+  contextDigest: string
+  expiresAt: string
+  proposalId?: string
+  behaviorId: string
+  objectRef: string
+  payload: Record<string, unknown>
+  operationId?: string
+  connector: { id: string; env: string; kind?: string }
+}
+
+function ActionPanel(props: { t: (k: string) => string; ctx: Ctx }) {
+  const { t, ctx } = props
+  const api = ctx.remote['ontoRuntime']
+  const [runs, setRuns] = useState<RunRow[]>([])
+  const [runId, setRunId] = useState('')
+  const [chain, setChain] = useState<ChainData | null>(null)
+  const [decisionId, setDecisionId] = useState('')
+  const [candidateId, setCandidateId] = useState('')
+  const [behaviorId, setBehaviorId] = useState('')
+  const [objectRef, setObjectRef] = useState('')
+  const [payloadText, setPayloadText] = useState('{ "amount": 1 }')
+  const [prep, setPrep] = useState<ApprovalCardState | null>(null)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
+
+  const loadRuns = () => {
+    if (!api) return
+    void (async () => {
+      setError('')
+      try {
+        const out = unwrap<{ runs: RunRow[] }>(await api.listReviewQueue())
+        // 仅已批准 run 可动作（仅获准候选）
+        const approved = (out.runs ?? []).filter((r) => r.reviewStatus === 'approved')
+        setRuns(approved)
+        setRunId((prev) => (prev !== '' && approved.some((r) => r.runId === prev) ? prev : (approved[0]?.runId ?? '')))
+      } catch (e) {
+        setError(errText(e))
+      }
+    })()
+  }
+
+  const loadChain = (id: string) => {
+    if (!api || id === '') return
+    void (async () => {
+      setError('')
+      try {
+        const out = unwrap<ChainData>(await api.reviewChain({ runId: id }))
+        setChain(out)
+        const approvedDec = [...out.decisions].reverse().find((d) => d.decision === 'approved')
+        setDecisionId(approvedDec?.decisionId ?? '')
+        setCandidateId(approvedDec?.candidateIds[0] ?? '')
+      } catch (e) {
+        setError(errText(e))
+      }
+    })()
+  }
+
+  useEffect(() => {
+    loadRuns()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    setPrep(null)
+    setOkMsg('')
+    loadChain(runId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId])
+
+  if (!api) {
+    return h('div', { className: 'txri-gov' }, h('p', { className: 'txri-err' }, 'remote.ontoRuntime missing'))
+  }
+
+  const parsePayload = (): Record<string, unknown> => {
+    try {
+      const v = JSON.parse(payloadText) as unknown
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error('not object')
+      return v as Record<string, unknown>
+    } catch {
+      throw new Error(t('payloadInvalid'))
+    }
+  }
+
+  const createProposal = () => {
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('propose')
+      setPrep(null)
+      try {
+        const payload = parsePayload()
+        const out = unwrap<{ proposalId: string; operationId: string }>(
+          await api.createActionProposal({
+            decisionId,
+            runId,
+            candidateId,
+            name: PKG_NAME,
+            version: PKG_VERSION,
+            behaviorId,
+            objectRef,
+            payload,
+          }),
+        )
+        setOkMsg(`${t('proposalCreated')}: ${out.proposalId} (${t('operation')}: ${out.operationId})`)
+        loadChain(runId)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  /** 批准卡第一步：服务端签发挑战（绑定 intent/载荷/对象/连接器目标）。 */
+  const openApprovalCard = (proposal?: ProposalRow) => {
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('prepare')
+      try {
+        // 提案执行用提案绑定载荷（意图指纹以提案为准）；表单立新提案用表单载荷
+        const payload = proposal ? proposal.payload : parsePayload()
+        const out = unwrap<{
+          challengeId: string
+          contextDigest: string
+          expiresAt: string
+          approvalCard: {
+            behaviorId: string
+            objectRef: string
+            payload: Record<string, unknown>
+            operationId?: string
+            connector: { id: string; env: string; kind?: string }
+          }
+        }>(
+          await api.prepareAction({
+            name: PKG_NAME,
+            version: PKG_VERSION,
+            behaviorId: proposal ? proposal.behaviorId : behaviorId,
+            objectRef: proposal ? proposal.objectRef : objectRef,
+            payload,
+            ...(proposal ? { proposalId: proposal.proposalId } : {}),
+          }),
+        )
+        setPrep({
+          challengeId: out.challengeId,
+          contextDigest: out.contextDigest,
+          expiresAt: out.expiresAt,
+          ...(proposal ? { proposalId: proposal.proposalId } : {}),
+          behaviorId: out.approvalCard.behaviorId,
+          objectRef: out.approvalCard.objectRef,
+          payload: out.approvalCard.payload,
+          ...(out.approvalCard.operationId !== undefined ? { operationId: out.approvalCard.operationId } : {}),
+          connector: out.approvalCard.connector,
+        })
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  /** 批准卡第二步：人工确认后携挑战消费执行（单次、TTL、摘要绑定 fail-closed）。 */
+  const confirmExecute = () => {
+    if (!prep) return
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('execute')
+      try {
+        const out = unwrap<{
+          actionId: string
+          status: string
+          replayed: boolean
+          externalRef?: string
+          note?: string
+          connectorKind: string
+          simulated: boolean
+        }>(
+          await api.executeAction({
+            name: PKG_NAME,
+            version: PKG_VERSION,
+            behaviorId: prep.behaviorId,
+            objectRef: prep.objectRef,
+            payload: prep.payload,
+            ...(prep.proposalId !== undefined ? { proposalId: prep.proposalId } : {}),
+            approval: { challengeId: prep.challengeId, contextDigest: prep.contextDigest },
+          }),
+        )
+        setOkMsg(
+          `${t('executed')}: ${out.actionId} · ${out.status}${out.replayed ? ' (replay)' : ''}`
+            + ` · ${out.externalRef ?? '—'} · ${out.connectorKind}${out.simulated ? ` (${t('simulated')})` : ''}`,
+        )
+        setPrep(null)
+        loadChain(runId)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const reconcile = (actionId: string) => {
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('reconcile')
+      try {
+        const out = unwrap<{ actionId: string; status: string; externalRef?: string; note?: string }>(
+          await api.reconcileAction({ actionId }),
+        )
+        setOkMsg(`${t('reconcileDone')}: ${out.actionId} → ${out.status} · ${out.externalRef ?? '—'} · ${out.note ?? ''}`)
+        loadChain(runId)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const decisions = chain?.decisions ?? []
+  const proposals = (chain?.proposals ?? []) as ProposalRow[]
+  const actions = chain?.actions ?? []
+  const pendingProposals = proposals.filter((p) => p.status === 'pending')
+
+  const formView = (): ReactNode[] => [
+    h('h4', { key: 'ft' }, t('actionForm')),
+    h('p', { key: 'fn', className: 'txri-note' }, t('actionOnlyApproved')),
+    h(
+      'div',
+      { key: 'f1', className: 'txri-cand-row' },
+      h('label', null, `${t('decision')}: `),
+      h(
+        'select',
+        {
+          value: decisionId,
+          disabled: busy !== '',
+          onChange: (e: { target: { value: string } }) => {
+            setDecisionId(e.target.value)
+            const d = decisions.find((x) => x.decisionId === e.target.value)
+            setCandidateId(d?.candidateIds[0] ?? '')
+          },
+        },
+        ...decisions
+          .filter((d) => d.decision === 'approved')
+          .map((d) => h('option', { key: d.decisionId, value: d.decisionId }, `${d.decisionId} (${d.candidateIds.join(',')})`)),
+      ),
+      h('label', null, `${t('selectCandidates')}: `),
+      h(
+        'select',
+        {
+          value: candidateId,
+          disabled: busy !== '',
+          onChange: (e: { target: { value: string } }) => setCandidateId(e.target.value),
+        },
+        ...(decisions.find((d) => d.decisionId === decisionId)?.candidateIds ?? []).map((c) =>
+          h('option', { key: c, value: c }, c),
+        ),
+      ),
+    ),
+    h(
+      'div',
+      { key: 'f2', className: 'txri-cand-row' },
+      h('label', null, `${t('behaviorObject')}: `),
+      h('input', {
+        type: 'text',
+        value: behaviorId,
+        placeholder: 'BHV-…',
+        style: { width: '160px' },
+        onInput: (e: { target: { value: string } }) => setBehaviorId(e.target.value),
+      }),
+      h('input', {
+        type: 'text',
+        value: objectRef,
+        placeholder: 'TYPE:instance',
+        style: { width: '200px' },
+        onInput: (e: { target: { value: string } }) => setObjectRef(e.target.value),
+      }),
+    ),
+    h('textarea', {
+      key: 'f3',
+      className: 'txri-mono',
+      rows: 4,
+      style: { width: '100%', boxSizing: 'border-box' as const },
+      value: payloadText,
+      disabled: busy !== '',
+      onChange: (e: { target: { value: string } }) => setPayloadText(e.target.value),
+    }),
+    h(
+      'div',
+      { key: 'f4', className: 'txri-bar' },
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'txri-primary',
+          disabled: !!busy || !decisionId || !candidateId || behaviorId === '' || objectRef === '',
+          onClick: () => createProposal(),
+        },
+        t('createProposal'),
+      ),
+    ),
+  ]
+
+  const cardView = (): ReactNode[] => {
+    if (!prep) return []
+    return [
+      h(
+        'div',
+        { key: 'card', className: 'txri-card txri-callout txri-callout-warning' },
+        h('h4', null, t('approvalCard')),
+        h('p', { className: 'txri-note' }, t('approvalCardNote')),
+        h(
+          'div',
+          { className: 'txri-note txri-mono' },
+          `${prep.behaviorId} → ${prep.objectRef}`,
+          prep.operationId !== undefined ? ` · ${t('operation')}: ${prep.operationId}` : '',
+          ` · ${t('connector')}: ${prep.connector.id}/${prep.connector.env}${prep.connector.kind ? `/${prep.connector.kind}` : ''}`,
+        ),
+        h('pre', { className: 'txri-mono', style: { margin: '6px 0', whiteSpace: 'pre-wrap' as const } }, JSON.stringify(prep.payload, null, 2)),
+        h('p', { className: 'txri-note txri-mono' }, `${t('expires')}: ${prep.expiresAt.slice(0, 19).replace('T', ' ')}`),
+        h(
+          'div',
+          { className: 'txri-bar' },
+          h(
+            'button',
+            { type: 'button', className: 'txri-primary', disabled: !!busy, onClick: () => confirmExecute() },
+            busy === 'execute' ? t('executing') : t('confirmExecute'),
+          ),
+          h('button', { type: 'button', disabled: !!busy, onClick: () => setPrep(null) }, t('cancel')),
+        ),
+      ),
+    ]
+  }
+
+  const proposalsView = (): ReactNode[] => [
+    h('h4', { key: 'pt' }, t('pendingProposals')),
+    pendingProposals.length === 0
+      ? h('p', { key: 'pe', className: 'txri-note' }, t('pendingProposalsEmpty'))
+      : h(
+          'table',
+          { key: 'ptbl' },
+          h(
+            'thead',
+            null,
+            h(
+              'tr',
+              null,
+              h('th', null, t('proposal')),
+              h('th', null, t('operation')),
+              h('th', null, t('behaviorObject')),
+              h('th', null, ''),
+            ),
+          ),
+          h(
+            'tbody',
+            null,
+            ...pendingProposals.map((p) =>
+              h(
+                'tr',
+                { key: p.proposalId },
+                h('td', { className: 'txri-mono' }, p.proposalId),
+                h('td', { className: 'txri-mono' }, p.operationId),
+                h('td', { className: 'txri-mono' }, `${p.behaviorId} → ${p.objectRef}`),
+                h(
+                  'td',
+                  null,
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'txri-primary',
+                      disabled: !!busy,
+                      onClick: () => {
+                        setBehaviorId(p.behaviorId)
+                        setObjectRef(p.objectRef)
+                        openApprovalCard(p)
+                      },
+                    },
+                    t('approveExecute'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+  ]
+
+  const actionsView = (): ReactNode[] => {
+    if (actions.length === 0) return []
+    return [
+      h('h4', { key: 'at' }, t('chain')),
+      h(
+        'table',
+        { key: 'atbl' },
+        h(
+          'thead',
+          null,
+          h(
+            'tr',
+            null,
+            h('th', null, t('action')),
+            h('th', null, t('status')),
+            h('th', null, t('behaviorObject')),
+            h('th', null, t('externalRef')),
+            h('th', null, ''),
+          ),
+        ),
+        h(
+          'tbody',
+          null,
+          ...actions.map((a) => {
+            const needReconcile = a.status === 'unknown' || a.status === 'dispatched' || a.phase === 'dispatched'
+            return h(
+              'tr',
+              { key: a.actionId },
+              h('td', { className: 'txri-mono' }, a.actionId),
+              h(
+                'td',
+                null,
+                needReconcile
+                  ? h(Tag, { text: t('pendingReconcile'), tone: 'warn' })
+                  : h(Tag, { text: a.status, tone: chainTone(a.status) }),
+              ),
+              h('td', { className: 'txri-mono' }, `${a.behaviorId} → ${a.objectRef}`),
+              h('td', { className: 'txri-mono' }, a.externalRef ?? '—'),
+              h(
+                'td',
+                null,
+                needReconcile
+                  ? h(
+                      'button',
+                      { type: 'button', disabled: !!busy, onClick: () => reconcile(a.actionId) },
+                      t('reconcile'),
+                    )
+                  : null,
+              ),
+            )
+          }),
+        ),
+      ),
+      h('p', { key: 'hr', className: 'txri-note' }, t('humanReview')),
+    ]
+  }
+
+  return h(
+    'div',
+    { className: 'txri-gov' },
+    h('h3', null, t('actionTitle')),
+    h('p', { className: 'txri-sub' }, t('actionSubtitle')),
+    error ? h('p', { className: 'txri-err' }, `${t('error')}: ${error}`) : null,
+    okMsg ? h('p', { className: 'txri-ok' }, okMsg) : null,
+    h(
+      'div',
+      { className: 'txri-bar' },
+      h('label', null, `${t('runId')}: `),
+      h(
+        'select',
+        { value: runId, disabled: busy !== '', onChange: (e: { target: { value: string } }) => setRunId(e.target.value) },
+        ...runs.map((r) => h('option', { key: r.runId, value: r.runId }, r.runId)),
+      ),
+    ),
+    ...formView(),
+    ...cardView(),
+    ...proposalsView(),
+    ...actionsView(),
+  )
+}
+
 export function createPlugin(React: typeof import('react')): PluginModule {
   setReact(React)
 
@@ -1192,10 +1681,11 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       }
 
       function Panel() {
-        const [tab, setTab] = useState<'run' | 'review' | 'pages'>('run')
-        const tabs: Array<['run' | 'review' | 'pages', string]> = [
+        const [tab, setTab] = useState<'run' | 'review' | 'action' | 'pages'>('run')
+        const tabs: Array<['run' | 'review' | 'action' | 'pages', string]> = [
           ['run', t('tabRun')],
           ['review', t('tabReview')],
+          ['action', t('tabAction')],
           ['pages', t('tabPages')],
         ]
         return h(
@@ -1219,6 +1709,7 @@ export function createPlugin(React: typeof import('react')): PluginModule {
           ),
           tab === 'run' ? h(RunPanel, { t, ctx }) : null,
           tab === 'review' ? h(ReviewPanel, { t, ctx }) : null,
+          tab === 'action' ? h(ActionPanel, { t, ctx }) : null,
           tab === 'pages' ? h(ReportPages, { t, ctx }) : null,
         )
       }
