@@ -44,6 +44,7 @@ import {
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, requireBusinessIdentity, runAccessBinding, scopeDataQuery,
 } from './business-policy.js'
 import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
+import { loadSourceConfigs } from './source-config.js'
 
 /** wire 错误 details：origCode 保留业务机器码（REVIEW_* / INVALID_ARGS…），便于 UI 展示。 */
 type OntoErrorDetails = { origCode?: string }
@@ -150,10 +151,13 @@ export class OntoRuntime extends RuntimeRemoteService {
   private readonly ws: PackageWorkspace
   private readonly releases: ReleaseStore
   private readonly strict: boolean
+  /** 数据根（source-configs.json 等部署配置面落点；ws.root = <dataDir>/workspace）。 */
+  private readonly dataDir: string
 
   constructor(ctx: Context) {
     super(ctx, 'ontoRuntime')
     const dataDir = resolveDataDir(ctx)
+    this.dataDir = dataDir
     this.strict = runtimeContextForHost(ctx.root).run(isStrictReleaseMode)
     this.ws = new PackageWorkspace(join(dataDir, 'workspace'))
     this.releases = new ReleaseStore({
@@ -161,6 +165,34 @@ export class OntoRuntime extends RuntimeRemoteService {
       workspace: this.ws,
       versions: { core: '0.0.0', runtime: '0.0.0' },
       requireActive: this.strict,
+    })
+  }
+
+  /**
+   * 受控数据源登记面（issue #30 WP-B 页面选源跑批）：按包过滤返回 source-configs 摘要。
+   * 只读、最小披露——不返回 apiBaseUrl / apiTokenEnv（部署配置细节不过页面）。
+   * 配置损坏 fail-loud（不静默空表）；active 绑定口径与 listScenarios 同。
+   */
+  @Remote('listSourceConfigs')
+  async remoteExportListSourceConfigs(request: { name: string; version: string }): Promise<{
+    sources: Array<{
+      sourceId: string
+      package: { name: string; version: string }
+      sourceKind: 'simulated' | 'formal'
+      registeredAt: string
+    }>
+  }> {
+    return guard(() => {
+      this.assertActive(request.name, request.version)
+      const sources = loadSourceConfigs(this.dataDir)
+        .filter((c) => c.package.name === request.name && c.package.version === request.version)
+        .map((c) => ({
+          sourceId: c.sourceId,
+          package: c.package,
+          sourceKind: c.sourceKind,
+          registeredAt: c.registeredAt,
+        }))
+      return { sources }
     })
   }
 

@@ -13,7 +13,8 @@ const PANEL_ID = '__PANEL_ID__'
 const PKG_NAME = '__PKG_NAME__'
 const PKG_VERSION = '__PKG_VERSION__'
 const DEFAULT_SCENARIO = '__SCENARIO_ID__'
-const SOURCE_ID = '__SOURCE_ID__'
+/** 生成期默认源 id（部署 env 登记可不在 source-configs.json；标注 string 防 token 替换后字面量窄化）。 */
+const SOURCE_ID: string = '__SOURCE_ID__'
 /** 数据通道：connector = sourceId 取数；dataset = 运行页内联 JSON（纯内容包）。 */
 const DATA_MODE: string = '__DATA_MODE__'
 
@@ -49,6 +50,13 @@ interface ScenarioRow {
   goal: string
 }
 
+/** 受控数据源摘要（listSourceConfigs；部署 env 登记的默认源可不在表内）。 */
+interface SourceRow {
+  sourceId: string
+  sourceKind?: 'simulated' | 'formal'
+  registeredAt?: string
+}
+
 function statusTone(s: string | undefined): 'ok' | 'warn' | 'err' | undefined {
   if (s === 'verified' || s === 'conformant') return 'ok'
   if (s === 'conditional' || s === 'pending') return 'warn'
@@ -65,6 +73,11 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [error, setError] = useState('')
   const [report, setReport] = useState<RunReport | null>(null)
   const [datasetText, setDatasetText] = useState('')
+  // 双通道（issue #30 WP-B）：dataset=探索（内联）；source=正式（受控数据源，互斥口径）
+  const [channel, setChannel] = useState<'dataset' | 'source'>(DATA_MODE === 'dataset' ? 'dataset' : 'source')
+  const [sourceId, setSourceId] = useState(SOURCE_ID)
+  const [sources, setSources] = useState<SourceRow[]>([])
+  const [dataTrust, setDataTrust] = useState<{ provenance: string; verified: boolean; note: string } | null>(null)
 
   useEffect(() => {
     if (!api) return
@@ -83,6 +96,25 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         setError(errText(e))
       }
     })()
+    void (async () => {
+      try {
+        const out = unwrap<{ sources: SourceRow[] }>(
+          await api.listSourceConfigs({ name: PKG_NAME, version: PKG_VERSION }),
+        )
+        const list = [...(out.sources ?? [])]
+        // 生成期默认源（部署 env 登记可不在 source-configs.json）保底可选
+        if (SOURCE_ID !== '' && !list.some((s) => s.sourceId === SOURCE_ID)) {
+          list.unshift({ sourceId: SOURCE_ID })
+        }
+        setSources(list)
+        if (list.length > 0 && !list.some((s) => s.sourceId === sourceId)) {
+          setSourceId(list[0].sourceId)
+        }
+      } catch {
+        // 选源面加载失败不堵运行区；通道切到正式时下拉为空并提示
+        setSources(SOURCE_ID !== '' ? [{ sourceId: SOURCE_ID }] : [])
+      }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -95,25 +127,30 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
       setError('')
       setBusy('run')
       setReport(null)
+      setDataTrust(null)
       try {
         let dataset: unknown
-        if (DATA_MODE === 'dataset') {
+        if (channel === 'dataset') {
           if (datasetText.trim() === '') throw new Error(t('datasetRequired'))
           try {
             dataset = JSON.parse(datasetText)
           } catch {
             throw new Error(t('datasetInvalid'))
           }
+        } else if (sourceId === '') {
+          throw new Error(t('sourceRequired'))
         }
-        const out = unwrap<{ result: { runId: string } }>(
+        const out = unwrap<{ result: { runId: string; dataTrust?: { provenance: string; verified: boolean; note: string } } }>(
           await api.runScenario({
             name: PKG_NAME,
             version: PKG_VERSION,
             scenarioId,
-            ...(DATA_MODE === 'dataset' ? { dataset } : { sourceId: SOURCE_ID }),
+            // sourceId（正式）与 dataset（探索）互斥——服务端同口径校验
+            ...(channel === 'dataset' ? { dataset } : { sourceId }),
             analysisMode: 'explore',
           }),
         )
+        setDataTrust(out.result.dataTrust ?? null)
         // 固定页与对话报表共用 getRunReport 同一投影（chat-run-report S2.5）
         const rep = unwrap<{ report: RunReport }>(
           await api.getRunReport({ runId: out.result.runId }),
@@ -172,16 +209,53 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         },
         ...scenarios.map((s) => h('option', { key: s.id, value: s.id }, `${s.id} — ${s.name}`)),
       ),
-      DATA_MODE === 'dataset'
-        ? null
-        : h('span', { className: 'txri-note' }, `${t('sourceId')}: ${SOURCE_ID}`),
+      h('span', { className: 'txri-note' }, `${t('channel')}:`),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: channel === 'dataset' ? 'txri-primary' : '',
+          disabled: busy !== '',
+          onClick: () => setChannel('dataset'),
+        },
+        t('channelExplore'),
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: channel === 'source' ? 'txri-primary' : '',
+          disabled: busy !== '',
+          onClick: () => setChannel('source'),
+        },
+        t('channelFormal'),
+      ),
+      channel === 'source'
+        ? sources.length > 0
+          ? h(
+              'select',
+              {
+                value: sourceId,
+                disabled: busy !== '',
+                onChange: (e: { target: { value: string } }) => setSourceId(e.target.value),
+              },
+              ...sources.map((s) =>
+                h(
+                  'option',
+                  { key: s.sourceId, value: s.sourceId },
+                  s.sourceKind ? `${s.sourceId} · ${s.sourceKind}` : s.sourceId,
+                ),
+              ),
+            )
+          : h('span', { className: 'txri-note' }, t('sourcesEmpty'))
+        : null,
       h(
         'button',
         { type: 'button', className: 'txri-primary', disabled: !!busy || !scenarioId, onClick: () => run() },
         busy === 'run' ? t('running') : t('run'),
       ),
     ),
-    DATA_MODE === 'dataset'
+    channel === 'dataset'
       ? h(
           'div',
           { className: 'txri-bar' },
@@ -196,6 +270,13 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             onChange: (e: { target: { value: string } }) => setDatasetText(e.target.value),
           }),
           h('p', { className: 'txri-note' }, t('datasetHint')),
+        )
+      : h('p', { className: 'txri-note' }, t('sourceHint')),
+    dataTrust
+      ? h(
+          'p',
+          { className: 'txri-note' },
+          `${t('dataTrust')}: ${dataTrust.provenance} (${dataTrust.verified ? 'verified' : 'unverified'}) — ${dataTrust.note}`,
         )
       : null,
     h('div', { className: 'txri-panel' }, ...resultView()),

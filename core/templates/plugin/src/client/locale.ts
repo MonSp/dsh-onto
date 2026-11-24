@@ -100,6 +100,13 @@ export const zh = {
   simulatedNote: '外部写入以运行环境登记为准；对账未决不显示成功',
   exportAudit: '导出审计',
   exportAuditDone: '审计已归档',
+  channel: '通道',
+  channelExplore: '探索（内联数据）',
+  channelFormal: '正式（受控数据源）',
+  sourceRequired: '请选择受控数据源',
+  sourcesEmpty: '（无已登记受控数据源）',
+  sourceHint: '正式通道：服务端连接器取数（sourceId 与内联数据互斥），数据依据随结果回填',
+  dataTrust: '数据依据',
 }
 
 export const en: Record<string, string> = {
@@ -202,4 +209,11 @@ export const en: Record<string, string> = {
   simulatedNote: 'External writes follow the runtime registry; unresolved reconciliation is never shown as success',
   exportAudit: 'Export audit',
   exportAuditDone: 'Audit archived',
+  channel: 'Channel',
+  channelExplore: 'Explore (inline data)',
+  channelFormal: 'Formal (managed source)',
+  sourceRequired: 'Select a managed source first',
+  sourcesEmpty: '(no managed sources registered)',
+  sourceHint: 'Formal channel: server-side connector fetch (sourceId exclusive with inline dataset); data basis is echoed with the result',
+  dataTrust: 'Data basis',
 }

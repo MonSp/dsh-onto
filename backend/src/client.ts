@@ -141,6 +141,7 @@ window.__ModuleLoader__.load({
       desc('ontoKnowledge', 'materialize', true, 'KMZ', 'Materialize approved candidates into the package.'),
       desc('ontoKnowledge', 'saveSkeleton', true, 'KSK', 'Save/confirm the modeling skeleton (I6 gate).'),
       // ontoRuntime
+      desc('ontoRuntime', 'listSourceConfigs', true, 'RSC', 'List managed source configs for a package (summary).'),
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),

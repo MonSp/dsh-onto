@@ -89,8 +89,9 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // RUN 面 + 复核面（issue #30 WP-A）；无 DEV 命名空间。
+    // RUN 面 + 复核面（issue #30 WP-A）+ 受控取数面（WP-B）；无 DEV 命名空间。
     const allDescriptors: InvocationDescriptorLike[] = [
+      desc('ontoRuntime', 'listSourceConfigs', true, 'RSC', 'List managed source configs for a package (summary).'),
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),
