@@ -207,12 +207,57 @@ cd ..
 
 ## 6. 插件生成与装配
 
+**一键受控部署链**（把 6.1–6.5、回放锚定、受控重启与双入口验收锚串成一条链；**人工激活保留**，不代签）：
+
+```powershell
+cd ..\<domain>-app
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -AuthorizedBy "授权部署人姓名" -Restart -Port 3081 -EnvFile .env
+```
+
+链路：构建 + 夹具 e2e → `replay --check`（随包夹具对照包内基线，漂移即拒）→ 装 profile → 原样导入 →
+授权人激活（缺省交互式提示）→ 组合断言 → 受控重启（**仅** `-Port` 上本 profile 的宿主，不触碰平台/其他
+profile）→ 同输入引擎面跑一遍，打印**双入口验收锚**（ruleId 集合与分数，页面/Agent 两边对照）。
+
+三个状态是分开的：**包可见**（列表有行）≠ **版本已激活**（授权人 activate）≠ **真实数据源可用**
+（`DSH_*_API_URL` 装配连接器 + `DSH_BIZ_*` 身份断言）。缺任一项应拒绝运行（fail-closed），不静默降级。
+
+手动分步等价（排障用）：
+
 ```powershell
 # 6.1 生成最小插件（结果页 + Agent 入口 + 部署模板；生成 ≠ 签发，不落凭据）
-node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out ..\<domain>-app
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> [--source <SRC>] [--fixture <file>] --out ..\<domain>-app
 # 产物：src/index.ts（配置驱动连接器装配）、src/client.ts（结果页）、src/bindings.ts（契约冻结）、
 #       .env.example、scripts/{setup-profile,dump-config}.ps1、scripts/seed-release.mjs、tests/
+```
 
+### 6.1.1 dataset 模式（纯内容包生成业务页面）与 `--fixture` 显式运行夹具
+
+- **dataset 模式（缺省）**：省略 `--source` 即 dataset 模式——纯内容包生成业务页面（覆盖零 API 域），
+  包内不需 apiSources shape / source-maps。生成物按模式分支：`src/index.ts` 不登记连接器，运行走
+  内联 dataset 通道（与 Agent `run_scenario(dataset)` 同源）；运行页为「运行数据（JSON）」粘贴内联
+  运行；`src/bindings.ts` 无契约可冻（shape=null / maps=[]）；e2e 夹具即数据集本体
+  （取位 `fixtures/dataset-<SCN>.json`）；`deploy.ps1` 跳过 `replay --check` 回放锚（无映射链），
+  验收锚由夹具 live run 提供。
+- **source 模式**：传 `--source <SRC>` 走 API 映射链（connector 模式：包内须声明 apiSources shape +
+  source-maps，契约冻结/连接器装配/回放锚定见上）。
+
+```powershell
+# dataset 模式（缺省）：纯内容包 → 业务页面
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --out ..\<domain>-app
+# source 模式：API 映射链
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out ..\<domain>-app
+```
+
+- **`--fixture <file>` 显式运行夹具**：只在生成时复制进生成物 `tests/fixtures/replay.json`，
+  **不改 ISSUED 包**。取位顺序：`--fixture` > 包内 `fixtures/dataset-<SCN>.json`（dataset 模式）>
+  `fixtures/replay-<SCN>.json`；dataset 模式夹具即数据集本体，connector 模式夹具是源快照。包内无
+  夹具仅告警（e2e 需补夹具后才可跑）；`--fixture` 指向不存在文件直接报错。
+
+```powershell
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --fixture <快照.json> --out ..\<domain>-app
+```
+
+```powershell
 # 6.2 构建与自检（对着回放夹具的 e2e）
 cd ..\<domain>-app
 pnpm install; pnpm run build; node --test tests\*.test.mjs
@@ -342,7 +387,7 @@ node --test mock-services\wst-api\wst-api.test.mjs
 node core\dist\cli.js source probe   --dir packages\wst\1.0.0 --url http://127.0.0.1:3912
 node core\dist\cli.js source map preview --dir packages\wst\1.0.0 --url http://127.0.0.1:3912 --strict
 node core\dist\cli.js replay --dir <pkg> --scenario <SCN> --check
-node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> --source <SRC> --out <out>
+node core\dist\cli.js plugin generate --dir <pkg> --scenario <SCN> [--source <SRC>] [--fixture <file>] --out <out>
 # 双入口同分：生成插件 tests（夹具→场景→同分幂等）+ 会话 run_scenario 对照
 # 对话报表/报表页：backend tests/chat-run-report.test.mjs（工具面/投影/meta/越权）+ §7.1
 ```

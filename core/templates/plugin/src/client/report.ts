@@ -1108,23 +1108,34 @@ function CompareBox(props: { diff: RunDiffView; t: T }): ReactNode {
 /** 对比面板（工具面/报表页共用入口）。 */
 export function ComparePanel(props: { diff: RunDiffView; t: T }): ReactNode {
   return h(
-    ReportBoundary,
+    reportBoundary(),
     { fallback: h('p', { className: 'txri-note' }, props.t('reportFallback')) },
     h(CompareBox, props),
   )
 }
 
-class ReportBoundary extends Component<
-  { fallback: ReactNode; children?: ReactNode },
-  { failed: boolean }
-> {
-  state = { failed: false }
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true }
+/** 错误边界 Props（懒定义类的公有形状）。 */
+type BoundaryProps = { fallback: ReactNode; children?: ReactNode }
+
+/**
+ * 错误边界类懒定义：bundle 顶层先于 setReact 求值，直接 `class extends Component`
+ * 会踩空基类把整个 IIFE 崩掉（__ModuleLoader__ 注册永不执行）——类推迟到首次使用。
+ */
+function makeReportBoundary() {
+  return class ReportBoundary extends Component<BoundaryProps, { failed: boolean }> {
+    state = { failed: false }
+    static getDerivedStateFromError(): { failed: boolean } {
+      return { failed: true }
+    }
+    render(): ReactNode {
+      return this.state.failed ? this.props.fallback : (this.props.children ?? null)
+    }
   }
-  render(): ReactNode {
-    return this.state.failed ? this.props.fallback : (this.props.children ?? null)
-  }
+}
+let cachedReportBoundary: ReturnType<typeof makeReportBoundary> | null = null
+function reportBoundary(): ReturnType<typeof makeReportBoundary> {
+  if (cachedReportBoundary === null) cachedReportBoundary = makeReportBoundary()
+  return cachedReportBoundary
 }
 
 /** 报表文字摘要（渲染失败回退面；spec chat-run-report S2.5/S2.7）。 */
@@ -1199,7 +1210,7 @@ export function ReportSurface(props: {
   }
   const fallback = props.fallback ?? reportTextSummary(props.report, props.t)
   try {
-    return h(ReportBoundary, { fallback }, renderNode(props.surface.root, ctx, 'root'))
+    return h(reportBoundary(), { fallback }, renderNode(props.surface.root, ctx, 'root'))
   } catch (e) {
     return h('p', { className: 'txri-err' }, `render error: ${errText(e)}`)
   }

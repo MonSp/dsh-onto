@@ -71,6 +71,11 @@ kept on a short leash (drafting only, never scoring, never issuing verdicts).
   candidate table, evidence expand; filter · expand · navigate) via `show_run_report`, values
   from the same `getRunReport` projection as the page; save a used view as a reusable report
   page and re-apply it to another run (`save_report_page`) · main chat · Web
+- **Report components & cross-run compare** — catalog `dsh-onto/report/v1` grows to 18
+  components (KeyValue/Badge/Callout/Progress/Timeline/Tabs + Chart bars/line/donut with
+  multi-series grouped/stacked, conditional `when`, typed table columns, spark, palette);
+  table export copies Markdown/CSV; `show_run_diff` renders a cross-run compare card
+  (delta table + hit/excluded add-remove; absent side stays null, never 0) · main chat · Web
 - **Trusted business execution** — three-state data status, six-tuple authorization,
   decision→proposal ledger, external receipts + reconciliation (no receipt ⇒ `unknown`),
   ticket-sim & test adapters · lives in **`@dsh-onto/runtime`** · `record_review_decision` /

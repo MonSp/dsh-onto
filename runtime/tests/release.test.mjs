@@ -185,6 +185,26 @@ test('P2a: 同版本同摘要重复导入 → 幂等 idempotent:true', () => {
   }
 })
 
+test('P2a2: manifest 在、包实物缺失 → 同摘要导入自愈补写（防「导入成功/激活报缺失」断裂）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    const bundle = makeBundle(dir)
+    const first = store.importRelease({ kind: 'controlled-upload', bundle })
+    assert.equal(first.idempotent, true)
+    // 只删包实物、保留外层 manifest——复现「导入幂等成功、激活报包缺失」现场
+    rmSync(ws.versionDir('test-pkg', '1.0.0'), { recursive: true, force: true })
+    assert.ok(!existsSync(join(ws.versionDir('test-pkg', '1.0.0'), 'package.yaml')))
+    const again = store.importRelease({ kind: 'controlled-upload', bundle })
+    assert.equal(again.idempotent, true)
+    assert.ok(existsSync(join(ws.versionDir('test-pkg', '1.0.0'), 'package.yaml')))
+    const act = store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    assert.equal(act.ok, true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('P2b: 同版本不同内容 → RELEASE_CONFLICT', () => {
   const { root, ws, dir } = setupIssuedPkg()
   try {
@@ -400,6 +420,74 @@ test('P4: 无 active.json 时保持既有行为（不过滤、不拒绝）', () 
     assert.equal(store.filterActiveVersions(versions).length, versions.length)
     store.assertActiveBinding('test-pkg', '1.0.0')
     store.assertActiveBinding('test-pkg', '9.9.9') // 无指针不拦
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('发布业务 v1：已受管（有 manifest）未激活 → RELEASE_NOT_ACTIVE；未受管保持放行', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    // 未受管：开发工作区语义放行
+    store.assertActiveBinding('test-pkg', '1.0.0')
+    // 收编发布台账（同摘要幂等）→ 受管：未激活一律拒
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
+    // 包级受管：同名未发布版本（无 manifest）同样拒，不得退回开发语义
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '9.9.9'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
+    // 激活后放行；同包其它版本仍拒（指针绑定）
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    store.assertActiveBinding('test-pkg', '1.0.0')
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '9.9.9'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_VERSION_NOT_ACTIVE',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('受管闸 fail-closed：manifest 损坏（存在不可解析）→ 仍按受管拒，不退回未受管放行', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    // 损坏 manifest（模拟半截写/磁盘故障）——闸不得把损坏当「无 manifest」放行
+    const mp = store.manifestPath('test-pkg', '1.0.0')
+    writeFileSync(mp, '{corrupt', 'utf8')
+    assert.throws(
+      () => store.assertActiveBinding('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
+    )
+    // 读面显式报损坏（人工核对，不自动重建）
+    assert.throws(
+      () => store.readManifest('test-pkg', '1.0.0'),
+      (e) => e instanceof ReleaseError && e.code === 'RELEASE_MALFORMED',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('发布留痕：importRelease 可携批准卡凭证摘要入 history（T2.1）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease(
+      { kind: 'controlled-upload', bundle: makeBundle(dir) },
+      { approvalDigest: 'appr-digest-1' },
+    )
+    const hist = store.readHistory()
+    assert.equal(hist.length, 1)
+    assert.equal(hist[0].action, 'import')
+    assert.equal(hist[0].approvalDigest, 'appr-digest-1')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

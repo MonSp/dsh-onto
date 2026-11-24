@@ -215,6 +215,7 @@ AML 完整工作台：`scripts\setup-profile.ps1` → `dump-config.ps1` → `dev
 | 图上扩邻域 | `expand_entity` | 只准备数据，**不打分** |
 | 看交互报表 | `show_run_report` | 对话内渲染同一次运行（可带 surface 组织视图） |
 | 沉淀报表页 | `save_report_page` / `list_report_pages` | 把用过的视图存成可复用插件页 |
+| 跨 run 对比 | `show_run_diff` | 对比卡：delta 表 + 命中/排除增删（缺席侧 null 不补 0） |
 | 包内容 | `get_package` 等 | 只读 |
 | 改口径 | `apply_draft` | 草案队列，**不直写 ISSUED** |
 
@@ -254,6 +255,10 @@ AML 示例场景：`SCN-AML-FIND-CLUES`（包 `aml-analysis`）。
 
 与页面表格是同一执行路径的两种呈现；对话里还可用 `show_run_report` 打开同一投影的
 交互报表（摘要卡/候选表/证据展开），用过的视图能沉淀为可复用报表页换 run 复用。
+报表 surface 按 `dsh-onto/report/v1` 组件组织视图（18 组件：KeyValue/Badge/Callout/
+Progress/Timeline/Tabs + Chart bars/line/donut 多系列、when 条件显隐、表格列类型，
+支持导出复制 Markdown/CSV）；`show_run_diff` 打开两轮运行的对比卡（delta 表 + 命中/
+排除增删，缺席侧 null 不补 0），数值槽位始终只准字段绑定。
 
 ### 5.4 问答前环境检查
 

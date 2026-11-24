@@ -111,8 +111,9 @@ test('backend apply 重复装配拒绝，卸载重装恢复默认身份/连接�
   const envNames = ['DSH_TICKET_SIM_URL', 'DSH_EXT_API_URL', 'DSH_FORMAL_ACTION_ENABLED']
   const previous = new Map(envNames.map(name => [name, process.env[name]]))
   const disposers = []
+  const profileDir = mkdtempSync(join(tmpdir(), 'onto-apply-'))
   const ctx = {
-    root: { get() {} }, plugin() {},
+    root: { get: key => key === 'profileContext' ? { dir: profileDir } : undefined }, plugin() {},
     effect(factory) { disposers.push(factory()) },
   }
   try {
@@ -139,6 +140,7 @@ test('backend apply 重复装配拒绝，卸载重装恢复默认身份/连接�
     })
   } finally {
     for (const dispose of disposers) dispose()
+    rmSync(profileDir, { recursive: true, force: true })
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name]
       else process.env[name] = value

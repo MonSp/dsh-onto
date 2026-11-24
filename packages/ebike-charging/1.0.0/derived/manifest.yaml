@@ -1,0 +1,41 @@
+kind: DerivedManifest
+package: ebike-charging
+version: 1.0.0
+domain: EBC
+generatedAt: 2026-11-23T04:40:20.809Z
+sourceDigest: 0e480cbed45eb1f8f731f6619c52aa948f8310892416be3769b2aa6743b4c93d
+sources:
+  - path: package.yaml
+    sha256: 6fad97bfe9135bec85cd6cd75e6a0769c9ab48e03cb5e6c7bc9730a1324ff559
+  - path: o1-objects/object-types.yaml
+    sha256: bcf3ce6dbb68d192fe8e782c3040b1db0d25069faff3de1c027e1602c15f9a70
+  - path: o1-objects/relation-types.yaml
+    sha256: 001dd4ea0f8061cfe35bc0ca0b1a984b043f5a2ebe12054836c07621a1afedb9
+  - path: o1-objects/dictionaries/dict-ebc-area-type.yaml
+    sha256: 9c8e58255773d1aeddbacb9f6adbea657996ec2aff96da8c7840a5028725d076
+  - path: o2-behavior-rules/behavior-types.yaml
+    sha256: d2e17489dbbdea1b3b227fd2390003cf46b1c1456c2f92867972f1a3682e523c
+  - path: o2-behavior-rules/rules/score-rules.yaml
+    sha256: 4996b9b9cd5b001d629c17a90f2841fd8e1fd9dc52a9cae3e8d655f345a10f5b
+  - path: o2-behavior-rules/rules/exclusion-rules.yaml
+    sha256: 8e9530cca1ae162b4624e220b0a1250bdb4b37a78fe7d441fa296dfb66a2d9b9
+  - path: o2-behavior-rules/skill-templates/SKL-EBC-CHARGE-NARRATIVE.yaml
+    sha256: b4ec7c2a9030dc02802a23c297399e4040c8674b19b3e9fd82464682a37cdbdf
+    layer: L3
+  - path: o3-scenarios/SCN-EBC-CHARGE-RISK.yaml
+    sha256: e3c0ede9a647edefa5bd4257fab424e884d8414488486e89e805a47dfdb66b0f
+derived:
+  - path: derived/tool-contracts/tool-contracts.yaml
+    sha256: c462a635d1a429dce969cc1abe1b6c4a9fcc4bc59cedf6de2cef08d66c4aa5a3
+    layer: L2
+  - path: derived/rule-engine-config/rule-engine-config.yaml
+    sha256: a643bb73954e9f862683d6af78472858ca6180a31507f3d70ce83b5946fe511e
+  - path: derived/agent-duties.yaml
+    sha256: 151e0402d661defa8be8c7fb5a07dd822031cf0caf4b5b6f262db6e4d0fcaee2
+    layer: L4
+  - path: derived/audit-checks.yaml
+    sha256: c36c6689f2452a9ce12f1228d6b4a39a48c7b8043d33d26fc35920cc5e163a97
+    layer: L4
+  - path: derived/scenario-orchestration.yaml
+    sha256: 0ed98527eda7120b48e3173e9c6b7674d8be6b3ecf7848716bcb9a77a6514959
+    layer: L4

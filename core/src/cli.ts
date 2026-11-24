@@ -103,6 +103,14 @@ function flagStr(args: Args, name: string, fallback?: string): string {
   return ''
 }
 
+/** 需要路径值的 flag：给了 flag 却没给值（解析成布尔）→ 显式报错，不静默忽略。 */
+function flagFileArg(args: Args, name: string): string | undefined {
+  const v = args.flags[name]
+  if (v === undefined) return undefined
+  if (typeof v !== 'string' || v === '') fail(`--${name} 需要路径值（如 --${name} <file>）`)
+  return v
+}
+
 function fail(message: string, code = 1): never {
   console.error(`dsh-onto: ${message}`)
   process.exit(code)
@@ -176,7 +184,8 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
   replay --dir <versionDir> --scenario <SCN> [--fixture F] [--expected F] [--check]
          [--scope-types A,B] [--against <versionDir>] [--write-expected]
-  plugin generate --dir <versionDir> --scenario <SCN> --source <SRC> --out <dir> [--force] [--profile P]
+  plugin generate --dir <versionDir> --scenario <SCN> [--source <SRC>] [--fixture <file>] --out <dir> [--force] [--profile P]
+    （省略 --source = dataset 模式：纯内容包走内联 dataset 通道；--fixture 显式指定运行夹具）
   knowledge upload|parse|queue|review|materialize
   exp recall|annotate|diff|list|abstract|compress
 通用: --root <workspaceDir>（默认 ./workspace）
@@ -516,12 +525,14 @@ function cmdReplay(args: Args): void {
   const scenarioId = flagStr(args, 'scenario')
   const scopeFlag = args.flags['scope-types']
   const againstFlag = args.flags['against']
+  const fixtureArg = flagFileArg(args, 'fixture')
+  const expectedArg = flagFileArg(args, 'expected')
   try {
     const report = runReplay({
       versionDir: resolve(dir),
       scenarioId,
-      ...(typeof args.flags['fixture'] === 'string' ? { fixturePath: resolve(args.flags['fixture']) } : {}),
-      ...(typeof args.flags['expected'] === 'string' ? { expectedPath: resolve(args.flags['expected']) } : {}),
+      ...(fixtureArg !== undefined ? { fixturePath: resolve(fixtureArg) } : {}),
+      ...(expectedArg !== undefined ? { expectedPath: resolve(expectedArg) } : {}),
       ...(typeof scopeFlag === 'string' && scopeFlag !== ''
         ? { scopeTypes: scopeFlag.split(',').map((s) => s.trim()).filter((s) => s !== '') }
         : {}),
@@ -544,10 +555,12 @@ function cmdReplay(args: Args): void {
 function cmdPlugin(sub: string | undefined, args: Args): void {
   if (sub !== 'generate') fail('plugin 需要子命令 generate')
   try {
+    const fixtureArg = flagFileArg(args, 'fixture')
     const result = generatePlugin({
       versionDir: resolve(flagStr(args, 'dir')),
       scenarioId: flagStr(args, 'scenario'),
-      sourceId: flagStr(args, 'source'),
+      ...(typeof args.flags['source'] === 'string' ? { sourceId: args.flags['source'] } : {}),
+      ...(fixtureArg !== undefined ? { fixturePath: resolve(fixtureArg) } : {}),
       outDir: resolve(flagStr(args, 'out')),
       force: args.flags['force'] === true,
       ...(typeof args.flags['profile'] === 'string' ? { profileName: args.flags['profile'] } : {}),

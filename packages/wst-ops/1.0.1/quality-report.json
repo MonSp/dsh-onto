@@ -1,0 +1,17 @@
+{
+  "package": "wst-ops",
+  "version": "1.0.1",
+  "generatedAt": "2026-11-23T16:13:43.572Z",
+  "errors": [],
+  "warnings": [],
+  "info": [
+    {
+      "level": "info",
+      "code": "COVERAGE",
+      "where": "package",
+      "message": "对象 2 / 关系 1 / 字典 2 / 行为 2 / 打分规则 3 / 排除规则 2 / 方法论模板 1 / 场景 1 / 字段映射 0 / 数据源 1 / 源映射 6"
+    }
+  ],
+  "score": 100,
+  "passed": true
+}

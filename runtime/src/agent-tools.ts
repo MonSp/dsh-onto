@@ -131,13 +131,15 @@ import {
 } from './action-executor.js'
 import { actionStoreFor } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
-import { ReleaseError } from './release.js'
+import { ReleaseError, buildReleaseBundle, buildReleaseManifest } from './release.js'
 import {
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, businessPolicy, parseTargetRef,
   requireBusinessIdentity, requireBizAuth, runAccessBinding, scopeDataQuery, type ExistenceChecks,
 } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
+import { createMappedDataConnector } from './data-source-map.js'
+import { loadSourceConfigs, parseControlledBaseUrl, parseSourceKind, parseTokenEnvName, resolveTokenEnv, upsertSourceConfig } from './source-config.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
   persistReviewDecision,
@@ -2205,12 +2207,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       description:
         '打开一次运行的交互报表（对话内渲染：摘要卡/候选表/证据展开；只读）。'
         + 'surface 可按问题组织视图（A2UI 1.0 子集，catalogId "dsh-onto/report/v1"；组件 '
-        + 'Card/Stat/Row/Column/Text/Table/Accordion/Button；数值槽位只接受字段绑定，如 '
-        + '{"@path":"/summary/maxRiskScore"}，Table 列 field 用候选行字段 '
-        + 'candidateId/objectRef/riskScore/riskLevel/hitRuleIds/pendingChecks/pendingVerification；'
-        + 'Table props: rowsBind="/candidates"、columns、expandField、sort、filter；'
-        + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"）。'
-        + '省略 surface 用默认模板。数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
+        + 'Card/Stat/Row/Column/Text/Table/Accordion/Button/KeyValue/Badge/Callout/Progress/Timeline/Tabs/Chart/Input/Select/Compare；'
+        + '数值槽位只接受字段绑定，如 {"@path":"/summary/maxRiskScore"}，字面量分数/数据数组拒（INVALID_ARGS）；'
+        + 'Table 列 field 用候选行字段 '
+        + 'candidateId/objectRef/riskScore/riskLevel/hitRuleIds/pendingChecks/pendingVerification，'
+        + 'columns 列 type: text|num|bar|badge|delta，props: rowsBind="/candidates"、expandField、sort、filter/filterBy；'
+        + 'Chart kind=bars|line|donut，序列绑定 rowsBind+labelField+valueField'
+        + '（多系列 valueFields、mode=grouped|stacked 仅 bars，seriesField 仅 line）；'
+        + 'Stat 可带 spark；Timeline 绑 ruleHitLog 等列表 + 行字段映射；任意节点可带 when（bind/field 条件显隐）；'
+        + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"；'
+        + 'Input/Select 为本地交互件（不扩事件面））。'
+        + '省略 surface 用默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。'
+        + '数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
         + '展开详情经权限校验取数。组件事件只做筛选/展开/跳转。',
       parameters: {
         runId: {
@@ -2222,7 +2230,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           type: 'json',
           description:
             'A2UI 1.0 子集 surface：{version:"1.0",type:"createSurface",surfaceId,catalogId:"dsh-onto/report/v1",root:{id,type,props,children}}。'
-            + '缺省省略=默认模板（摘要卡+候选表+证据展开）。',
+            + '缺省省略=默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。',
         },
       },
       output: {
@@ -4331,6 +4339,304 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         [],
         (args) => redlines(args),
+      ),
+    }))
+
+  // ── 发布业务（平台免重启声明式发布 v1，2026-11-23）────────────────────────
+  // 三态分离：包可见（工作区）≠ 版本已激活（授权人）≠ 数据源可用（连接器登记）。
+  // publish 收编已签发包进发布台账（同摘要幂等）+ 按受控数据源配置登记映射连接器（免重启，
+  // 运行中 registry 即时生效）；不激活。activate/rollback 为独立人工动作（系统批准卡），
+  // authorizedBy 记宿主发起人 id（审计口径：非点卡人留痕，不收模型自称）。已导入未激活的包拒绝运行（受管闸，见 assertActiveBinding）。
+  reg('dev', () => defineTool({
+      name: 'publish_business',
+      description:
+        '发布业务域到运行中平台（免重启声明式发布 v1）：把工作区已签发包收编进发布台账（同摘要幂等，'
+        + '不改写包内容），并按受控数据源配置登记映射连接器（转换契约随包 shape + source-maps）。'
+        + '不激活——激活是独立人工动作（activate_business）。发布后未激活的包拒绝运行（fail-closed）但保持可见；'
+        + '同名同版本不同内容拒绝（须 fork 新版本）。回滚用 rollback_business，只动自身指针，不影响已有业务。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（工作区已有该版本且已签发）' },
+        version: { type: 'string', required: true, description: '包版本' },
+        sourceId: { type: 'string', required: true, description: '数据源 id（须在包 apiSources 声明 shape）' },
+        sourceKind: { type: 'string', required: true, description: '连接器性质：simulated（演练）| formal（正式）' },
+        apiBaseUrl: { type: 'string', required: true, description: '数据源基址（受控配置）：https 任意；http 仅回环' },
+        apiTokenEnv: {
+          type: 'string',
+          description: '可选静态令牌的宿主 env 变量名（部署配置；只传名字，令牌值不入对话/不入包/不落盘）',
+        },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            sourceId: { type: 'string', required: true },
+            imported: { type: 'string', required: true },
+            activated: { type: 'boolean', required: true, const: false },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { name: string; version: string; sourceId: string; imported: string }
+          return textBlock(
+            `业务域已发布（未激活）：${v.name}@${v.version} · 数据源 ${v.sourceId}（${v.imported}）。`
+            + '激活是独立人工动作：activate_business（系统批准卡）。未激活前该包运行一律拒绝。',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (
+          args: {
+            name: string
+            version: string
+            sourceId: string
+            sourceKind: string
+            apiBaseUrl: string
+            apiTokenEnv?: string
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
+          assertHumanApproved(args.humanApproved, '发布')
+          const kind = parseSourceKind(args.sourceKind)
+          const url = parseControlledBaseUrl(args.apiBaseUrl)
+          // 令牌只传 env 变量名（值不过模型面）；声明了名但宿主 env 取不到值 → fail-closed。
+          const tokenEnv = args.apiTokenEnv !== undefined && args.apiTokenEnv !== ''
+            ? parseTokenEnvName(args.apiTokenEnv)
+            : undefined
+          const token = tokenEnv !== undefined ? resolveTokenEnv(tokenEnv) : null
+          if (tokenEnv !== undefined && token === null) {
+            throw new AgentToolError('INVALID_ARGS', `令牌 env ${tokenEnv} 缺失/为空：请先在宿主 env 配置后重试`)
+          }
+          // sourceId 归属（受控数据源全局命名空间）：提前检查省批准卡；最终判定在 upsertSourceConfig 锁内复核。
+          const owner = loadSourceConfigs(dataDir).find((c) => c.sourceId === args.sourceId)
+          if (owner !== undefined && owner.package.name !== args.name) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `sourceId ${args.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
+            )
+          }
+          // 先验后批（T2.1）：ISSUED/锚点/契约不过不劳烦批准卡；包内容指纹进批准摘要。
+          const dir = ws.versionDir(args.name, args.version)
+          const pkg = loadPackage(dir)
+          const src = pkg.apiSources.find((s) => s.id === args.sourceId)
+          if (src === undefined || src.shape === undefined) {
+            throw new AgentToolError('INVALID_ARGS', `${args.sourceId} 未在包 apiSources 声明 shape`)
+          }
+          const maps = pkg.sourceMaps ?? []
+          if (maps.length === 0) {
+            throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
+          }
+          const manifestOpts = {
+            coreCompat: { min: '0.2.0' },
+            runtimeCompat: { min: '0.2.0' },
+            releasedBy: `publish@${args.name}`,
+          } as const
+          const manifest = buildReleaseManifest(dir, manifestOpts)
+          // 人审闸（T2.1）：批准卡绑定发布指纹（包/版本/内容摘要/源/性质/基址）
+          const digest = actionDigest({
+            op: 'publish_business',
+            name: args.name,
+            version: args.version,
+            packageDigest: manifest.packageDigest,
+            sourceId: args.sourceId,
+            kind,
+            apiBaseUrl: `${url.origin}${url.pathname}`,
+          })
+          const grant = await approve(exec, {
+            toolName: 'publish_business',
+            action: `发布业务域 ${args.name}@${args.version}`,
+            digest,
+            summary: `数据源 ${args.sourceId}（${kind}）→ ${url.origin}${url.pathname}，内容摘要 ${manifest.packageDigest.slice(0, 12)}，发布后须人工激活`,
+          })
+          // 批准回执后复核指纹——批准与收编之间包内容漂移 → 凭证作废（APPROVAL_STALE）。
+          const fresh = buildReleaseManifest(dir, manifestOpts)
+          if (fresh.packageDigest !== manifest.packageDigest) {
+            throw new AgentToolError(
+              'APPROVAL_STALE',
+              '批准后包内容已变化（内容摘要不匹配），本次人审凭证作废——请重新核对包内容并重新批准',
+            )
+          }
+          // 收编发布台账（同摘要幂等；不同内容 RELEASE_CONFLICT → fork 新版本）
+          const imported = releases.importRelease(
+            { kind: 'controlled-upload', bundle: buildReleaseBundle(dir, fresh) },
+            { approvalDigest: grant.approvalDigest },
+          )
+          // 受控数据源配置落盘先行（部署配置，与发布台账分离；落盘失败不留「内存有登记、磁盘无配置」半态，
+          // 下次宿主启动按配置恢复）。令牌只落 env 变量名，值不落盘。
+          upsertSourceConfig(dataDir, {
+            sourceId: args.sourceId,
+            package: { name: args.name, version: args.version },
+            sourceKind: kind,
+            apiBaseUrl: args.apiBaseUrl,
+            ...(tokenEnv !== undefined ? { apiTokenEnv: tokenEnv } : {}),
+            registeredAt: new Date().toISOString(),
+          })
+          // 登记连接器（免重启：运行中 registry 即时生效；同 id 先注销再登记 = 幂等替换）
+          if (dataSources.has(args.sourceId)) dataSources.unregister(args.sourceId)
+          dataSources.register(
+            args.sourceId,
+            createMappedDataConnector({
+              sourceId: args.sourceId,
+              baseUrl: args.apiBaseUrl,
+              shape: src.shape,
+              maps,
+              kind,
+              ...(token !== null ? { auth: { token } } : {}),
+            }),
+          )
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                name: args.name,
+                version: args.version,
+                sourceId: args.sourceId,
+                sourceKind: kind,
+                imported: imported.idempotent === true ? 'idempotent' : 'new',
+                activated: false as const,
+                humanReviewRequired: true as const,
+              },
+              [],
+            ),
+          )
+        },
+        [],
+      ),
+    }))
+
+  reg('dev', () => defineTool({
+      name: 'activate_business',
+      description:
+        '人工激活已发布的业务域（发布业务 v1）：激活后新运行只绑活动版本；同包其它版本拒绝（RELEASE_VERSION_NOT_ACTIVE）。'
+        + '激活的放行条件唯一是系统批准卡；authorizedBy 记宿主发起人 ID（审计口径：非批准卡点卡人留痕，不收模型自称）。回滚用 rollback_business。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求激活时传 true。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        version: { type: 'string', required: true, description: '要激活的版本（须已 publish）' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求激活时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            version: { type: 'string', required: true },
+            activated: { type: 'boolean', required: true, const: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as unknown as { name: string; version: string; previous: string | null }
+          return textBlock(
+            `业务域已激活：${v.name}@${v.version}${v.previous === null || v.previous === undefined ? '' : `（此前 ${v.previous}）`}。`
+            + '新运行绑定该版本；未激活的受管包仍拒绝。humanReviewRequired=true。',
+          )
+        },
+      },
+      execute: toolExecute(
+        async (args: { name: string; version: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '激活')
+          // 发起人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称（同复核人绑定口径）。
+          // 审计口径：authorizedBy 是宿主发起人 ID，**不是**批准卡实际点卡人；放行条件唯一是系统批准卡。
+          // 身份先于批准卡：身份缺席时不劳烦批卡。若后续要收紧，另定发布角色 + 点卡人留痕。
+          const identity = requireBusinessIdentity('history')
+          const digest = actionDigest({ op: 'activate_business', name: args.name, version: args.version })
+          const grant = await approve(exec, {
+            toolName: 'activate_business',
+            action: `激活业务域 ${args.name}@${args.version}`,
+            digest,
+            summary: `授权人激活后新运行绑定 ${args.version}`,
+          })
+          const act = releases.activate(args.name, args.version, {
+            authorizedBy: identity.userId,
+            approvalDigest: grant.approvalDigest,
+          })
+          return toolOut(
+            enforceOutputPolicy(
+              {
+                name: args.name,
+                version: args.version,
+                activated: true as const,
+                authorizedBy: identity.userId,
+                previous: (act as { previous?: string | null }).previous ?? null,
+                humanReviewRequired: true as const,
+              },
+              [],
+            ),
+          )
+        },
+        [],
+      ),
+    }))
+
+  reg('dev', () => defineTool({
+      name: 'rollback_business',
+      description:
+        '回滚业务域的活动指针到上一活动版本（发布业务 v1）：只动该包自身的活动指针（历史保留），'
+        + '不影响已有业务与其它包；连接器登记随源配置保留（版本回滚不注销数据源）。'
+        + '无上一版本拒绝（RELEASE_NOT_FOUND）。放行以系统批准卡为准；authorizedBy 记宿主发起人 ID（审计口径：非批准卡点卡人留痕）。'
+        + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求回滚时传 true。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名' },
+        humanApproved: {
+          type: 'boolean',
+          required: true,
+          description: '意图声明（非放行凭证）：仅当用户明确要求回滚时传 true；实际放行以系统批准卡为准',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            name: { type: 'string', required: true },
+            rolledBackTo: { type: 'string', required: true },
+            humanReviewRequired: { type: 'boolean', required: true, const: true },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as unknown as { name: string; rolledBackTo: string }
+          return textBlock(`业务域已回滚：${v.name} → ${v.rolledBackTo}。新运行绑定回滚后版本；其它业务不受影响。humanReviewRequired=true。`)
+        },
+      },
+      execute: toolExecute(
+        async (args: { name: string; humanApproved: boolean }, exec) => {
+          assertHumanApproved(args.humanApproved, '回滚')
+          // 身份先于批准卡（同 activate_business 口径）；authorizedBy 记宿主发起人 ID（非点卡人留痕）。
+          const identity = requireBusinessIdentity('history')
+          const digest = actionDigest({ op: 'rollback_business', name: args.name })
+          const grant = await approve(exec, {
+            toolName: 'rollback_business',
+            action: `回滚业务域 ${args.name}`,
+            digest,
+            summary: `活动指针回上一版本（仅 ${args.name} 自身）`,
+          })
+          const act = releases.rollback(args.name, {
+            authorizedBy: identity.userId,
+            approvalDigest: grant.approvalDigest,
+          })
+          const rolled = (act as { package?: { version?: string } }).package?.version ?? ''
+          return toolOut(
+            enforceOutputPolicy(
+              { name: args.name, rolledBackTo: rolled, humanReviewRequired: true as const },
+              [],
+            ),
+          )
+        },
+        [],
       ),
     }))
 

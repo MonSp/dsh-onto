@@ -225,6 +225,7 @@ No UI required first — ask in a dsh session that has the RUN tool face.
 | Expand graph neighborhood | `expand_entity` | Data prep only — **does not score** |
 | View interactive report | `show_run_report` | Renders one run in chat (optional surface organizes the view) |
 | Save report page | `save_report_page` / `list_report_pages` | Persist a used view as a reusable plugin page |
+| Cross-run compare | `show_run_diff` | Compare card: delta table + hit/excluded add-remove (absent side stays null, never 0) |
 | Read package | `get_package` etc. | Read-only |
 | Change criteria | `apply_draft` | Draft queue — **never writes ISSUED** |
 
@@ -265,7 +266,11 @@ Candidate TAX-CAND-001 (object 91110000T001)
 Same execution path as the page table, different presentation; `show_run_report` also opens
 an interactive report over the same projection in chat (summary card / candidate table /
 evidence expand), and a used view can be saved as a reusable report page and re-applied to
-another run.
+another run. Report surfaces are organized with `dsh-onto/report/v1` components (18 total:
+KeyValue/Badge/Callout/Progress/Timeline/Tabs + Chart bars/line/donut multi-series, `when`
+conditional display, typed table columns; export copies Markdown/CSV); `show_run_diff`
+opens a cross-run compare card (delta table + hit/excluded add-remove, absent side stays
+null never 0) — numeric slots always accept field bindings only.
 
 ### 5.4 Pre-flight checks
 

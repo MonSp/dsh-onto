@@ -1,0 +1,23 @@
+kind: O2ScoreRules
+rules:
+  - id: RULE-EBC-SCORE-FLYLINE
+    name: 飞线充电
+    description: 楼栋外立面飞线充电事件次数累积。
+    weight: 0.4
+    expression: "min(1, flyLineCount / 2)"
+    threshold: 0.5
+    evidenceTemplate: 飞线充电 {flyLineCount} 次
+  - id: RULE-EBC-SCORE-INDOOR
+    name: 入户充电
+    description: 电动自行车入户/楼道内充电事件次数累积。
+    weight: 0.35
+    expression: "min(1, indoorChargeCount / 2)"
+    threshold: 0.5
+    evidenceTemplate: 入户充电 {indoorChargeCount} 次
+  - id: RULE-EBC-SCORE-BLOCKAGE
+    name: 通道堵塞
+    description: 疏散通道被车辆或线缆堵塞。
+    weight: 0.25
+    expression: "min(1, blockageCount)"
+    threshold: 1
+    evidenceTemplate: 通道堵塞 {blockageCount} 处

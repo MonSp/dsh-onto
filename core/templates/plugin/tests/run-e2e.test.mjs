@@ -13,24 +13,38 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
 const config = JSON.parse(readFileSync(join(ROOT, 'plugin.config.json'), 'utf8'))
 const packageDir = process.env.DSH_ONTO_PACKAGE_DIR ?? config.packageDir
+const DATA_MODE = config.dataMode === 'dataset' ? 'dataset' : 'connector'
 
-function fixtureRows() {
+function fixtureBody() {
   const fixturePath = join(HERE, 'fixtures', 'replay.json')
-  assert.ok(existsSync(fixturePath), `缺少回放夹具: ${fixturePath}`)
-  const body = JSON.parse(readFileSync(fixturePath, 'utf8'))
-  if (config.shape.mode === 'snapshot') return extractSnapshotRows(body, config.shape)
+  assert.ok(existsSync(fixturePath), `缺少运行夹具: ${fixturePath}`)
+  return JSON.parse(readFileSync(fixturePath, 'utf8'))
+}
+
+/**
+ * 数据集取位：dataset 模式夹具即数据集本体（纯内容包，无映射）；
+ * connector 模式夹具是源快照，经冻结的映射契约转换（diagnostics 零错误断言在测试里）。
+ */
+function fixtureDataset() {
+  const body = fixtureBody()
+  if (DATA_MODE === 'dataset') {
+    // dataset 模式夹具即数据集本体：显式断言形状（否则下方 diagnostics 断言在本臂恒真）
+    assert.ok(Array.isArray(body.objects) && body.objects.length > 0, 'dataset 夹具须含对象')
+    assert.ok(Array.isArray(body.candidates) && body.candidates.length > 0, 'dataset 夹具须含候选')
+    return { dataset: body, diagnostics: [] }
+  }
+  if (config.shape.mode === 'snapshot') return transformSourceRows({ rows: extractSnapshotRows(body, config.shape), maps: config.maps })
   const rows = {}
   for (const [c, v] of Object.entries(body)) {
     rows[c] = Array.isArray(v) ? v : (v?.items ?? [])
   }
-  return rows
+  return transformSourceRows({ rows, maps: config.maps })
 }
 
-test('回放夹具 → 映射 → 场景：候选/命中规则/证据/人审齐全', () => {
+test('运行夹具 → 场景：候选/命中规则/证据/人审齐全', () => {
   const pkg = loadPackage(packageDir)
   assert.equal(pkg.meta.status, 'ISSUED')
-  const rows = fixtureRows()
-  const { dataset, diagnostics } = transformSourceRows({ rows, maps: config.maps })
+  const { dataset, diagnostics } = fixtureDataset()
   assert.equal(
     diagnostics.filter((d) => d.level === 'error').length,
     0,
@@ -46,11 +60,10 @@ test('回放夹具 → 映射 → 场景：候选/命中规则/证据/人审齐�
   assert.equal(result.audit.passed, true, JSON.stringify(result.audit.checks))
 })
 
-test('页面与 Agent 同源：runScenario 单一执行路径（同快照同分）', () => {
+test('runScenario 幂等：同输入双跑逐候选同分（页面/对话同一执行路径的同源保障）', () => {
   // 页面 wire 与 Agent run_scenario 工具调用的是同一 runScenario——此处双跑断言幂等同分
-  const rows = fixtureRows()
-  const a = transformSourceRows({ rows, maps: config.maps }).dataset
-  const b = transformSourceRows({ rows, maps: config.maps }).dataset
+  const a = fixtureDataset().dataset
+  const b = fixtureDataset().dataset
   const ra = runScenario(packageDir, config.scenarioId, a)
   const rb = runScenario(packageDir, config.scenarioId, b)
   const proj = (r) =>
@@ -61,8 +74,7 @@ test('页面与 Agent 同源：runScenario 单一执行路径（同快照同分�
 })
 
 test('报表投影：buildRunReport 与运行结果逐项同分（页面/对话共用投影）', () => {
-  const rows = fixtureRows()
-  const { dataset } = transformSourceRows({ rows, maps: config.maps })
+  const { dataset } = fixtureDataset()
   const result = runScenario(packageDir, config.scenarioId, dataset)
   const meta = loadPackage(packageDir).meta
   const report = buildRunReport(

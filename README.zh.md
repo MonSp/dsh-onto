@@ -40,6 +40,10 @@
 - **对话报表** —— 会话内交互报表（摘要卡/候选表/证据展开；筛选·展开·跳转），`show_run_report`
   与固定页共用 `getRunReport` 同一投影；用过的视图沉淀为可复用报表页，换 run 复用
   （`save_report_page`）· 主对话 · Web
+- **报表组件与跨 run 对比** —— catalog `dsh-onto/report/v1` 扩至 18 组件（KeyValue/Badge/
+  Callout/Progress/Timeline/Tabs + Chart bars/line/donut 多系列分组/堆叠、when 条件显隐、
+  表格列类型、spark、色板）；表格导出复制 Markdown/CSV；`show_run_diff` 跨 run 对比卡
+  （delta 表 + 命中/排除增删，缺席侧 null 不补 0）· 主对话 · Web
 - **可信业务执行** —— 三状态数据面、六元组鉴权、决定→提案台账、外部回执与对账（无回执 ⇒ `unknown`）、
   ticket-sim 与测试适配器 · 实现在 **`@dsh-onto/runtime`** · `record_review_decision` /
   `create_action_proposal` / `execute_behavior_action` / `reconcile_action`

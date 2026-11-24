@@ -826,7 +826,7 @@ test('I4 收权：新工具面 objectId/objectRef 入参同过 guard，未命中
   assert.equal(grantGuardDecision('export_audit', { runId: 'run-a' }, () => []), undefined)
   assert.equal(grantGuardDecision('show_run_diff', { runIdA: 'run-a', runIdB: 'run-b' }, () => []), undefined)
   // 注入 objectId：同 guard 收口，未收权即拒
-  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'show_run_diff', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
+  for (const tool of ['compare_runs', 'run_scenarios', 'export_audit', 'show_run_diff', 'publish_business', 'activate_business', 'rollback_business', 'recall_experience', 'annotate_experience', 'abstract_experience']) {
     const denial = grantGuardDecision(tool, { runId: 'run-a', objectId: 'OBJ-NOPE' }, () => [])
     assert.ok(typeof denial === 'string' && denial.includes('OBJECT_NOT_GRANTED'), `${tool} 应拒: ${String(denial)}`)
   }
@@ -989,6 +989,9 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   assert.ok(ONTOOL_NAMES.has('show_run_diff'), 'show_run_diff 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('list_report_pages'), 'list_report_pages 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('publish_business'), 'publish_business 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('activate_business'), 'activate_business 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('rollback_business'), 'rollback_business 须入 ONTOOL_NAMES')
 })
 
 test('A-2 参数校验：hops 超界、seedIds 空/超限/错型、坏 direction、recipes 超限 → INVALID_ARGS', () => {
@@ -1261,17 +1264,35 @@ test('T2.1-3 摘要绑定：指纹键序/ID 序无关；载荷/版本一变指�
   assert.notEqual(actionDigest({ a: 1 }), actionDigest({ a: 2 }))
 })
 
-test('T2.1-4 源断言：六个人审写工具闭包先过批准卡才落动作；批准后复核指纹 + 凭证留痕在场', () => {
+test('T2.1-4 源断言：人审写工具同族（建模六工具 + 发布业务三工具）闭包先过批准卡才落动作；批准摘要绑定载荷，发布/物化族另锚批准后复核（APPROVAL_STALE）+ 凭证留痕（approvalDigest）', () => {
   const src = readFileSync(join(REPO, 'runtime', 'src', 'agent-tools.ts'), 'utf8')
-  for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience']) {
+  for (const tool of ['apply_draft', 'reject_draft', 'create_package', 'save_skeleton', 'annotate_experience', 'abstract_experience', 'publish_business', 'activate_business', 'rollback_business']) {
     const head = src.indexOf(`name: '${tool}'`)
     assert.ok(head > 0, `${tool} 登记应在场`)
     const next = src.indexOf("name: '", head + 10)
     const slice = src.slice(head, next > 0 ? next : src.length)
-    assert.ok(slice.includes('await approve(exec'), `${tool} 闭包须过批准卡（T2.1）`)
+    const approveAt = slice.indexOf('await approve(exec')
+    assert.ok(approveAt > 0, `${tool} 闭包须过批准卡（T2.1）`)
+    // 批准摘要必须绑定载荷指纹（内联 digest: actionDigest(…) 或先算 const digest = …）
+    assert.ok(
+      /digest:\s*actionDigest\(|const digest = (?:actionDigest|digestDraftBatch)\(/.test(slice),
+      `${tool} 批准摘要须绑定载荷指纹（T2.1）`,
+    )
   }
-  assert.ok(src.includes('APPROVAL_STALE'), '批准后草案漂移须作废凭证（APPROVAL_STALE）')
-  assert.ok(src.includes("approvalDigest: digest"), 'review 留痕须绑批次摘要')
+  // 发布/物化族的「批准后复核 + 凭证留痕」逐闭包锚定（不再靠全局 includes 蒙混）：
+  // apply_draft 批后复核草案漂移（APPROVAL_STALE）+ review 留痕 approvalDigest
+  const applySlice = src.slice(src.indexOf("name: 'apply_draft'"), src.indexOf("name: 'reject_draft'"))
+  assert.ok(applySlice.includes('APPROVAL_STALE'), 'apply_draft 批准后草案漂移须作废凭证（APPROVAL_STALE）')
+  assert.ok(applySlice.includes('approvalDigest'), 'apply_draft review 留痕须绑批次摘要')
+  // publish_business 批后复核包内容漂移 + approvalDigest 入发布台账 history
+  const pubSlice = src.slice(src.indexOf("name: 'publish_business'"), src.indexOf("name: 'activate_business'"))
+  assert.ok(pubSlice.includes('APPROVAL_STALE'), 'publish_business 批准后包内容漂移须作废凭证（APPROVAL_STALE）')
+  assert.ok(pubSlice.includes('approvalDigest'), 'publish_business 留痕 approvalDigest 入发布台账')
+  // activate/rollback 为指针动作（无内容漂移面），但凭证摘要必须入 history 留痕
+  const actSlice = src.slice(src.indexOf("name: 'activate_business'"), src.indexOf("name: 'rollback_business'"))
+  const rbSlice = src.slice(src.indexOf("name: 'rollback_business'"), src.indexOf("name: 'create_package'"))
+  assert.ok(actSlice.includes('approvalDigest'), 'activate_business 留痕 approvalDigest 入发布台账')
+  assert.ok(rbSlice.includes('approvalDigest'), 'rollback_business 留痕 approvalDigest 入发布台账')
   // humanApproved 布尔不再是凭证：凭证只认服务回执（批准闸代码不得读 humanApproved）
   const apSrc = readFileSync(join(REPO, 'runtime', 'src', 'agent-approval.ts'), 'utf8')
   const apCode = apSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')

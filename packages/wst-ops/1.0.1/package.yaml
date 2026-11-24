@@ -1,0 +1,17 @@
+kind: BusinessOntologyPackage
+name: wst-ops
+version: 1.0.1
+domain: WST
+metaFrameworkVersion: "1.0"
+status: ISSUED
+issueRecord:
+  - version: 1.0.0
+    issuedAt: 2026-11-21T20:50:58.270Z
+    issuedBy: 验收主持人（人工代办）
+    manifestDigest: bd155898427c4a7da86f8a4dbed3e71fe88e56077704a6d7395a81b70eb43182
+  - version: 1.0.1
+    issuedAt: 2026-11-23T08:03:43.719Z
+    issuedBy: 验收主持人（人工代办）
+    note: 发布业务回滚链备链
+    manifestDigest: 8a29fafb722583bfdd9726ffd7840d1357a6f82c6c3f361c0535eaca40a1b2ef
+externalRefs: []

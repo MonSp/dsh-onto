@@ -20,7 +20,7 @@ import { createExtDataConnector } from './data-source-ext.js'
 import { dataSources } from './data-sources.js'
 import { businessPolicy, createLazyUserResolver } from './business-policy.js'
 import { setFormalActionEnabled } from './action-executor.js'
-import { runtimeContextForHost } from '@dsh-onto/runtime'
+import { runtimeContextForHost, restoreManagedDataSources, resolveDataDir } from '@dsh-onto/runtime'
 
 export * from './services.js'
 export * from './source-face.js'
@@ -119,5 +119,13 @@ function mount(ctx: Context): void {
   setFormalActionEnabled(process.env.DSH_FORMAL_ACTION_ENABLED === '1')
   if (process.env.DSH_FORMAL_ACTION_ENABLED === '1') {
     console.log('[dsh-onto] formal action ENABLED by deployment config')
+  }
+  // 发布业务 v1：受控数据源配置随宿主启动恢复（免重启发布只保即时生效；重启存活靠此重建登记）。
+  // 已登记 sourceId 不覆盖（env/部署登记优先）；配置缺失或复核失败 fail-closed（跳过登记，运行按未登记拒）。
+  // 恢复失败不得拖垮整个 mount（如 profileContext 缺席）：降级为不登记，运行面照常未登记拒。
+  try {
+    restoreManagedDataSources(resolveDataDir(ctx))
+  } catch (e) {
+    console.warn(`[dsh-onto] 受控数据源启动恢复未执行（fail-closed，全部不登记）：${e instanceof Error ? e.message : String(e)}`)
   }
 }

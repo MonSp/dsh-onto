@@ -1,0 +1,8 @@
+kind: O1RelationTypes
+relations:
+  - id: REL-EBC-LOCATED
+    name: 设施位于楼栋
+    from: OBJ-EBC-CHARGER
+    to: OBJ-EBC-BUILDING
+    attributes: []
+    description: 充电设施对楼栋的从属关系（来源 chargers.buildingId 外键）

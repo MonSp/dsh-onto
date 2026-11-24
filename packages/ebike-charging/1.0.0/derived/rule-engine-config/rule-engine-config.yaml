@@ -1,0 +1,42 @@
+kind: DerivedRuleEngineConfig
+llmForbidden: true
+weightSum: 1
+exclusion:
+  - id: RULE-EBC-EXCL-CERTIFIED
+    name: 已验收合规充电区排除
+    action: drop
+    factor: null
+    condition: tag == 'certified-charging'
+    order: before-scoring
+  - id: RULE-EBC-EXCL-RECTIFIED
+    name: 已完成整改降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'rectified'
+    order: before-scoring
+scoring:
+  - id: RULE-EBC-SCORE-FLYLINE
+    name: 飞线充电
+    weight: 0.4
+    expression: min(1, flyLineCount / 2)
+    threshold: 0.5
+    evidenceTemplate: 飞线充电 {flyLineCount} 次
+  - id: RULE-EBC-SCORE-INDOOR
+    name: 入户充电
+    weight: 0.35
+    expression: min(1, indoorChargeCount / 2)
+    threshold: 0.5
+    evidenceTemplate: 入户充电 {indoorChargeCount} 次
+  - id: RULE-EBC-SCORE-BLOCKAGE
+    name: 通道堵塞
+    weight: 0.25
+    expression: min(1, blockageCount)
+    threshold: 1
+    evidenceTemplate: 通道堵塞 {blockageCount} 处
+skillTemplates:
+  - id: SKL-EBC-CHARGE-NARRATIVE
+    name: 充电隐患排查叙述
+    weights:
+      RULE-EBC-SCORE-FLYLINE: 0.4
+      RULE-EBC-SCORE-INDOOR: 0.35
+      RULE-EBC-SCORE-BLOCKAGE: 0.25

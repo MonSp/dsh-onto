@@ -1,8 +1,10 @@
 /**
  * A2UI 1.0 子集 surface 契约（spec chat-run-report S2.2）：报表对话视图的声明式布局。
  *
- * - catalog `dsh-onto/report/v1`：Card/Stat/Row/Column/Text/Table/Accordion/Button
- *   （同名沿用 A2UI 1.0 basic catalog，Table/Stat/Accordion 为本 catalog 扩展）；
+ * - catalog `dsh-onto/report/v1`（18 组件，见 SURFACE_COMPONENT_TYPES）：
+ *   Card/Stat/Row/Column/Text/Table/Accordion/Button（基础 8 件同名沿用 A2UI 1.0 basic
+ *   catalog，Table/Stat/Accordion 为本 catalog 扩展）+ KeyValue/Badge/Callout/Progress/
+ *   Timeline/Tabs/Chart/Input/Select/Compare；
  * - 红线：数值/分数/规则 ID/证据等数据槽位只接受字段绑定（`bind`/`field`），
  *   字面量数据 → 校验拒绝；标题/列名/标签等叙事文本允许字面量；
  * - 一次调用一个自包含快照（createSurface），不跨调用改写历史卡片。

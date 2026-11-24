@@ -1,0 +1,42 @@
+kind: DerivedRuleEngineConfig
+llmForbidden: true
+weightSum: 1
+exclusion:
+  - id: RULE-WST-EXCL-CLEARED
+    name: 已核销白名单排除
+    action: drop
+    factor: null
+    condition: tag == 'cleared-whitelist'
+    order: before-scoring
+  - id: RULE-WST-EXCL-RECENT-EMPTY
+    name: 近期已清运降权
+    action: downweight
+    factor: 0.5
+    condition: tag == 'recently-emptied'
+    order: before-scoring
+scoring:
+  - id: RULE-WST-SCORE-FILL
+    name: 满溢风险
+    weight: 0.4
+    expression: min(1, fillRatio)
+    threshold: 0.8
+    evidenceTemplate: 桶位满溢度 {fillRatio}
+  - id: RULE-WST-SCORE-MIX
+    name: 危险混投
+    weight: 0.35
+    expression: min(1, mixCount / 2)
+    threshold: 0.5
+    evidenceTemplate: 危险混投次数 {mixCount}
+  - id: RULE-WST-SCORE-HAZARD
+    name: 危废标记
+    weight: 0.25
+    expression: min(1, hazardFlag)
+    threshold: 1
+    evidenceTemplate: 危废标记 {hazardFlag}
+skillTemplates:
+  - id: SKL-WST-HAZARD-MIX-NARRATIVE
+    name: 危废混投满溢排查叙述
+    weights:
+      RULE-WST-SCORE-FILL: 0.4
+      RULE-WST-SCORE-HAZARD: 0.25
+      RULE-WST-SCORE-MIX: 0.35
