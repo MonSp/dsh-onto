@@ -28,11 +28,14 @@ Any domain swaps package content only — the skeleton stays the same.
 > **Delivery** takes an issued version through publish/deploy, the managed gate, go-live
 > acceptance (per rail) and human activation: ISSUED ≠ loadable ≠ active. **Operations** run
 > from the dual entry (expert agent / business page system) through query & analyze into
-> rule-engine judgment and human determination — act (approval card), review and reports are
-> post-determination outputs (output contract defined at design time, result projections at
-> run time) — with two feedback loops: insufficient evidence → pending verification (stays
-> with the run, back to query/analyze); human corrections → experience backfill → candidate
-> drafts → approval → a new version (never into ISSUED).
+> rule-engine judgment, yielding a **run result** (`humanReviewRequired=true` marks “pending
+> review”, not a determination) → review queue → human determination; reports branch straight
+> from the run result (a projection of run records, no need to wait for review) while actions
+> keep their own approval gate after determination. Two feedback loops, each with its own
+> start point: insufficient evidence branches from the run result → pending verification
+> (stays with the run, back to query/analyze); human corrections branch from determination →
+> experience backfill → draft a candidate if warranted → approval → a new version (back to
+> modeling; never into ISSUED).
 >
 > Chinese original: [README.zh.md](README.zh.md) · [docs/overview-pipeline.zh.svg](docs/overview-pipeline.zh.svg)
 
