@@ -89,7 +89,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // 最小运行页所需 RUN 面；无 DEV 命名空间。
+    // RUN 面 + 复核面（issue #30 WP-A）；无 DEV 命名空间。
     const allDescriptors: InvocationDescriptorLike[] = [
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
@@ -99,6 +99,10 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records (human-review face).'),
       desc('ontoRuntime', 'listReportPages', false, 'RLP', 'List saved report pages (human-review face).'),
       desc('ontoRuntime', 'getReportPage', true, 'RGP', 'Show one saved report page (human-review face).'),
+      desc('ontoRuntime', 'exportAudit', true, 'RXP', 'Export run audit archive + governance chain.'),
+      desc('ontoRuntime', 'listReviewQueue', false, 'RRQ', 'List review queue (RunRecord x ReviewDecision).'),
+      desc('ontoRuntime', 'reviewChain', true, 'RRC', 'Governance chain: decision -> proposal -> action.'),
+      desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record a human review decision (UI face).'),
     ]
 
     const React = require('react') as typeof import('react')

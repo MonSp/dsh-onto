@@ -61,4 +61,10 @@ export const CSS = `
 .txri-gov .txri-cellbar { display: flex; align-items: center; gap: 6px; min-width: 90px; }
 .txri-gov .txri-cellbar .txri-pfill { flex: 0 0 auto; min-width: 2px; }
 .txri-gov .txri-spark { display: inline-block; vertical-align: middle; margin-left: 8px; opacity: 0.8; }
+.txri-gov .txri-layout { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.4fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .txri-gov .txri-layout { grid-template-columns: 1fr; } }
+.txri-gov .txri-cand-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.txri-gov .txri-warnbox { border-left: 3px solid #e67700; padding: 6px 10px; margin: 6px 0; font-size: 12px; opacity: 0.95; }
+.txri-gov .txri-section { border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); margin-top: 10px; padding-top: 8px; }
+.txri-gov button.txri-danger { border-color: #e03131; color: #e03131; }
 `

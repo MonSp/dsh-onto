@@ -347,6 +347,743 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
   )
 }
 
+/* ── 复核面（issue #30 WP-A）：队列 → 证据 → 决定 → 治理链（形制参照 apps/aml 治理工作台） ── */
+
+function Tag(props: { text: string; tone?: 'ok' | 'warn' | 'err' }) {
+  const cls = props.tone ? `tag ${props.tone}` : 'tag'
+  return h('span', { className: cls }, props.text)
+}
+
+function reviewTone(status: string): 'ok' | 'warn' | 'err' | undefined {
+  if (status === 'approved') return 'ok'
+  if (status === 'pending') return 'warn'
+  if (status === 'rejected') return 'err'
+  return undefined
+}
+
+function chainTone(status: string): 'ok' | 'warn' | 'err' | undefined {
+  if (status === 'succeeded' || status === 'approved' || status === 'consumed' || status === 'passed') return 'ok'
+  if (status === 'executing' || status === 'pending' || status === 'dispatched' || status === 'unknown') return 'warn'
+  if (status === 'failed' || status === 'rejected' || status === 'canceled') return 'err'
+  return undefined
+}
+
+type ReviewStatus = 'pending' | 'approved' | 'rejected'
+
+interface RunRow {
+  runId: string
+  scenarioId: string
+  package: { name: string; version: string }
+  datasetDigest: string
+  auditPassed: boolean
+  savedAt: string
+  reviewStatus: ReviewStatus
+  latestDecision?: {
+    decisionId: string
+    decision: 'approved' | 'rejected'
+    createdAt: string
+    reason?: string
+    candidateIds: string[]
+  }
+}
+
+interface CandidateDetail {
+  candidateId: string
+  objectRef: string
+  riskScore: number
+  riskLevel?: string
+  hitRuleIds: string[]
+  evidenceChains: Array<{ ruleId: string; score: number; evidence: string }>
+  narrative: string[]
+  pendingChecks: Array<{ ruleId?: string; missing?: string[]; note: string }>
+  pendingVerification: boolean
+}
+
+interface RunDetail {
+  record: {
+    runId: string
+    package: { name: string; version: string }
+    scenarioId: string
+    datasetDigest: string
+    savedAt: string
+    result: {
+      candidates: CandidateDetail[]
+      ruleHitLog: Array<{ ruleId: string; candidateId: string; score: number; ts: string }>
+      reviewGate?: { threshold: number; required: boolean; requireReviewFor: string[] }
+      audit: {
+        checks: Array<{ check: string; closed: boolean; detail: string }>
+        forbiddenPhraseHits: Array<{ phrase: string; where: string }>
+        passed: boolean
+      }
+      humanReviewRequired: true
+    }
+  }
+}
+
+interface ChainData {
+  decisions: Array<{
+    decisionId: string
+    candidateIds: string[]
+    reviewer: string
+    decision: string
+    reason?: string
+    snapshotDigest: string
+    ruleFingerprint: string
+  }>
+  proposals: Array<{
+    proposalId: string
+    decisionId: string
+    candidateId: string
+    behaviorId: string
+    objectRef: string
+    operationId: string
+    status: string
+  }>
+  actions: Array<{
+    actionId: string
+    decisionId?: string
+    proposalId?: string
+    behaviorId: string
+    objectRef: string
+    status: string
+    phase?: string
+    approvalDigest: string
+    externalRef?: string
+  }>
+}
+
+function isReconcilePending(a: ChainData['actions'][number]): boolean {
+  return a.status === 'unknown' || a.status === 'dispatched' || a.phase === 'dispatched'
+}
+
+function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
+  const { t, ctx } = props
+  const api = ctx.remote['ontoRuntime']
+  const [runs, setRuns] = useState<RunRow[]>([])
+  const [filter, setFilter] = useState<'all' | ReviewStatus>('all')
+  const [detail, setDetail] = useState<RunDetail | null>(null)
+  const [chain, setChain] = useState<ChainData | null>(null)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
+  const [selectedCandidate, setSelectedCandidate] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [decision, setDecision] = useState<'approved' | 'rejected'>('approved')
+  const [reason, setReason] = useState('')
+
+  const loadRuns = () => {
+    if (!api) return
+    void (async () => {
+      setError('')
+      setBusy('runs')
+      try {
+        const out = unwrap<{ runs: RunRow[] }>(await api.listReviewQueue())
+        setRuns(out.runs ?? [])
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  useEffect(() => {
+    loadRuns()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!api) {
+    return h('div', { className: 'txri-gov' }, h('p', { className: 'txri-err' }, 'remote.ontoRuntime missing'))
+  }
+
+  // 原子切换：先清空 detail/chain，避免「新 run 证据 + 旧 run 治理链」半成功态
+  const openRun = (runId: string) => {
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('detail')
+      setDetail(null)
+      setChain(null)
+      setSelectedIds([])
+      setSelectedCandidate('')
+      setDecision('approved')
+      setReason('')
+      try {
+        const [detailOut, chainOut] = await Promise.all([
+          Promise.resolve(api.showRun({ runId })).then((v) => unwrap<RunDetail>(v)),
+          Promise.resolve(api.reviewChain({ runId })).then((v) => unwrap<ChainData>(v)),
+        ])
+        setDetail(detailOut)
+        setChain(chainOut)
+        const cands = detailOut.record?.result?.candidates ?? []
+        // 不默认全选：批准须显式勾选候选，防一键批量误批
+        setSelectedIds([])
+        setSelectedCandidate(cands[0]?.candidateId ?? '')
+      } catch (e) {
+        setDetail(null)
+        setChain(null)
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const reasonRequired = decision === 'approved'
+  const reasonOk = !reasonRequired || reason.trim() !== ''
+  const canSubmit = !busy && selectedIds.length > 0 && reasonOk
+
+  const submitReview = () => {
+    if (!detail || !canSubmit) return
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('review')
+      try {
+        const rec = detail.record
+        const out = unwrap<{ decisionId: string; decision: string }>(
+          await api.recordReviewDecision({
+            runId: rec.runId,
+            candidateIds: selectedIds,
+            snapshotDigest: rec.datasetDigest,
+            ruleFingerprint: `${rec.package.name}@${rec.package.version}`,
+            decision,
+            ...(reason.trim() !== '' ? { reason: reason.trim() } : {}),
+          }),
+        )
+        setOkMsg(`${t('reviewSubmitted')}: ${out.decisionId} (${out.decision})`)
+        loadRuns()
+        const chainOut = unwrap<ChainData>(await api.reviewChain({ runId: rec.runId }))
+        setChain(chainOut)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const exportAudit = () => {
+    if (!detail) return
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('export')
+      try {
+        const out = unwrap<{ locator: string; chainLocator?: string }>(
+          await api.exportAudit({ runId: detail.record.runId }),
+        )
+        setOkMsg(`${t('exportAuditDone')}: ${out.locator}${out.chainLocator ? ` / ${out.chainLocator}` : ''}`)
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const filtered = runs.filter((r) => filter === 'all' || r.reviewStatus === filter)
+
+  const listView = (): ReactNode[] => {
+    const counts = {
+      all: runs.length,
+      pending: runs.filter((r) => r.reviewStatus === 'pending').length,
+      approved: runs.filter((r) => r.reviewStatus === 'approved').length,
+      rejected: runs.filter((r) => r.reviewStatus === 'rejected').length,
+    }
+    return [
+      h(
+        'div',
+        { key: 'bar', className: 'txri-bar' },
+        h('button', { type: 'button', disabled: !!busy, onClick: () => loadRuns() }, t('refresh')),
+        h('span', { className: 'txri-note' }, `${t('runs')}: ${runs.length}`),
+        ...(
+          [
+            ['all', t('filterAll')],
+            ['pending', t('filterPending')],
+            ['approved', t('filterApproved')],
+            ['rejected', t('filterRejected')],
+          ] as Array<['all' | ReviewStatus, string]>
+        ).map(([key, label]) =>
+          h(
+            'button',
+            {
+              key,
+              type: 'button',
+              className: filter === key ? 'txri-primary' : '',
+              onClick: () => setFilter(key),
+            },
+            `${label} (${counts[key]})`,
+          ),
+        ),
+      ),
+      filtered.length > 0
+        ? h(
+            'table',
+            { key: 'tbl' },
+            h(
+              'thead',
+              null,
+              h(
+                'tr',
+                null,
+                h('th', null, t('runId')),
+                h('th', null, t('scenario')),
+                h('th', null, t('reviewStatus')),
+                h('th', null, t('audit')),
+                h('th', null, t('savedAt')),
+                h('th', null, ''),
+              ),
+            ),
+            h(
+              'tbody',
+              null,
+              ...filtered.slice(0, 40).map((r) =>
+                h(
+                  'tr',
+                  { key: r.runId },
+                  h('td', { className: 'txri-mono' }, r.runId),
+                  h('td', { className: 'txri-mono' }, r.scenarioId),
+                  h(
+                    'td',
+                    null,
+                    h(Tag, { text: t(r.reviewStatus), tone: reviewTone(r.reviewStatus) }),
+                    r.latestDecision?.reason
+                      ? h('div', { className: 'txri-note' }, r.latestDecision.reason)
+                      : null,
+                  ),
+                  h('td', null, h(Tag, { text: r.auditPassed ? 'PASS' : 'FAIL', tone: r.auditPassed ? 'ok' : 'err' })),
+                  h('td', { className: 'txri-mono' }, r.savedAt.slice(0, 19).replace('T', ' ')),
+                  h(
+                    'td',
+                    null,
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: detail?.record.runId === r.runId ? 'txri-primary' : '',
+                        disabled: !!busy,
+                        onClick: () => openRun(r.runId),
+                      },
+                      t('openDetail'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : h('p', { key: 'empty', className: 'txri-note' }, t('empty')),
+    ]
+  }
+
+  const evidenceView = (): ReactNode[] => {
+    if (!detail) return [h('p', { key: 'ne', className: 'txri-note' }, t('noDetail'))]
+    const rec = detail.record
+    const res = rec.result
+    const cands = res.candidates ?? []
+    const nodes: ReactNode[] = [
+      h('h3', { key: 'et' }, t('evidence')),
+      h('p', { key: 'er', className: 'txri-note txri-mono' }, rec.runId),
+      h(
+        'div',
+        { key: 'meta', className: 'txri-note' },
+        `${t('scenario')}: ${rec.scenarioId} · ${t('package')}: ${rec.package.name}@${rec.package.version} · `,
+        `${t('datasetDigest')}: ${rec.datasetDigest.slice(0, 12)} · `,
+        `${t('threshold')}: ${res.reviewGate?.threshold ?? '—'} · `,
+        `${t('savedAt')}: ${rec.savedAt.slice(0, 19).replace('T', ' ')} · `,
+        `${t('audit')}: `,
+        h(Tag, { text: res.audit?.passed ? 'PASS' : 'FAIL', tone: res.audit?.passed ? 'ok' : 'err' }),
+      ),
+    ]
+    if (cands.length === 0) {
+      nodes.push(h('p', { key: 'nc', className: 'txri-note' }, t('noCandidates')))
+      return nodes
+    }
+    const current = cands.find((c) => c.candidateId === selectedCandidate) ?? cands[0]
+    nodes.push(
+      h(
+        'div',
+        { key: 'sel', className: 'txri-cand-row' },
+        h('span', { className: 'txri-note' }, `${t('candidates')}:`),
+        ...cands.map((c) =>
+          h(
+            'button',
+            {
+              key: c.candidateId,
+              type: 'button',
+              className: current && c.candidateId === current.candidateId ? 'txri-primary' : '',
+              onClick: () => setSelectedCandidate(c.candidateId),
+            },
+            c.candidateId,
+          ),
+        ),
+      ),
+    )
+    if (current) {
+      const warn = current.pendingVerification || (current.pendingChecks?.length ?? 0) > 0
+      nodes.push(
+        h(
+          'div',
+          { key: 'cmeta', className: 'txri-note' },
+          `${t('objectRef')}: ${current.objectRef} · `,
+          `${t('riskScore')}: ${current.riskScore}`,
+          current.riskLevel ? ` · ${t('riskLevel')}: ${current.riskLevel}` : '',
+          ` · ${t('hitRules')}: ${current.hitRuleIds.join(', ') || '—'}`,
+        ),
+      )
+      if (warn) {
+        nodes.push(h('div', { key: 'warn', className: 'txri-warnbox' }, t('pendingChecks')))
+      }
+      nodes.push(h('h4', { key: 'ech' }, t('evidenceChain')))
+      nodes.push(
+        current.evidenceChains?.length
+          ? h(
+              'ul',
+              { key: 'ecl' },
+              ...current.evidenceChains.map((e, i) =>
+                h(
+                  'li',
+                  { key: `${e.ruleId}-${i}` },
+                  h('span', { className: 'txri-mono' }, `[${e.ruleId} score=${e.score}] `),
+                  e.evidence,
+                ),
+              ),
+            )
+          : h('p', { key: 'ece', className: 'txri-note' }, t('evidenceEmpty')),
+      )
+      nodes.push(h('h4', { key: 'pch' }, t('pendingChecks')))
+      nodes.push(
+        current.pendingChecks?.length
+          ? h(
+              'ul',
+              { key: 'pcl' },
+              ...current.pendingChecks.map((p, i) =>
+                h(
+                  'li',
+                  { key: i },
+                  p.ruleId ? h('span', { className: 'txri-mono' }, `[${p.ruleId}] `) : null,
+                  p.missing?.length ? h('span', { className: 'txri-mono' }, `missing=${p.missing.join(',')} `) : null,
+                  p.note,
+                ),
+              ),
+            )
+          : h('p', { key: 'pce', className: 'txri-note' }, t('pendingChecksEmpty')),
+      )
+      if (current.narrative?.length) {
+        nodes.push(h('h4', { key: 'nch' }, t('narrative')))
+        nodes.push(
+          h('ul', { key: 'ncl' }, ...current.narrative.map((n, i) => h('li', { key: i }, n))),
+        )
+      }
+    }
+    nodes.push(h('h4', { key: 'rhl' }, t('ruleHitLog')))
+    nodes.push(
+      (res.ruleHitLog ?? []).length
+        ? h(
+            'table',
+            { key: 'rhlt' },
+            h(
+              'thead',
+              null,
+              h(
+                'tr',
+                null,
+                h('th', null, 'ruleId'),
+                h('th', null, 'candidateId'),
+                h('th', null, t('riskScore')),
+                h('th', null, 'ts'),
+              ),
+            ),
+            h(
+              'tbody',
+              null,
+              ...(res.ruleHitLog ?? []).map((hrow, i) =>
+                h(
+                  'tr',
+                  { key: i },
+                  h('td', { className: 'txri-mono' }, hrow.ruleId),
+                  h('td', { className: 'txri-mono' }, hrow.candidateId),
+                  h('td', null, String(hrow.score)),
+                  h('td', { className: 'txri-mono' }, hrow.ts.slice(0, 19).replace('T', ' ')),
+                ),
+              ),
+            ),
+          )
+        : h('p', { key: 'rhle', className: 'txri-note' }, t('evidenceEmpty')),
+    )
+    nodes.push(h('h4', { key: 'ach' }, t('auditChecks')))
+    nodes.push(
+      (res.audit?.checks ?? []).length
+        ? h(
+            'ul',
+            { key: 'acl' },
+            ...(res.audit.checks ?? []).map((c, i) =>
+              h(
+                'li',
+                { key: i },
+                h(Tag, { text: c.closed ? 'closed' : 'open', tone: c.closed ? 'ok' : 'warn' }),
+                ' ',
+                h('span', { className: 'txri-mono' }, `${c.check}: `),
+                c.detail,
+              ),
+            ),
+          )
+        : h('p', { key: 'ace', className: 'txri-note' }, t('evidenceEmpty')),
+    )
+    nodes.push(
+      h(
+        'p',
+        { key: 'fph', className: 'txri-note' },
+        `${t('forbiddenHits')}: ${(res.audit?.forbiddenPhraseHits ?? []).length}`,
+      ),
+    )
+    return nodes
+  }
+
+  const reviewFormView = (): ReactNode[] => {
+    if (!detail) return []
+    const cands = detail.record.result.candidates ?? []
+    if (cands.length === 0) return []
+    return [
+      h(
+        'div',
+        { key: 'rf', className: 'txri-section' },
+        h('h4', null, t('reviewForm')),
+        h('p', { className: 'txri-note' }, t('reviewOnlyNote')),
+        h(
+          'div',
+          { className: 'txri-cand-row' },
+          h('span', { className: 'txri-note' }, `${t('selectCandidates')}:`),
+          ...cands.map((c) => {
+            const on = selectedIds.includes(c.candidateId)
+            return h(
+              'label',
+              { key: c.candidateId, style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+              h('input', {
+                type: 'checkbox',
+                checked: on,
+                onChange: () => {
+                  setSelectedIds((prev) =>
+                    on ? prev.filter((x) => x !== c.candidateId) : [...prev, c.candidateId])
+                },
+              }),
+              h('span', { className: 'txri-mono' }, c.candidateId),
+            )
+          }),
+        ),
+        h(
+          'div',
+          { className: 'txri-cand-row' },
+          h('span', { className: 'txri-note' }, `${t('decision')}:`),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: decision === 'approved' ? 'txri-primary' : '',
+              onClick: () => setDecision('approved'),
+            },
+            t('decisionApprove'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: decision === 'rejected' ? 'txri-danger' : '',
+              onClick: () => setDecision('rejected'),
+            },
+            t('decisionReject'),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'txri-cand-row' },
+          h('span', { className: 'txri-note' }, reasonRequired ? t('reasonRequired') : t('reasonLabel')),
+          h('input', {
+            type: 'text',
+            value: reason,
+            style: { flex: '1', minWidth: '160px' },
+            onInput: (e: { target: { value: string } }) => setReason(e.target.value),
+          }),
+        ),
+        h(
+          'div',
+          { className: 'txri-bar' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'txri-primary',
+              disabled: !canSubmit,
+              onClick: () => submitReview(),
+            },
+            t('submitReview'),
+          ),
+          h(
+            'button',
+            { type: 'button', disabled: !!busy || !detail, onClick: () => exportAudit() },
+            t('exportAudit'),
+          ),
+          !reasonOk && selectedIds.length > 0
+            ? h('span', { className: 'txri-note' }, t('reasonRequired'))
+            : null,
+          okMsg ? h('span', { className: 'txri-ok' }, okMsg) : null,
+        ),
+      ),
+    ]
+  }
+
+  const chainView = (): ReactNode[] => {
+    if (!chain) return []
+    const empty = chain.decisions.length === 0 && chain.proposals.length === 0 && chain.actions.length === 0
+    const reconcileActions = chain.actions.filter(isReconcilePending)
+    return [
+      h('h4', { key: 'ct' }, t('chain')),
+      reconcileActions.length > 0
+        ? h(
+            'div',
+            { key: 'rq', className: 'txri-warnbox' },
+            `${t('pendingReconcile')}: ${reconcileActions.map((a) => a.actionId).join(', ')} — ${t('noRetry')}`,
+          )
+        : null,
+      empty ? h('p', { key: 'ce', className: 'txri-note' }, t('chainEmpty')) : null,
+      chain.decisions.length > 0
+        ? h(
+            'table',
+            { key: 'dt' },
+            h(
+              'thead',
+              null,
+              h(
+                'tr',
+                null,
+                h('th', null, t('decision')),
+                h('th', null, 'decisionId'),
+                h('th', null, t('reasonLabel')),
+                h('th', null, t('candidates')),
+                h('th', null, 'reviewer'),
+              ),
+            ),
+            h(
+              'tbody',
+              null,
+              ...chain.decisions.map((d) =>
+                h(
+                  'tr',
+                  { key: d.decisionId },
+                  h('td', null, h(Tag, { text: d.decision, tone: chainTone(d.decision) })),
+                  h('td', { className: 'txri-mono' }, d.decisionId),
+                  h('td', null, d.reason ?? '—'),
+                  h('td', { className: 'txri-mono' }, d.candidateIds.join(', ')),
+                  h('td', { className: 'txri-mono' }, d.reviewer),
+                ),
+              ),
+            ),
+          )
+        : null,
+      chain.proposals.length > 0
+        ? h(
+            'div',
+            { key: 'pn' },
+            h('p', { className: 'txri-note' }, t('proposalNotApproval')),
+            h(
+              'table',
+              null,
+              h(
+                'thead',
+                null,
+                h(
+                  'tr',
+                  null,
+                  h('th', null, t('proposal')),
+                  h('th', null, t('operation')),
+                  h('th', null, t('behaviorObject')),
+                  h('th', null, t('status')),
+                ),
+              ),
+              h(
+                'tbody',
+                null,
+                ...chain.proposals.map((p) =>
+                  h(
+                    'tr',
+                    { key: p.proposalId },
+                    h('td', { className: 'txri-mono' }, p.proposalId),
+                    h('td', { className: 'txri-mono' }, p.operationId),
+                    h('td', { className: 'txri-mono' }, `${p.behaviorId} → ${p.objectRef}`),
+                    h('td', null, h(Tag, { text: p.status, tone: chainTone(p.status) })),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null,
+      chain.actions.length > 0
+        ? h(
+            'table',
+            { key: 'at' },
+            h(
+              'thead',
+              null,
+              h(
+                'tr',
+                null,
+                h('th', null, t('action')),
+                h('th', null, t('status')),
+                h('th', null, t('behaviorObject')),
+                h('th', null, t('externalRef')),
+                h('th', null, t('approval')),
+              ),
+            ),
+            h(
+              'tbody',
+              null,
+              ...chain.actions.map((a) => {
+                const recon = isReconcilePending(a)
+                return h(
+                  'tr',
+                  { key: a.actionId },
+                  h('td', { className: 'txri-mono' }, a.actionId),
+                  h(
+                    'td',
+                    null,
+                    recon
+                      ? h(Tag, { text: t('pendingReconcile'), tone: 'warn' })
+                      : h(Tag, { text: a.status, tone: chainTone(a.status) }),
+                  ),
+                  h('td', { className: 'txri-mono' }, `${a.behaviorId} → ${a.objectRef}`),
+                  h('td', { className: 'txri-mono' }, a.externalRef ?? '—'),
+                  h('td', { className: 'txri-mono' }, a.approvalDigest.slice(0, 12)),
+                )
+              }),
+            ),
+          )
+        : null,
+      h('p', { key: 'sim', className: 'txri-note' }, t('simulatedNote')),
+      h('p', { key: 'hr', className: 'txri-note' }, t('humanReview')),
+    ]
+  }
+
+  return h(
+    'div',
+    { className: 'txri-gov' },
+    h('h3', null, t('reviewTitle')),
+    h('p', { className: 'txri-sub' }, t('reviewSubtitle')),
+    error ? h('p', { className: 'txri-err' }, `${t('error')}: ${error}`) : null,
+    h(
+      'div',
+      { className: 'txri-layout' },
+      h('div', { className: 'txri-panel' }, ...listView()),
+      h(
+        'div',
+        { className: 'txri-panel' },
+        ...evidenceView(),
+        ...reviewFormView(),
+        ...chainView(),
+      ),
+    ),
+  )
+}
+
 export function createPlugin(React: typeof import('react')): PluginModule {
   setReact(React)
 
@@ -374,11 +1111,34 @@ export function createPlugin(React: typeof import('react')): PluginModule {
       }
 
       function Panel() {
+        const [tab, setTab] = useState<'run' | 'review' | 'pages'>('run')
+        const tabs: Array<['run' | 'review' | 'pages', string]> = [
+          ['run', t('tabRun')],
+          ['review', t('tabReview')],
+          ['pages', t('tabPages')],
+        ]
         return h(
           'div',
           null,
-          h(RunPanel, { t, ctx }),
-          h(ReportPages, { t, ctx }),
+          h(
+            'div',
+            { className: 'txri-bar' },
+            ...tabs.map(([key, label]) =>
+              h(
+                'button',
+                {
+                  key,
+                  type: 'button',
+                  className: tab === key ? 'txri-primary' : '',
+                  onClick: () => setTab(key),
+                },
+                label,
+              ),
+            ),
+          ),
+          tab === 'run' ? h(RunPanel, { t, ctx }) : null,
+          tab === 'review' ? h(ReviewPanel, { t, ctx }) : null,
+          tab === 'pages' ? h(ReportPages, { t, ctx }) : null,
         )
       }
 
