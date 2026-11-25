@@ -89,8 +89,9 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // 最小运行页所需 RUN 面；无 DEV 命名空间。
+    // RUN 面 + 复核面（issue #30 WP-A）+ 受控取数面（WP-B）；无 DEV 命名空间。
     const allDescriptors: InvocationDescriptorLike[] = [
+      desc('ontoRuntime', 'listSourceConfigs', true, 'RSC', 'List managed source configs for a package (summary).'),
       desc('ontoRuntime', 'listScenarios', true, 'RTS', 'List scenario cards.'),
       desc('ontoRuntime', 'runScenario', true, 'RTR', 'Run one scenario through the pipeline.'),
       desc('ontoRuntime', 'listRuns', false, 'RLR', 'List persisted run records (summary).'),
@@ -99,6 +100,16 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records (human-review face).'),
       desc('ontoRuntime', 'listReportPages', false, 'RLP', 'List saved report pages (human-review face).'),
       desc('ontoRuntime', 'getReportPage', true, 'RGP', 'Show one saved report page (human-review face).'),
+      desc('ontoRuntime', 'exportAudit', true, 'RXP', 'Export run audit archive + governance chain.'),
+      desc('ontoRuntime', 'listReviewQueue', false, 'RRQ', 'List review queue (RunRecord x ReviewDecision).'),
+      desc('ontoRuntime', 'reviewChain', true, 'RRC', 'Governance chain: decision -> proposal -> action.'),
+      desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record a human review decision (UI face).'),
+      desc('ontoRuntime', 'createActionProposal', true, 'CAP', 'Create an action proposal (governed, single-use).'),
+      desc('ontoRuntime', 'prepareAction', true, 'RPA', 'Issue a UI approval challenge (two-phase approval card).'),
+      desc('ontoRuntime', 'executeAction', true, 'REA', 'Execute an action with UI approval proof (page face).'),
+      desc('ontoRuntime', 'reconcileAction', true, 'RRL', 'Manual reconcile of an unknown/in-flight action record.'),
+      desc('ontoRuntime', 'browseObjects', true, 'RBO', 'Browse entity instances (paged, by type).'),
+      desc('ontoRuntime', 'expandEntity', true, 'REX2', 'Expand entity neighborhood subgraph from seeds.'),
     ]
 
     const React = require('react') as typeof import('react')

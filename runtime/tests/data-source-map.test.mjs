@@ -434,10 +434,10 @@ after(async () => {
   }
 })
 
-/** 起只读 mock（spawn 进程）；等 stdout 的 listening 事件。测试后 kill。 */
-function startMock(serverRelPath, port) {
+/** 起只读 mock（spawn 进程）；等 stdout 的 listening 事件，返回实际绑定端口（--port 0 临时端口，避免与残留监听撞车）。 */
+function startMock(serverRelPath) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [join(ROOT, serverRelPath), '--port', String(port)], {
+    const child = spawn(process.execPath, [join(ROOT, serverRelPath), '--port', '0'], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     spawned.push(child)
@@ -445,9 +445,14 @@ function startMock(serverRelPath, port) {
     const timer = setTimeout(() => reject(new Error(`mock 启动超时: ${serverRelPath}（${buf}）`)), 10_000)
     child.stdout.on('data', (d) => {
       buf += String(d)
-      if (buf.includes('"event":"listening"')) {
+      const line = buf.split('\n').find((l) => l.includes('"event":"listening"'))
+      if (line) {
         clearTimeout(timer)
-        resolve(child)
+        try {
+          resolve(JSON.parse(line).port)
+        } catch {
+          reject(new Error(`mock 端口解析失败: ${serverRelPath}（${line}）`))
+        }
       }
     })
     child.on('exit', (code) => {
@@ -461,9 +466,9 @@ function startMock(serverRelPath, port) {
 }
 
 test('e2e/wst-api：snapshot 模式一次取数，对象/关系/候选/行为计数与关键 id', async () => {
-  await startMock('mock-services/wst-api/server.mjs', 3912)
+  const port = await startMock('mock-services/wst-api/server.mjs')
   const connector = createMappedDataConnector({
-    baseUrl: 'http://127.0.0.1:3912',
+    baseUrl: `http://127.0.0.1:${port}`,
     shape: {
       mode: 'snapshot',
       path: '/api/v1/bin-snapshot',
@@ -508,8 +513,9 @@ test('e2e/wst-api：snapshot 模式一次取数，对象/关系/候选/行为计
 })
 
 test('e2e/wst-api：snapshot 模式同样按 wanted 取舍（OBJ-WST-ROUTE → 仅 routes）', async () => {
+  const port = await startMock('mock-services/wst-api/server.mjs')
   const connector = createMappedDataConnector({
-    baseUrl: 'http://127.0.0.1:3912',
+    baseUrl: `http://127.0.0.1:${port}`,
     shape: {
       mode: 'snapshot',
       path: '/api/v1/bin-snapshot',
@@ -575,9 +581,9 @@ function taxMaps() {
 }
 
 test('e2e/tax-api：collections+cursor 形态取数，对象/关系/候选与业务窗', async () => {
-  await startMock('mock-services/tax-api/server.mjs', 3911)
+  const port = await startMock('mock-services/tax-api/server.mjs')
   const connector = createMappedDataConnector({
-    baseUrl: 'http://127.0.0.1:3911',
+    baseUrl: `http://127.0.0.1:${port}`,
     shape: {
       mode: 'collections',
       collectionPath: '/api/v1/data/{collection}',
@@ -611,8 +617,9 @@ test('e2e/tax-api：collections+cursor 形态取数，对象/关系/候选与业
 })
 
 test('e2e/tax-api：只拉 wanted（OBJ-TAX-TAXPAYER → taxpayers+按需取候选）', async () => {
+  const port = await startMock('mock-services/tax-api/server.mjs')
   const connector = createMappedDataConnector({
-    baseUrl: 'http://127.0.0.1:3911',
+    baseUrl: `http://127.0.0.1:${port}`,
     shape: {
       mode: 'collections',
       collectionPath: '/api/v1/data/{collection}',

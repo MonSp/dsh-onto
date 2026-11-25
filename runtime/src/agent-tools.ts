@@ -133,8 +133,9 @@ import { actionStoreFor } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
 import { ReleaseError, buildReleaseBundle, buildReleaseManifest } from './release.js'
 import {
+  actChecks,
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, businessPolicy, parseTargetRef,
-  requireBusinessIdentity, requireBizAuth, runAccessBinding, scopeDataQuery, type ExistenceChecks,
+  requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery, type ExistenceChecks,
 } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
@@ -217,38 +218,6 @@ function gateDatasetAccess(
         requireBizAuth('related-read', { type: o?.type ?? '', instance: s }, checks, { analysisMode })
       }
     }
-  }
-}
-
-/** 数据面实例面（act 目标的 ExistenceChecks.instanceExists 证据）：运行台账候选对象Ref 并集。 */
-function runPlaneInstances(root: string): Set<string> {
-  const refs = new Set<string>()
-  for (const rec of listRunRecords(root)) {
-    for (const c of rec.result.candidates ?? []) {
-      if (typeof c.objectRef === 'string' && c.objectRef !== '') refs.add(c.objectRef)
-    }
-  }
-  return refs
-}
-
-/**
- * act 面 ExistenceChecks（包对象表 + 数据面实例）：类型 = 包内 O1 对象类型（无包时以数据面类型佐证）；
- * 实例 = 运行台账候选对象Ref 并集（动作目标须是分析面可见实例）。对账面以动作台账记录本体补充为
- * 存在性证据（执行时已过锚点/收权校验），仍过身份/角色/dataScope。
- */
-function actChecks(pkgObjects: ReadonlySet<string> | null, plane: ReadonlySet<string>, selfRef?: string) {
-  return {
-    typeExists: (t: string) =>
-      (pkgObjects?.has(t) ?? false)
-      || [...plane].some((r) => r.startsWith(`${t}:`))
-      || (selfRef !== undefined && selfRef.startsWith(`${t}:`)),
-    // 候选 objectRef 常为裸实例（ACCT-001）；动作锚点为 TYPE:instance。
-    // 平面证据接受两种形态——实例须在分析面可见（typeExists 另行过包对象表）。
-    instanceExists: (t: string, i: string) =>
-      plane.has(`${t}:${i}`)
-      || plane.has(i)
-      || selfRef === `${t}:${i}`
-      || selfRef === i,
   }
 }
 

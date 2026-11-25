@@ -1,5 +1,5 @@
 /** 测试共用工具：临时工作区 + 最小合法包模型。 */
-import { mkdtempSync, readFileSync, writeFileSync, cpSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, cpSync, rmSync, existsSync, readdirSync, lstatSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,23 @@ export function mkWorkspace() {
   return new PackageWorkspace(root)
 }
 
+/**
+ * 摘链后删树：Windows 上 rmSync(recursive) 会顺着 junction 递归删除目标内容
+ * （夹具若 junction 真身目录（REPO core / node_modules）会误删仓库与 deepseek-harness）。
+ * lstat 把 junction 报成 symlink——先 unlink 摘链，再删无链的树。
+ */
+export function stripLinks(root) {
+  if (!existsSync(root)) return
+  for (const name of readdirSync(root)) {
+    const p = join(root, name)
+    const st = lstatSync(p)
+    if (st.isSymbolicLink()) unlinkSync(p)
+    else if (st.isDirectory()) stripLinks(p)
+  }
+}
+
 export function rmWorkspace(root) {
+  stripLinks(root)
   rmSync(root, { recursive: true, force: true })
 }
 

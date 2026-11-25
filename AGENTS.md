@@ -53,6 +53,11 @@ dsh-onto 是**业务本体建模平台**（架构与规则见 [docs/architecture
    （含 chat-run-report：工具面/meta 无值无短语/回退文本/surface 闸/wire 同源/strict 越权/
    沙箱 onto 归类/沉淀与报表页 wire）+ 生成插件重跑 `pnpm run build && node --test
    tests/*.test.mjs`（报表投影同分、toolview/报表页注册断言）。
+9. 浏览器 E2E（真实用户自然语言旅程，page-system）：`node tests/browser-e2e/run.mjs`
+   全绿（报告 `tests/browser-e2e/.out/report.md`）——生成业务页五面（运行/复核/动作/对象/报表）
+   + Agent 自然语言对话全链；含红线回归（humanReviewRequired 上墙、批准卡回显上下文摘要、
+   演练/模拟如实标注、禁语零命中、truncated/缺失种子显式）。跑法与运维口径见
+   `tests/browser-e2e/README.md`。
 
 ## 核心模块地图（core/src/）
 

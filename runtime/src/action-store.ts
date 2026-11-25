@@ -94,6 +94,7 @@ const SCHEMA = `
     compensation_error text,
     approval_digest text not null,
     approved_at text not null,
+    approved_by text,
     executed_at text not null,
     compensated_at text,
     decision_id text,
@@ -177,6 +178,9 @@ function rowToAction(row: Record<string, unknown>): StoredActionRecord {
     ...(row.compensation_error !== null ? { compensationError: row.compensation_error as string } : {}),
     approvalDigest: row.approval_digest as string,
     approvedAt: row.approved_at as string,
+    ...(row.approved_by !== null && row.approved_by !== undefined
+      ? { approvedBy: row.approved_by as string }
+      : {}),
     executedAt: row.executed_at as string,
     ...(row.compensated_at !== null ? { compensatedAt: row.compensated_at as string } : {}),
     version: row.version as number,
@@ -248,6 +252,11 @@ export class ActionStore {
       if (!cols.some((c) => c.name === 'connector_kind')) {
         db.exec('alter table proposals add column connector_kind text')
       }
+      // 显式迁移：actions.approved_by 为后加列（页面批准卡批准人留痕）——旧库补列，nullable 不动旧行
+      const actionCols = db.prepare('pragma table_info(actions)').all() as Array<{ name: string }>
+      if (!actionCols.some((c) => c.name === 'approved_by')) {
+        db.exec('alter table actions add column approved_by text')
+      }
       return fn(db)
     } finally {
       db.close()
@@ -267,8 +276,8 @@ export class ActionStore {
         db.prepare(
           `insert into actions (business_key, action_id, operation_id, tenant, intent_digest, approval_context,
             connector_id, connector_env, connector_kind, behavior_id, object_ref, payload_json, status, phase,
-            approval_digest, approved_at, executed_at, decision_id, proposal_id, version, created_at, updated_at)
-           values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+            approval_digest, approved_at, approved_by, executed_at, decision_id, proposal_id, version, created_at, updated_at)
+           values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
         ).run(
         record.businessKey,
         record.actionId,
@@ -286,6 +295,7 @@ export class ActionStore {
         record.phase ?? 'claimed',
         record.approvalDigest,
         record.approvedAt,
+        record.approvedBy ?? null,
         record.executedAt,
         record.decisionId ?? null,
         record.proposalId ?? null,
@@ -336,7 +346,7 @@ export class ActionStore {
       const next = { ...cur, ...patch }
       const res = db.prepare(
         `update actions set status = ?, phase = ?, external_ref = ?, error = ?, compensation_error = ?,
-          approval_digest = ?, approved_at = ?, executed_at = ?, compensated_at = ?, version = version + 1, updated_at = ?
+          approval_digest = ?, approved_at = ?, approved_by = ?, executed_at = ?, compensated_at = ?, version = version + 1, updated_at = ?
          where business_key = ? and version = ?`,
       ).run(
         next.status,
@@ -346,6 +356,7 @@ export class ActionStore {
         next.compensationError ?? null,
         next.approvalDigest,
         next.approvedAt,
+        next.approvedBy ?? null,
         next.executedAt,
         next.compensatedAt ?? null,
         at,

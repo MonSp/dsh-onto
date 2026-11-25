@@ -16,7 +16,7 @@
  */
 import { AgentToolError, isRecord } from './agent-policy.js'
 import { createHash } from 'node:crypto'
-import type { OntologyPackage, RunRecord, RuntimeDataset } from '@dsh-onto/core'
+import { listRunRecords, type OntologyPackage, type RunRecord, type RuntimeDataset } from '@dsh-onto/core'
 import type { DataQuery } from './data-sources.js'
 import { scopedRuntimeObject } from './context.js'
 
@@ -319,4 +319,36 @@ export function parseTargetRef(objectRef: string): TargetRef {
     throw new AgentToolError('INVALID_ARGS', `目标引用非法（实例段）: ${objectRef}`)
   }
   return { type, instance }
+}
+
+/** 数据面实例面（act 目标的 ExistenceChecks.instanceExists 证据）：运行台账候选对象Ref 并集。 */
+export function runPlaneInstances(root: string): Set<string> {
+  const refs = new Set<string>()
+  for (const rec of listRunRecords(root)) {
+    for (const c of rec.result.candidates ?? []) {
+      if (typeof c.objectRef === 'string' && c.objectRef !== '') refs.add(c.objectRef)
+    }
+  }
+  return refs
+}
+
+/**
+ * act 面 ExistenceChecks（包对象表 + 数据面实例）：类型 = 包内 O1 对象类型（无包时以数据面类型佐证）；
+ * 实例 = 运行台账候选对象Ref 并集（动作目标须是分析面可见实例）。对账面以动作台账记录本体补充为
+ * 存在性证据（执行时已过锚点/收权校验），仍过身份/角色/dataScope。
+ */
+export function actChecks(pkgObjects: ReadonlySet<string> | null, plane: ReadonlySet<string>, selfRef?: string) {
+  return {
+    typeExists: (t: string) =>
+      (pkgObjects?.has(t) ?? false)
+      || [...plane].some((r) => r.startsWith(`${t}:`))
+      || (selfRef !== undefined && selfRef.startsWith(`${t}:`)),
+    // 候选 objectRef 常为裸实例（ACCT-001）；动作锚点为 TYPE:instance。
+    // 平面证据接受两种形态——实例须在分析面可见（typeExists 另行过包对象表）。
+    instanceExists: (t: string, i: string) =>
+      plane.has(`${t}:${i}`)
+      || plane.has(i)
+      || selfRef === `${t}:${i}`
+      || selfRef === i,
+  }
 }
