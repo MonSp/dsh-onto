@@ -21,7 +21,7 @@
  *   dsh-onto knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
  *   dsh-onto exp recall --dir <versionDir> --scenario <SCN> --data run.json [--top-k N] [--threshold T]
  *   dsh-onto exp annotate --dir <versionDir> --run <runId> --outcome success|partial|failure|pending-human
- *                         [--reason R] [--counterexample] [--reused-from <runId>] [--review-focus a,b]
+ *                         [--reason R] [--counterexample [true|false]] [--reused-from <runId>] [--review-focus a,b]
  *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
  *   dsh-onto exp list
  *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--include-prior-versions] [--data-dir <knowledgeRoot>]
@@ -768,7 +768,11 @@ function cmdExp(sub: string | undefined, args: Args): void {
       } catch {
         existing = null
       }
-      const counterexample = args.flags['counterexample'] === true || existing?.counterexample === true
+      const counterexample = args.flags['counterexample'] === true || args.flags['counterexample'] === 'true'
+        ? true
+        : args.flags['counterexample'] === 'false'
+          ? false
+          : existing?.counterexample === true
       if (outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
         fail('audit not passed — cannot annotate success (use failure/partial or --counterexample)')
       }

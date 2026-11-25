@@ -70,7 +70,9 @@ export function ExperiencePanel(props: {
         const patch: Record<string, unknown> = { runId }
         if (formOutcome) patch.outcome = formOutcome
         if (formReason.trim()) patch.outcomeReason = formReason
-        if (viewNote === null) patch.counterexample = formCounter
+        // counterexample：新建恒随表单；回填仅在与当前值不同时发送（patch 语义，防误清机械反例）
+        const currentCounter = viewNote !== null && (viewNote as { counterexample?: boolean }).counterexample === true
+        if (viewNote === null || formCounter !== currentCounter) patch.counterexample = formCounter
         if (formMis === 'true' || formMis === 'false') {
           // misTransfer.by 不收自报：服务端取宿主可信身份（host:<userId>）
           patch.misTransfer = { judged: formMis === 'true', note: formNote }
@@ -100,9 +102,13 @@ export function ExperiencePanel(props: {
           counters: number
           queued: Array<{ id: string; name: string; targetKind: string; status: string }>
         }>(await api.abstractExperiences({ includePriorVersions: includePrior } as never))
+        // 回执恒含 humanReviewRequired=true（与工具面口径一致）；空簇不伪称「已入队」
         setAbstractOut(
-          `${t('expAbstracted')}: ${out.package} skills=${out.skills} counters=${out.counters} → `
-            + out.queued.map((q) => `${q.id}(${q.targetKind}/${q.status})`).join(', '),
+          out.queued.length === 0
+            ? `${out.package}: ${t('expAbstractNone')}（skills=${out.skills} counters=${out.counters}）· humanReviewRequired=true`
+            : `${t('expAbstracted')}: ${out.package} skills=${out.skills} counters=${out.counters} → `
+              + out.queued.map((q) => `${q.id}(${q.targetKind}/${q.status})`).join(', ')
+              + ' · humanReviewRequired=true',
         )
       } catch (e) {
         setError(errText(e))
@@ -129,10 +135,13 @@ export function ExperiencePanel(props: {
         setViewNote(out.note)
         const focus = (out.note as { reviewFocus?: string[] }).reviewFocus
         if (Array.isArray(focus)) setFormFocus(focus.join(', '))
+        // 表单反例勾选回显当前值（回填按差异发送，可清除机械置位的反例）
+        setFormCounter((out.note as { counterexample?: boolean }).counterexample === true)
       } catch (e) {
-        // 缺卡（S5.4.2 前旧 run）→ 新建模式：回填即补建
+        // 缺卡（S5.4.2 前旧 run）→ 新建模式：回填即补建；其它错误显式上墙、不静默进「新建」
         setViewNote(null)
-        setError('')
+        const msg = errText(e)
+        setError(/not[-_ ]?found|不存在/i.test(msg) ? '' : msg)
       } finally {
         setBusy('')
       }

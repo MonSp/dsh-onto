@@ -280,6 +280,29 @@ test('reviewExperience：misTransfer.by 不收自报——覆盖为宿主可信�
   }
 })
 
+test('annotateExperience / reviewExperience：counterexample 可改判——机械置位可清除（认定在人工）', async () => {
+  const f = fixture()
+  try {
+    // S5.4.2 机械初稿：审计失败 → counterexample=true（experienceFromRun 置位）
+    const rec = seedRun(f.wsRoot, 'run-cex0000001', { auditPassed: false })
+    const pkg = loadPackage(join(f.wsRoot, 'packages', 'aml-analysis', '1.0.0'))
+    saveExperienceNote(f.wsRoot, experienceFromRun(rec, pkg))
+    assert.equal(loadExperienceNote(f.wsRoot, rec.runId).counterexample, true)
+
+    // annotate 回填清除（不得静默丢弃该参数）
+    const cleared = await f.service.remoteExportAnnotateExperience({ runId: rec.runId, counterexample: false })
+    assert.equal(cleared.created, false)
+    assert.equal(cleared.note.counterexample, false)
+    assert.equal(loadExperienceNote(f.wsRoot, rec.runId).counterexample, false)
+
+    // reviewExperience 同样可置回
+    const { note } = await f.service.remoteExportReviewExperience({ runId: rec.runId, counterexample: true })
+    assert.equal(note.counterexample, true)
+  } finally {
+    f.dispose()
+  }
+})
+
 /** 组一个「1.0.0 生产经验 + 1.1.0 DRAFT」工作区（断链 B 复现场景）。 */
 function forkWorkspace(f) {
   const dir110 = join(f.wsRoot, 'packages', 'aml-analysis', '1.1.0')

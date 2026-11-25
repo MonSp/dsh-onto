@@ -6,7 +6,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteErrorDetailsMap } from '@deepseek-ai/dsh-typert-protocol'
-import { writeFileSync, existsSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   KnowledgeStore,
@@ -29,7 +29,6 @@ import {
   listRunRecords,
   readPackageMeta,
   reviewExperienceNote,
-  runReplay,
   runScenario,
   saveExperienceNote,
   saveRunRecord,
@@ -72,7 +71,7 @@ import {
   requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery,
 } from './business-policy.js'
 import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
-import { abstractExperienceInto, readOwnVersion, validateRunSeedIds } from './agent-tools.js'
+import { abstractExperienceInto, readOwnVersion, runReplayAcceptance, validateRunSeedIds } from './agent-tools.js'
 import {
   loadSourceConfigs,
   parseControlledBaseUrl,
@@ -1149,15 +1148,17 @@ export class OntoRuntime extends RuntimeRemoteService {
   }
 
   /**
-   * 人审回填（S5.4）：改判 outcome、误迁移只由人判、reviewFocus 沉淀。
+   * 人审回填（S5.4）：改判 outcome/counterexample、误迁移只由人判、reviewFocus 沉淀。
    * 身份口径（与 recordReviewDecision 同）：宿主可信身份 fail-closed 先行，
    * misTransfer.by 只信 `host:<userId>`——不收前端表单自报字符串。
+   * counterexample 可改判（含机械置位的清除）——认定在人工。
    */
   @Remote('reviewExperience')
   async remoteExportReviewExperience(request: {
     runId: string
     outcome?: 'success' | 'partial' | 'failure' | 'pending-human'
     outcomeReason?: string
+    counterexample?: boolean
     misTransfer?: { judged: boolean; by?: string; note?: string }
     reviewFocus?: string[]
   }): Promise<{ note: Awaited<ReturnType<typeof loadExperienceNote>> }> {
@@ -1167,6 +1168,7 @@ export class OntoRuntime extends RuntimeRemoteService {
       return { note: reviewExperienceNote(this.ws.root, request.runId, {
         outcome: request.outcome,
         outcomeReason: request.outcomeReason,
+        counterexample: request.counterexample,
         misTransfer: request.misTransfer !== undefined
           ? {
               judged: request.misTransfer.judged,
@@ -1238,6 +1240,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         const note = reviewExperienceNote(this.ws.root, request.runId, {
           outcome: request.outcome,
           outcomeReason: request.outcomeReason,
+          counterexample: request.counterexample,
           misTransfer: misPatch,
           reviewFocus: request.reviewFocus,
           ...(request.reusedFromRunId !== undefined ? { reusedFromRunId: request.reusedFromRunId } : {}),
@@ -1373,7 +1376,7 @@ export class OntoRuntime extends RuntimeRemoteService {
    * 发布（平台轨 UI 面）：工作区已签发包 → 发布台账（同摘要幂等）。
    * 两式：纯内容 dataset 包（无 sourceId，只收编台账）｜连接器包（sourceId +
    * 受控基址，shape/source-maps 校验 + 数据源配置落盘 + 连接器免重启登记）。
-   * checkReplay：发布前跑随包夹具回放验收（基线对照/缺数；包内无夹具则拒绝空验收）。
+   * checkReplay：发布前跑随包夹具回放验收（缺数诊断/基线对照不过即拒发；要求验收时全场景须有夹具，缺一即拒）。
    * 不激活——激活是独立人工动作（activateRelease）。
    */
   @Remote('publishRelease')
@@ -1420,6 +1423,15 @@ export class OntoRuntime extends RuntimeRemoteService {
         if (request.sourceKind === undefined || request.apiBaseUrl === undefined) {
           throw new AgentToolError('INVALID_ARGS', '连接器模式须提供 sourceKind 与 apiBaseUrl（纯内容包不传 sourceId）')
         }
+        // sourceId 归属（受控数据源全局命名空间）：先于 importRelease 预检——
+        // 避免「台账已录、连接器未登记」半态与重试不收敛（与 Agent publish_business 同口径）
+        const owner = loadSourceConfigs(this.dataDir).find((c) => c.sourceId === request.sourceId)
+        if (owner !== undefined && owner.package.name !== request.name) {
+          throw new AgentToolError(
+            'INVALID_ARGS',
+            `sourceId ${request.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
+          )
+        }
         const src = pkg.apiSources.find((s) => s.id === request.sourceId)
         if (src === undefined || src.shape === undefined) {
           throw new AgentToolError('INVALID_ARGS', `${request.sourceId} 未在包 apiSources 声明 shape`)
@@ -1446,30 +1458,11 @@ export class OntoRuntime extends RuntimeRemoteService {
         }
       }
 
-      // 可选回放验收（发布门槛）：随包夹具 → 映射 → 场景 → 基线对照；无夹具不得空验收
-      let replayChecked = 0
-      if (request.checkReplay === true) {
-        for (const s of pkg.scenarios) {
-          const fixture = join(dir, 'fixtures', `replay-${s.id}.json`)
-          if (!existsSync(fixture)) continue
-          const report = runReplay({
-            versionDir: dir,
-            scenarioId: s.id,
-            ...(sourceCfg !== undefined ? { sourceId: sourceCfg.sourceId } : {}),
-            check: true,
-          })
-          replayChecked++
-          if (report.comparison !== undefined && !report.comparison.ok) {
-            throw new AgentToolError(
-              'INVALID_ARGS',
-              `回放验收未过（${s.id}）：基线对照 ${report.comparison.diffs.length} 处不一致——发布拒绝`,
-            )
-          }
-        }
-        if (replayChecked === 0) {
-          throw new AgentToolError('INVALID_ARGS', '要求回放验收但包内无随包夹具（fixtures/replay-<scenarioId>.json）')
-        }
-      }
+      // 可选回放验收（发布门槛，与 Agent publish_business 共用 runReplayAcceptance 口径）：
+      // 全场景夹具 → 映射 → 缺数诊断 + 基线对照；缺夹具/缺数/不一致任一即拒，不得空验收。
+      const replayChecked = request.checkReplay === true
+        ? runReplayAcceptance(dir, pkg, sourceCfg !== undefined ? sourceCfg.sourceId : undefined)
+        : 0
 
       const manifest = buildReleaseManifest(dir, {
         coreCompat: { min: '0.2.0' },

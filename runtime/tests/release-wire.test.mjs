@@ -124,6 +124,31 @@ test('发布台账：纯内容发布 → 激活 → 第二版激活 → 回滚�
   }
 })
 
+test('发布台账：双回滚取「最近一次成为 to 的前驱」——不跳版（findPreviousVersion 末次匹配）', async () => {
+  const f = fixture()
+  try {
+    for (const v of ['1.0.0', '1.1.0', '1.2.0']) {
+      if (v !== '1.0.0') issuePkg(f.ws, 'test-pkg', v)
+      await f.service.remoteExportPublishRelease({ name: 'test-pkg', version: v })
+      await f.service.remoteExportActivateRelease({ name: 'test-pkg', version: v })
+    }
+    // 回滚 1：1.2.0 → 1.1.0
+    const r1 = await f.service.remoteExportRollbackRelease({ name: 'test-pkg' })
+    assert.equal(r1.rolledBackTo, '1.1.0')
+    // 回滚 2：1.1.0 → 1.2.0（还原被回滚的那一步；不得跳回 1.0.0）
+    const r2 = await f.service.remoteExportRollbackRelease({ name: 'test-pkg' })
+    assert.equal(r2.rolledBackTo, '1.2.0')
+    // 回滚 3：1.2.0 → 1.1.0（在最近两个活动版本间往复）
+    const r3 = await f.service.remoteExportRollbackRelease({ name: 'test-pkg' })
+    assert.equal(r3.rolledBackTo, '1.1.0')
+    const view = await f.service.remoteExportListReleases()
+    assert.equal(view.packages.find((p) => p.name === 'test-pkg').activeVersion, '1.1.0')
+    assert.equal(view.history.filter((h) => h.action === 'rollback').length, 3, 'history 保留全部回滚记录')
+  } finally {
+    f.dispose()
+  }
+})
+
 test('publishRelease：连接器式校验——缺 sourceKind/基址/shape/source-maps 拒；回放验收无夹具拒', async () => {
   const f = fixture()
   try {
@@ -149,7 +174,7 @@ test('publishRelease：连接器式校验——缺 sourceKind/基址/shape/sourc
           version: '1.0.0',
           checkReplay: true,
         }),
-      'INVALID_ARGS', // 要求回放验收但包内无随包夹具——不得空验收
+      'INVALID_ARGS', // 纯内容包无 apiSources shape 无法回放验收——显式拒、不静默空验收
     )
     // 校验失败不得落台账（工作区版本可见，但未受管 = 无 manifest）
     const view = await f.service.remoteExportListReleases()

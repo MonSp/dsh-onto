@@ -92,6 +92,8 @@ if ($EnvFile -ne '') {
 # 回滚模式（版本回滚同机制，图注「激活」）：人工授权回滚到上一活动版本 + 可选受控重启，
 # 不走构建/导入/激活链（回滚对象是已导入的发布台账，与包构建无关）。
 if ($Rollback) {
+    # 先校验重启参数再动指针：回滚非幂等——已完成却报 FAILED 会诱导重试造成二次回滚
+    if ($Restart -and $Port -le 0) { Fail '-Rollback -Restart requires -Port <target host port> (validated before rolling back)' }
     if ($AuthorizedBy.Trim() -eq '') {
         $AuthorizedBy = Read-Host 'Authorizing deployer name (manual rollback, required)'
     }

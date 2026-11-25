@@ -519,6 +519,28 @@ test('人审回填闸门：misTransfer.by 空 → INVALID_ARGS；非法 outcome 
   }
 })
 
+test('人审回填：counterexample 可改判——机械置位可清除、可重置（认定在人工）', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-rv3', counterexample: true }))
+    // 机械反例（experienceFromRun 置位）可由人审清除
+    const cleared = reviewExperienceNote(root, 'run-rv3', { counterexample: false })
+    assert.equal(cleared.counterexample, false)
+    // 可再置回 true
+    const reset = reviewExperienceNote(root, 'run-rv3', { counterexample: true })
+    assert.equal(reset.counterexample, true)
+    // 不传则保留原值（patch 语义）
+    const kept = reviewExperienceNote(root, 'run-rv3', { outcomeReason: '仅改理由' })
+    assert.equal(kept.counterexample, true)
+    assert.throws(
+      () => reviewExperienceNote(root, 'run-rv3', { counterexample: 'yes' }),
+      /INVALID_ARGS|counterexample/,
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 /* ── P3-1 自动技能抽象 ── */
 
 test('abstractSkillDrafts：成功同构聚簇 ≥2 → SkillTemplate 草案；反例/误迁移不参聚', () => {

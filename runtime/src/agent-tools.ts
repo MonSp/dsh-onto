@@ -1368,7 +1368,9 @@ export function projectRecallHits(
 /**
  * annotate_experience 纯函数（experience-loop P4-3 / S5.4）：
  * 人审回填 + 首次标注共用——note 已存在走 reviewExperienceNote，不存在则从 RunRecord 新建。
- * humanApproved 人审契约：agent 不得自行标注；误迁移 by 必须非空人工身份（模型不自评）。
+ * humanApproved 人审契约：agent 不得自行标注。
+ * 误迁移只由人判：misTransfer.by 不收自报——一律取宿主可信身份（requireReviewerHostId
+ * fail-closed），入参 by 只作形状兼容（与 wire reviewExperience/annotateExperience 同口径）。
  * 审计闸与 CLI `exp annotate` 同口径：新建与回填标 success 均查审计（除非 counterexample）——
  * 机器闸不否决人审的部分留给 workbench `reviewExperience` 人审面（不经本函数）。
  * reusedFromRunId：复用归因（S5.4.4），新建与回填均可写，diff 机械生成。
@@ -1379,7 +1381,7 @@ export function annotateExperienceForTool(
     runId: string
     outcome?: ExperienceOutcome
     outcomeReason?: string
-    misTransfer?: { judged: boolean; by: string; note?: string }
+    misTransfer?: { judged: boolean; by?: string; note?: string }
     reviewFocus?: string[]
     counterexample?: boolean
     reusedFromRunId?: string
@@ -1401,17 +1403,22 @@ export function annotateExperienceForTool(
     args.outcomeReason !== undefined ||
     args.misTransfer !== undefined ||
     args.reviewFocus !== undefined ||
-    args.reusedFromRunId !== undefined
+    args.reusedFromRunId !== undefined ||
+    args.counterexample !== undefined
   if (!hasPatch) {
-    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / misTransfer / reviewFocus / reusedFromRunId 之一')
+    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / counterexample / misTransfer / reviewFocus / reusedFromRunId 之一')
   }
-  if (args.misTransfer !== undefined) {
-    if (typeof args.misTransfer.judged !== 'boolean') {
-      throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
-    }
-    if (typeof args.misTransfer.by !== 'string' || args.misTransfer.by.trim() === '') {
-      throw new AgentToolError('INVALID_ARGS', 'misTransfer.by 必须为非空人工身份（误迁移只由人判）')
-    }
+  // 误迁移只由人判：by 一律取宿主可信身份（fail-closed），不收模型/表单自报
+  const reviewer = args.misTransfer !== undefined ? requireReviewerHostId() : undefined
+  const misPatch = args.misTransfer !== undefined
+    ? {
+        judged: args.misTransfer.judged,
+        by: reviewer as string,
+        ...(args.misTransfer.note !== undefined ? { note: args.misTransfer.note } : {}),
+      }
+    : undefined
+  if (misPatch !== undefined && typeof misPatch.judged !== 'boolean') {
+    throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
   }
 
   let existing: ExperienceNote | null = null
@@ -1435,7 +1442,8 @@ export function annotateExperienceForTool(
   }
 
   if (existing !== null) {
-    gateSuccess(existing.counterexample || args.counterexample === true)
+    // 闸按「patch 后的 counterexample」判：人审清除反例后再标 success，须重新过审计
+    gateSuccess(args.counterexample !== undefined ? args.counterexample === true : existing.counterexample)
     // 旧签名升版：人审触碰即按当前包补 ruleShape（packageScope 不一致时 upgrade 内部跳过）。
     let upgradePkg: ReturnType<typeof loadPackage> | undefined
     try {
@@ -1447,7 +1455,8 @@ export function annotateExperienceForTool(
     const note = reviewExperienceNote(ws.root, args.runId, {
       outcome: args.outcome,
       outcomeReason: args.outcomeReason,
-      misTransfer: args.misTransfer,
+      counterexample: args.counterexample,
+      misTransfer: misPatch,
       reviewFocus: args.reviewFocus,
       reusedFromRunId: args.reusedFromRunId,
       upgradePkg,
@@ -1488,14 +1497,59 @@ export function annotateExperienceForTool(
         : undefined,
     counterexample,
     misTransfer:
-      args.misTransfer !== undefined
-        ? { judged: args.misTransfer.judged, by: args.misTransfer.by.trim(), note: args.misTransfer.note ?? '' }
+      misPatch !== undefined
+        ? { judged: misPatch.judged, by: misPatch.by, note: misPatch.note ?? '' }
         : undefined,
     reviewFocus: args.reviewFocus !== undefined ? [...args.reviewFocus] : undefined,
     savedAt: new Date().toISOString(),
   }
   saveExperienceNote(ws.root, note)
   return projectAnnotateReceipt(note, true)
+}
+
+/**
+ * 发布回放验收门槛（publish_business / publishRelease 共用口径，防两处漂移）：
+ * checkReplay=true 时全场景夹具 → 映射 → 场景回放 → 缺数诊断 + 基线对照，任一不过即拒。
+ * 纯内容包（无 sourceId 且无 apiSources shape）无法映射回放——显式拒、不静默空验收。
+ * 返回回放场景数（= 全场景数；缺夹具即拒）。
+ */
+export function runReplayAcceptance(dir: string, pkg: OntologyPackage, sourceId?: string): number {
+  if (sourceId === undefined && !pkg.apiSources.some((s) => s.shape !== undefined)) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      '纯内容包无 apiSources shape，无法回放验收——移除 checkReplay，或补充 apiSources/映射后用连接器式发布',
+    )
+  }
+  let checked = 0
+  for (const s of pkg.scenarios) {
+    const fixture = join(dir, 'fixtures', `replay-${s.id}.json`)
+    if (!existsSync(fixture)) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收要求全场景夹具：场景 ${s.id} 缺 fixtures/replay-${s.id}.json——不得空验收`,
+      )
+    }
+    const report = runReplay({
+      versionDir: dir,
+      scenarioId: s.id,
+      ...(sourceId !== undefined ? { sourceId } : {}),
+      check: true,
+    })
+    checked++
+    if (report.diagnostics.length > 0) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收未过（${s.id}）：缺数/映射诊断 ${report.diagnostics.length} 处——发布拒绝`,
+      )
+    }
+    if (report.comparison !== undefined && !report.comparison.ok) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收未过（${s.id}）：基线对照 ${report.comparison.diffs.length} 处不一致——发布拒绝`,
+      )
+    }
+  }
+  return checked
 }
 
 function projectAnnotateReceipt(
@@ -3281,7 +3335,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         '标注/回填一条经验记录（ExperienceNote 的 outcome、误迁移、reviewFocus）。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确指示标注时传 true，agent 不得自行标注；'
         + '实际放行以系统批准卡为准（可信人审 T2.1）。'
-        + '误迁移只由人判（misTransfer.by 须为非空人工身份）。'
+        + '误迁移只由人判：判定人绑定宿主可信身份，不收自报。'
         + 'note 不存在时按 RunRecord 新建（须带 outcome）；已存在则回填。'
         + '新建与回填标 success 均查审计闸（除非 counterexample）。'
         + 'reusedFromRunId 写复用归因（diff 机械生成）。返回结构位回执，认定出口只在人工。',
@@ -3295,7 +3349,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         outcomeReason: { type: 'string', description: '结论理由（结构位补充，非自由流程）' },
         misTransfer: {
           type: 'json',
-          description: '误迁移判定 {judged, by, note?}——by 必须为非空人工身份（模型不自评）',
+          description: '误迁移判定 {judged, note?}——判定人绑定宿主可信身份（不收自报，by 入参只作形状兼容）',
         },
         reviewFocus: {
           type: 'array',
@@ -3340,6 +3394,19 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           counterexample?: boolean
           reusedFromRunId?: string
         }, exec) => {
+          // 误迁移只由人判：by 绑宿主可信身份（fail-closed 先行，不收自报）——
+          // 批准卡摘要与落档用同一绑定值，人批的即人存的。
+          const misBound =
+            raw.misTransfer !== undefined && raw.misTransfer !== null
+              ? (() => {
+                  const m = raw.misTransfer as { judged: boolean; note?: string }
+                  return {
+                    judged: m.judged,
+                    by: requireReviewerHostId(),
+                    ...(m.note !== undefined ? { note: m.note } : {}),
+                  }
+                })()
+              : undefined
           // 人审闸（T2.1）：标注经验是人审写动作，系统批准卡实况放行。
           await approve(exec, {
             toolName: 'annotate_experience',
@@ -3349,7 +3416,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               runId: raw.runId,
               outcome: raw.outcome ?? null,
               outcomeReason: raw.outcomeReason ?? null,
-              misTransfer: raw.misTransfer ?? null,
+              misTransfer: misBound ?? null,
               reviewFocus: raw.reviewFocus ?? null,
               counterexample: raw.counterexample ?? null,
               reusedFromRunId: raw.reusedFromRunId ?? null,
@@ -3361,10 +3428,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             humanApproved: raw.humanApproved,
             outcome: raw.outcome,
             outcomeReason: raw.outcomeReason,
-            misTransfer:
-              raw.misTransfer !== undefined && raw.misTransfer !== null
-                ? (raw.misTransfer as { judged: boolean; by: string; note?: string })
-                : undefined,
+            misTransfer: misBound,
             reviewFocus: raw.reviewFocus,
             counterexample: raw.counterexample,
             reusedFromRunId: raw.reusedFromRunId,
@@ -4399,7 +4463,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         '发布业务域到运行中平台（免重启声明式发布 v1）：把工作区已签发包收编进发布台账（同摘要幂等，'
         + '不改写包内容）。两式：纯内容 dataset 包（不传 sourceId——只收编台账，运行走内联 dataset 通道）｜'
         + '连接器包（sourceId + 受控基址，按包 shape + source-maps 校验并登记映射连接器）。'
-        + '可选 checkReplay=true 在发布前跑随包夹具回放验收（基线对照/缺数不过即拒发；包内无夹具不得空验收）。'
+        + '可选 checkReplay=true 在发布前跑随包夹具回放验收（缺数诊断/基线对照不过即拒发；要求验收时全场景须有夹具，缺一即拒）。'
         + '不激活——激活是独立人工动作（activate_business）。发布后未激活的包拒绝运行（fail-closed）但保持可见；'
         + '同名同版本不同内容拒绝（须 fork 新版本）。回滚用 rollback_business，只动自身指针，不影响已有业务。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准。',
@@ -4421,7 +4485,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
         checkReplay: {
           type: 'boolean',
-          description: '发布前跑随包夹具回放验收（基线对照/缺数不过即拒发；要求验收但包内无夹具 → 拒）',
+          description: '发布前跑随包夹具回放验收（缺数诊断/基线对照不过即拒发；要求验收时全场景须有夹具——缺一即拒，不得空验收）',
         },
         humanApproved: {
           type: 'boolean',
@@ -4520,30 +4584,11 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
             }
           }
-          // 可选回放验收（发布门槛）：随包夹具 → 映射 → 场景 → 基线对照；要求验收但无夹具不得空过
-          let replayChecked = 0
-          if (args.checkReplay === true) {
-            for (const s of pkg.scenarios) {
-              const fixture = join(dir, 'fixtures', `replay-${s.id}.json`)
-              if (!existsSync(fixture)) continue
-              const report = runReplay({
-                versionDir: dir,
-                scenarioId: s.id,
-                ...(hasSource ? { sourceId: args.sourceId as string } : {}),
-                check: true,
-              })
-              replayChecked++
-              if (report.comparison !== undefined && !report.comparison.ok) {
-                throw new AgentToolError(
-                  'INVALID_ARGS',
-                  `回放验收未过（${s.id}）：基线对照 ${report.comparison.diffs.length} 处不一致——发布拒绝`,
-                )
-              }
-            }
-            if (replayChecked === 0) {
-              throw new AgentToolError('INVALID_ARGS', '要求回放验收但包内无随包夹具（fixtures/replay-<scenarioId>.json）')
-            }
-          }
+          // 可选回放验收（发布门槛，与 wire publishRelease 共用 runReplayAcceptance 口径）：
+          // 全场景夹具 → 映射 → 缺数诊断 + 基线对照；缺夹具/缺数/不一致任一即拒，不得空验收。
+          const replayChecked = args.checkReplay === true
+            ? runReplayAcceptance(dir, pkg, hasSource ? (args.sourceId as string) : undefined)
+            : 0
           const manifestOpts = {
             coreCompat: { min: '0.2.0' },
             runtimeCompat: { min: '0.2.0' },

@@ -685,6 +685,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         setDetail(detailOut)
         setChain(chainOut)
         setExpNote(expOut)
+        // 反例勾选回显当前值（回填按差异发送，可清除机械置位的反例——认定在人工）
+        setExpCounter(expOut?.counterexample === true)
         const cands = detailOut.record?.result?.candidates ?? []
         // 不默认全选：批准须显式勾选候选，防一键批量误批
         setSelectedIds([])
@@ -779,7 +781,9 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         const patch: Record<string, unknown> = { runId: detail.record.runId }
         if (expOutcome) patch.outcome = expOutcome
         if (expReason.trim()) patch.outcomeReason = expReason.trim()
-        if (!expNote) patch.counterexample = expCounter
+        // counterexample：新建恒随表单；回填仅在与当前值不同时发送（patch 语义，防误清机械反例）
+        const currentCounter = expNote?.counterexample === true
+        if (!expNote || expCounter !== currentCounter) patch.counterexample = expCounter
         if (expMisJudged === 'true' || expMisJudged === 'false') {
           patch.misTransfer = {
             judged: expMisJudged === 'true',

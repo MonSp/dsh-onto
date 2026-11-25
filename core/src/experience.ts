@@ -925,7 +925,8 @@ export function compressExperiences(
 
 /**
  * 人审回填：pending-human 改判、误迁移只由人判（by 必须非空人工身份）、reviewFocus 沉淀。
- * 禁改 signature 语义位 / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome（机器闸不否决人审）。
+ * 禁改 signature 语义位 / runId（不在 patch 面）；认定在人工——人工可覆盖 outcome 与 counterexample
+ * （机器闸不否决人审；experienceFromRun 的机械反例置位可由人审清除）。
  * upgradePkg：人审触碰时对 0.2.0 前旧签名按当前包升版（补 ruleShape + 重算 digest），可选。
  * reusedFromRunId：补写复用归因（S5.4.4），diff 按当前 signature 机械生成。
  */
@@ -935,6 +936,7 @@ export function reviewExperienceNote(
   patch: {
     outcome?: ExperienceOutcome
     outcomeReason?: string
+    counterexample?: boolean
     misTransfer?: { judged: boolean; by: string; note?: string }
     reviewFocus?: string[]
     reusedFromRunId?: string
@@ -958,6 +960,12 @@ export function reviewExperienceNote(
       throw new PackageStoreError('INVALID_ARGS', 'invalid outcomeReason')
     }
     note.outcomeReason = patch.outcomeReason
+  }
+  if (patch.counterexample !== undefined) {
+    if (typeof patch.counterexample !== 'boolean') {
+      throw new PackageStoreError('INVALID_ARGS', 'invalid counterexample')
+    }
+    note.counterexample = patch.counterexample
   }
   if (patch.misTransfer !== undefined) {
     const m = patch.misTransfer

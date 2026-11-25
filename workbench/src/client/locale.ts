@@ -273,6 +273,7 @@
       expAbstractHint: '聚簇经验 → SkillTemplate/RedLine/ExclusionRule 草案入人审队列（只入队不直写包）',
       expIncludePrior: '含同名历史版本经验（ISSUED 生产经验回流 DRAFT）',
       expAbstracted: '草案已入队',
+      expAbstractNone: '簇员不足，无草案入队',
       expMisByHost: '判定人取宿主身份',
       // 发布台账（交付线双轨对称）
       relTitle: '发布台账（激活 · 版本回滚同机制）',
@@ -294,6 +295,9 @@
       relPublished: '已发布（未激活）',
       relActivated: '已激活',
       relRolledBack: '已回滚',
+      relConfirmPublish: '确认发布？（收编进发布台账，不激活；同摘要幂等）',
+      relConfirmActivate: '确认激活？（切换包活动指针，影响运行面；history 保留）',
+      relConfirmRollback: '确认回滚到上一活动版本？（只动本包活动指针，history 保留）',
       // 接入面（api-to-plugin S2.6）：采样 / 映射预览 / 生成 / 回放（只读展示 + 按钮转发）
       srcTitle: '接入（只读 API）',
       srcHint: 'URL 仅构建期探测，不写入包；面板只做展示与转发，逻辑在 CLI/引擎同口径。',
@@ -612,6 +616,7 @@
       expAbstractHint: 'Cluster experiences into SkillTemplate/RedLine/ExclusionRule drafts (queue only, never writes the package)',
       expIncludePrior: 'Include prior same-name versions (ISSUED production experience flows into DRAFT)',
       expAbstracted: 'Drafts queued',
+      expAbstractNone: 'no cluster large enough — nothing queued',
       expMisByHost: 'Judged-by takes the host identity',
       // Release ledger (delivery dual-track symmetry)
       relTitle: 'Release ledger (activate / version rollback, same mechanism)',
@@ -633,6 +638,9 @@
       relPublished: 'Published (not activated)',
       relActivated: 'Activated',
       relRolledBack: 'Rolled back',
+      relConfirmPublish: 'Publish? (enrolls into the release ledger, not activated; idempotent by digest)',
+      relConfirmActivate: 'Activate? (switches the package active pointer, affects the run plane; history kept)',
+      relConfirmRollback: 'Roll back to the previous active version? (only this package pointer moves; history kept)',
       // source onboarding (api-to-plugin S2.6)
       srcTitle: 'Source onboarding (read-only API)',
       srcHint: 'URL is build-time probe only; never stored in the package. Panel displays and forwards; logic stays in CLI/engine.',

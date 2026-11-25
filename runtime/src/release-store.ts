@@ -595,8 +595,15 @@ export class ReleaseStore {
     const hist = this.readHistory().filter(
       (h) => h.package.name === name && (h.action === 'activate' || h.action === 'rollback') && h.to !== null,
     )
-    // 从后往前找「当前 version 之前」的上一个 to
-    const idx = hist.findIndex((h) => h.to === before)
+    // 从后往前找「当前 version 最近一次成为 to」的前驱——末次匹配：同一版本多次激活/回滚时
+    // 取最近一次的前驱（findIndex 首次匹配会在双回滚场景跳版激活）。
+    let idx = -1
+    for (let i = hist.length - 1; i >= 0; i -= 1) {
+      if (hist[i].to === before) {
+        idx = i
+        break
+      }
+    }
     if (idx <= 0) {
       // 没有恰好等于 before 的记录时，取最近一条 to !== current 且 != before 的
       for (let i = hist.length - 1; i >= 0; i -= 1) {
