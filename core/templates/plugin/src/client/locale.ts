@@ -171,6 +171,10 @@ export const zh = {
   expBackfilled: '回填',
   expSignature: '签名',
   expMisBy: '误迁移判定人',
+  outcomeSuccess: '成功',
+  outcomePartial: '部分成功',
+  outcomeFailure: '失败',
+  outcomePendingHuman: '待人审',
 }
 
 export const en: Record<string, string> = {
@@ -344,4 +348,8 @@ export const en: Record<string, string> = {
   expBackfilled: 'updated',
   expSignature: 'Signature',
   expMisBy: 'Judged by',
+  outcomeSuccess: 'Success',
+  outcomePartial: 'Partial success',
+  outcomeFailure: 'Failure',
+  outcomePendingHuman: 'Pending human review',
 }

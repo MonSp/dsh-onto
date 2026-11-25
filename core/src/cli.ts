@@ -620,9 +620,17 @@ function cmdRun(args: Args): void {
         redlines,
       })
       saveRunRecord(root, rec)
-      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 wire/Agent 同口径）
-      saveExperienceNote(root, experienceFromRun(rec, pkg))
       runRecord = result.runId
+      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 wire/Agent 同口径）。
+      // 学习层不否决运行交付：写回失败不抹掉已保存的 RunRecord、不误报 not saved
+      // （缺卡由复核桥接 recordReviewDecision 补建自愈）
+      try {
+        saveExperienceNote(root, experienceFromRun(rec, pkg))
+      } catch (e) {
+        console.error(
+          `warn: run ${rec.runId} saved, but experience draft not written (${e instanceof Error ? e.message : String(e)}) — it will be created on review backfill`,
+        )
+      }
     }
   } catch (e) {
     runRecord = null
@@ -851,6 +859,10 @@ function cmdExp(sub: string | undefined, args: Args): void {
     case 'abstract': {
       const dir = flagStr(args, 'dir')
       const pkg = loadPackage(dir)
+      // 目标须是 DRAFT：ISSUED 只读（P1）——对已签发版本排队只会出物化死端草案
+      if (readPackageMeta(dir).status === 'ISSUED') {
+        fail('--dir 指向已签发版本：请 fork 新版本后在 DRAFT 上总结（P1）')
+      }
       const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
       // 断链 B：--include-prior-versions 放行同 meta.name 历史版本经验（含 ISSUED 生产版）参赛，
       // 草案落当前 --dir 指向的 DRAFT 版本。

@@ -168,6 +168,8 @@ export interface ExperienceNote {
   misTransfer?: { judged: boolean; by: string; note: string }
   /** 上轮 pendingChecks/人审修正的沉淀（下轮检索提示）。 */
   reviewFocus?: string[]
+  /** 人审回填者（宿主可信身份）；机器初稿（experienceFromRun）无此字段——区分机械映射与人审定性。 */
+  reviewedBy?: string
   savedAt: string
 }
 
@@ -187,7 +189,7 @@ function notePath(root: string, runId: unknown): string {
   return join(experiencesDir(root), `${requireSafeRunId(runId)}.json`)
 }
 
-/** 轻形状校验：加载器验形（损坏记录 fail-loud，不裸抛 TypeError）。 */
+/** 轻形状校验：加载器验形（损坏记录 fail-loud，不裸抛 TypeError）；saveExperienceNote 落盘前同闸。 */
 function isExperienceNote(value: unknown): value is ExperienceNote {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
@@ -208,19 +210,45 @@ function isExperienceNote(value: unknown): value is ExperienceNote {
     sig !== null &&
     typeof sig.digest === 'string' &&
     typeof sig.scenarioId === 'string' &&
+    // packageScope 须是 name@version（name/version 非空、恰一个 @）——split('@') 取名的前提
+    typeof sig.packageScope === 'string' &&
+    sig.packageScope.split('@').length === 2 &&
+    sig.packageScope.split('@').every((p) => p !== '') &&
+    typeof sig.goalClass === 'string' &&
+    typeof sig.stepShape === 'string' &&
+    Array.isArray(sig.ruleRefs) &&
+    sig.ruleRefs.every((s) => typeof s === 'string') &&
+    Array.isArray(sig.skillRefs) &&
+    sig.skillRefs.every((s) => typeof s === 'string') &&
+    Array.isArray(sig.inputShape) &&
+    sig.inputShape.every((s) => typeof s === 'string') &&
+    (sig.dataBand === 'S' || sig.dataBand === 'M' || sig.dataBand === 'L') &&
+    (sig.ruleShape === undefined ||
+      (Array.isArray(sig.ruleShape) && sig.ruleShape.every((s) => typeof s === 'string'))) &&
     (v.outcomeReason === undefined || typeof v.outcomeReason === 'string') &&
+    (v.reviewedBy === undefined || typeof v.reviewedBy === 'string') &&
     (v.reviewFocus === undefined ||
       (Array.isArray(v.reviewFocus) && v.reviewFocus.every((s) => typeof s === 'string'))) &&
     (reused === undefined ||
       (typeof reused === 'object' && reused !== null && typeof reused.runId === 'string')) &&
     (mis === undefined ||
-      (typeof mis === 'object' && mis !== null && typeof mis.judged === 'boolean'))
+      (typeof mis === 'object' &&
+        mis !== null &&
+        typeof mis.judged === 'boolean' &&
+        typeof mis.by === 'string' &&
+        mis.by.trim() !== '' &&
+        typeof mis.note === 'string'))
   )
 }
 
 /** 落盘经验记录（同 runId 覆盖）。返回文件绝对路径（服务端内部用，勿回显模型面）。 */
 export function saveExperienceNote(root: string, note: ExperienceNote): string {
   requireSafeRunId(note.runId)
+  // 落盘前验形（sink 闸）：坏值（错型 outcome / 非字符串 reviewFocus / 空 by 等）拒于门外，
+  // 不落成加载即 PACKAGE_MALFORMED 的毒丸
+  if (!isExperienceNote(note)) {
+    throw new PackageStoreError('INVALID_ARGS', 'invalid experience note')
+  }
   const dir = experiencesDir(root)
   if (!isInsideDir(root, dir)) {
     throw new PackageStoreError('INVALID_ARGS', 'invalid experience path')
@@ -272,10 +300,11 @@ export function listExperienceNotes(root: string): ExperienceNote[] {
 /**
  * S5.4.2 运行回写：RunRecord → ExperienceNote 初稿（人审回填前的学习层标注）。
  * 映射：审计失败 → `failure` + `counterexample=true`（反例警示，类比不参赛）；
- * 审计过但候选带 pendingChecks（证据部分闭合）→ `partial`；全闭合 → `success`。
- * 三分支都把 pendingChecks 的结构位（ruleId / missing 特征名）沉淀 reviewFocus
+ * 审计过但候选带 pendingChecks（证据部分闭合）或零候选空跑（无可学证据）→ `partial`；
+ * 有候选且全闭合 → `success`。零候选不机械定性 success——空跑聚簇会出空壳技能模板。
+ * 各分支都把 pendingChecks 的结构位（ruleId / missing 特征名）沉淀 reviewFocus
  * （下轮检索提示）；自由文本 note 不进正文（方法论正文只收结构位）。
- * 人工改判（annotate / review 回填）可覆盖 outcome——认定在人工。
+ * 人工改判（annotate / review 回填）可覆盖 outcome/counterexample——认定在人工。
  */
 export function experienceFromRun(rec: RunRecord, pkg: OntologyPackage): ExperienceNote {
   const signature = buildTaskSignature({
@@ -292,10 +321,11 @@ export function experienceFromRun(rec: RunRecord, pkg: OntologyPackage): Experie
     ),
   ].filter(isStructuralFocusToken)
   const auditPassed = rec.result.audit.passed === true
+  const emptyRun = rec.result.candidates.length === 0
   return {
     runId: rec.runId,
     signature,
-    outcome: !auditPassed ? 'failure' : pending.length > 0 ? 'partial' : 'success',
+    outcome: !auditPassed ? 'failure' : pending.length > 0 || emptyRun ? 'partial' : 'success',
     skillRefsUsed: signature.skillRefs,
     counterexample: !auditPassed,
     ...(reviewFocus.length > 0 ? { reviewFocus } : {}),
@@ -694,14 +724,40 @@ export function reviewFocusFrom(rev: DiffRevision): string[] {
 
 /* ───────────────────────── 抽象巩固（S6，P3-1） ───────────────────────── */
 
-/** 经验 scope 参赛判定：默认精确同包版本；includePriorVersions 放行同 meta.name 全版本。 */
+/** 经验 scope 参赛判定：默认精确同包版本；includePriorVersions 放行同 meta.name 的**历史版**（≤ 当前版）。 */
+function splitScope(s: string): [string, string | null] {
+  const i = s.indexOf('@')
+  if (i <= 0 || i === s.length - 1 || s.indexOf('@', i + 1) !== -1) return [s, null]
+  return [s.slice(0, i), s.slice(i + 1)]
+}
+
+/** 同名版本先后比较（逐段；数字段按数值比，非数字段退化为字典序）：1.0.0 < 1.1.0 < 1.10.0。 */
+function versionAtMost(a: string, b: string): boolean {
+  const pa = a.split('.')
+  const pb = b.split('.')
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i += 1) {
+    const x = pa[i] ?? ''
+    const y = pb[i] ?? ''
+    const nx = Number(x)
+    const ny = Number(y)
+    const bothNum = x !== '' && y !== '' && Number.isFinite(nx) && Number.isFinite(ny)
+    const d = bothNum ? nx - ny : x < y ? -1 : x > y ? 1 : 0
+    if (d !== 0) return d < 0
+  }
+  return true
+}
+
 function scopeMatches(noteScope: string, scope: string, includePriorVersions: boolean): boolean {
   if (noteScope === scope) return true
-  return includePriorVersions && noteScope.split('@')[0] === scope.split('@')[0]
+  if (!includePriorVersions) return false
+  const [nName, nVer] = splitScope(noteScope)
+  const [cName, cVer] = splitScope(scope)
+  return nName === cName && nVer !== null && cVer !== null && versionAtMost(nVer, cVer)
 }
 
 export interface SkillAbstraction {
-  /** 聚簇键：packageScope + stepShape。 */
+  /** 聚簇键：包名（meta.name）+ stepShape——includePriorVersions 时同名历史版本经验共簇。 */
   clusterKey: string
   signature: TaskSignature
   memberRunIds: string[]
@@ -743,10 +799,14 @@ export function abstractSkillDrafts(
   const out: SkillAbstraction[] = []
   for (const [clusterKey, members] of clusters) {
     if (members.length < minCluster) continue
-    // 代表轨迹 = 最新一条（签名与簇一致）
-    const rep = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))[0]
-    const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
-    const slug = rep.signature.scenarioId.replace(/^SCN-[A-Z0-9]+-/, '') || 'EXP'
+    // 代表轨迹 = 最新一条（签名与簇一致）；跨版本聚簇时优先取 scenarioId 在当前包存在的成员，
+    // 防止旧版 scenarioId 悬空进 draft.payload.scenarioId（物化按它接线 pipeline.skillRefs）
+    const ordered = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))
+    const rep =
+      ordered.find((m) => pkg.scenarios.some((s) => s.id === m.signature.scenarioId)) ?? ordered[0]
+    const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId) ?? pkg.scenarios[0]
+    const scenarioId = scenario?.id ?? rep.signature.scenarioId
+    const slug = scenarioId.replace(/^SCN-[A-Z0-9]+-/, '') || 'EXP'
     const domainTag = pkg.meta.domain || 'EXP'
     // 结构位过滤：只保留特征名 / OBJ.attr / ruleId / skillId 形态，防自由文本进方法论正文。
     const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))].filter(isStructuralFocusToken)
@@ -755,17 +815,20 @@ export function abstractSkillDrafts(
     const draft: DraftItem = {
       layer: 'O2',
       targetKind: 'SkillTemplate',
-      name: `${scenario?.name ?? rep.signature.scenarioId}经验模板`,
+      name: `${scenario?.name ?? scenarioId}经验模板`,
       payload: {
         id: `SKL-${domainTag}-EXP-${slug}`,
         // E1-3：物化时按此接线 pipeline.skillRefs（专家 skills 收口）
-        scenarioId: rep.signature.scenarioId,
+        scenarioId,
         weights,
         steps: ['候选 {candidateId}', ...focus],
         outputTemplate: '摘要：{riskScore}',
       },
       confidence: 0.8,
-      rationale: `经验闭环抽象：${members.length} 条成功轨迹（${members.map((m) => m.runId).join(', ')}）`,
+      // 证据语境带成员 packageScope（跨版本聚簇时可回指版本来源）
+      rationale: `经验闭环抽象：${members.length} 条成功轨迹（${members
+        .map((m) => `${m.runId}(${m.signature.packageScope})`)
+        .join(', ')}）`,
     }
     out.push({ clusterKey, signature: rep.signature, memberRunIds: members.map((m) => m.runId), draft })
   }
@@ -807,8 +870,14 @@ export function abstractCounterexampleDrafts(
   const out: CounterAbstraction[] = []
   for (const [clusterKey, members] of clusters) {
     if (members.length < minCluster) continue
-    const rep = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))[0]
-    const runList = members.map((m) => m.runId).join(', ')
+    // 代表轨迹同技能聚簇：优先 scenarioId 在当前包存在的成员，防旧版 scenarioId 悬空进 payload
+    const ordered = [...members].sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))
+    const rep =
+      ordered.find((m) => pkg.scenarios.some((s) => s.id === m.signature.scenarioId)) ?? ordered[0]
+    const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId) ?? pkg.scenarios[0]
+    const scenarioId = scenario?.id ?? rep.signature.scenarioId
+    // 证据语境带成员 packageScope（跨版本聚簇时可回指版本来源）
+    const runList = members.map((m) => `${m.runId}(${m.signature.packageScope})`).join(', ')
     const texts = members.map((m) => m.outcomeReason ?? '').join(' ')
     const phrases = [...new Set(findConclusionPhrases(texts))]
     let draft: DraftItem
@@ -817,17 +886,16 @@ export function abstractCounterexampleDrafts(
         layer: 'O3',
         targetKind: 'RedLine',
         name: `反例红线:${phrases[0]}`,
-        payload: { scenarioId: rep.signature.scenarioId, phrases },
+        payload: { scenarioId, phrases },
         confidence: 0.7,
         rationale: `经验反例红线：${members.length} 条（${runList}）`,
       }
     } else {
       const focus = [...new Set(members.flatMap((m) => m.reviewFocus ?? []))]
-      const scenario = pkg.scenarios.find((s) => s.id === rep.signature.scenarioId)
       draft = {
         layer: 'O2',
         targetKind: 'ExclusionRule',
-        name: `${scenario?.name ?? rep.signature.scenarioId}反例排除`,
+        name: `${scenario?.name ?? scenarioId}反例排除`,
         payload: {
           action: 'downweight',
           factor: 0.5,
@@ -940,6 +1008,8 @@ export function reviewExperienceNote(
     misTransfer?: { judged: boolean; by: string; note?: string }
     reviewFocus?: string[]
     reusedFromRunId?: string
+    /** 人审回填者（宿主可信身份）；写入即标记本条已经人工定性（机器初稿无此字段）。 */
+    reviewedBy?: string
     /** 人审触碰时传入当前包 → 旧签名升版（packageScope 须一致，否则跳过）。 */
     upgradePkg?: OntologyPackage
   },
@@ -989,6 +1059,12 @@ export function reviewExperienceNote(
       runId: patch.reusedFromRunId,
       diff: buildDiffTable(note.signature, src.signature),
     }
+  }
+  if (patch.reviewedBy !== undefined) {
+    if (typeof patch.reviewedBy !== 'string' || patch.reviewedBy.trim() === '') {
+      throw new PackageStoreError('INVALID_ARGS', 'invalid reviewedBy')
+    }
+    note.reviewedBy = patch.reviewedBy
   }
   note.savedAt = new Date().toISOString()
   saveExperienceNote(root, note)

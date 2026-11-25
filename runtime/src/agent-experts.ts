@@ -569,8 +569,14 @@ export function registerExpertTools(
             accessBinding: identity && runAccessBinding(identity),
           })
           saveRunRecord(ws.root, rec)
-          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 run_scenario 同口径）
-          saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 run_scenario 同口径）。
+          // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+          // 纯 fire-and-forget（专家出口是运行结果契约，无独立回执位）：写回失败不改判本次交付。
+          try {
+            saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+          } catch {
+            /* 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建 */
+          }
 
           const profile = buildExpertProfiles(versionDir).experts.find((e) => e.expertId === scenario.id)
           const expert = profile ?? {

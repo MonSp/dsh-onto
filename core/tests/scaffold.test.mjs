@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { derivePackage, generatePlugin, loadPackage, readPackageMeta } from '../dist/index.js'
 import { mkWorkspace, rmWorkspace, REPO_ROOT } from './helpers.mjs'
 
@@ -16,7 +16,8 @@ const SCN = 'SCN-WST-HAZARD-MIX'
 function runGeneratedE2E(outDir) {
   const nm = join(outDir, 'node_modules', '@dsh-onto')
   mkdirSync(nm, { recursive: true })
-  symlinkSync(join(REPO_ROOT, 'core'), join(nm, 'core'), 'junction')
+  const coreLink = join(nm, 'core')
+  if (!existsSync(coreLink)) symlinkSync(join(REPO_ROOT, 'core'), coreLink, 'junction')
   try {
     execFileSync(process.execPath, ['--test', join(outDir, 'tests', 'run-e2e.test.mjs')], {
       encoding: 'utf8',
@@ -24,6 +25,61 @@ function runGeneratedE2E(outDir) {
     })
   } catch (e) {
     assert.fail(`生成物 e2e 失败:\n${e.stdout ?? ''}\n${e.stderr ?? ''}`)
+  }
+}
+
+/**
+ * 生成的 .ps1 落盘须带 UTF-8 BOM（scaffold.ts 写盘加 \uFEFF；PS 5.1 无 BOM 的 UTF-8 按 ANSI 读，
+ * 中文注释/字符串会咬掉引号致解析失败）。断言字节头 EF BB BF——用 Buffer 读，utf8 读会吞 BOM。
+ */
+function assertPs1Bom(outDir, files) {
+  const ps1s = files.filter((f) => f.endsWith('.ps1'))
+  assert.ok(ps1s.length > 0, '模板树应含 .ps1 脚本')
+  for (const rel of ps1s) {
+    const buf = readFileSync(join(outDir, ...rel.split('/')))
+    assert.deepEqual([...buf.subarray(0, 3)], [0xef, 0xbb, 0xbf], `${rel} 落盘应带 UTF-8 BOM（EF BB BF）`)
+  }
+}
+
+/**
+ * 生成插件 tsc --noEmit（构建闸）：不 install——把仓库/harness 侧类型依赖 junction 进生成物
+ * node_modules，用 core 的 typescript 过生成源（模板 app.ts/locale.ts + bindings.ts）。
+ * 类型源缺失（未 pnpm install 的检出）时跳过并告警，不硬撑。
+ */
+function runGeneratedTsc(outDir) {
+  const nm = join(outDir, 'node_modules')
+  const harness = join(REPO_ROOT, '..', 'deepseek-harness')
+  const link = (name, candidates) => {
+    const target = candidates.find((p) => existsSync(p))
+    if (target === undefined) return `缺类型源 ${name}（试过: ${candidates.join(' / ')}）`
+    const dst = join(nm, ...name.split('/'))
+    if (!existsSync(dst)) {
+      mkdirSync(dirname(dst), { recursive: true })
+      symlinkSync(target, dst, 'junction')
+    }
+    return null
+  }
+  const missing = [
+    link('@dsh-onto/core', [join(REPO_ROOT, 'core')]),
+    link('@dsh-onto/runtime', [join(REPO_ROOT, 'runtime')]),
+    link('@deepseek-ai/cordis', [join(harness, 'vendor', 'cordis')]),
+    link('@types/node', [join(REPO_ROOT, 'core', 'node_modules', '@types', 'node'), join(harness, 'node_modules', '@types', 'node')]),
+    link('@types/react', [join(REPO_ROOT, 'workbench', 'node_modules', '@types', 'react'), join(harness, 'node_modules', '@types', 'react')]),
+    link('zod', [join(REPO_ROOT, 'backend', 'node_modules', 'zod'), join(harness, 'node_modules', 'zod')]),
+  ].filter((m) => m !== null)
+  const tscBin = join(REPO_ROOT, 'core', 'node_modules', 'typescript', 'bin', 'tsc')
+  if (missing.length > 0 || !existsSync(tscBin)) {
+    const why = [...missing, ...(existsSync(tscBin) ? [] : ['缺 typescript（core 未 install）'])]
+    console.warn(`[scaffold] 跳过生成插件 tsc 构建断言：${why.join('；')}`)
+    return
+  }
+  try {
+    execFileSync(process.execPath, [tscBin, '--noEmit', '-p', join(outDir, 'tsconfig.json')], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+  } catch (e) {
+    assert.fail(`生成插件 tsc 构建失败:\n${e.stdout ?? ''}\n${e.stderr ?? ''}`)
   }
 }
 
@@ -133,6 +189,8 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
       const text = readFileSync(join(outDir, rel), 'utf8')
       assert.ok(!/__[A-Z][A-Z0-9_]*__/.test(text), `${rel} 残留占位`)
     }
+    // .ps1 落盘带 UTF-8 BOM（PS 5.1 兼容；写盘机制见 scaffold.ts `\uFEFF` 前缀）
+    assertPs1Bom(outDir, result.files)
     // chat-run-report：对话报表面（toolview keyed show_run_report + getRunReport 描述符 + 共享校验）
     assert.ok(readFileSync(join(outDir, 'src', 'client.ts'), 'utf8').includes('getRunReport'))
     const appTs = readFileSync(join(outDir, 'src', 'client', 'app.ts'), 'utf8')
@@ -177,7 +235,8 @@ test('plugin generate：文件齐全、占位清零、契约冻结、包零改�
     const srcLine = seed.split('\n').find((l) => l.includes('const SRC_PKG_DIR'))
     assert.ok(srcLine !== undefined && !srcLine.includes('\\'), `SRC_PKG_DIR 应为正斜杠路径: ${String(srcLine)}`)
     execFileSync(process.execPath, ['--check', join(outDir, 'scripts', 'seed-release.mjs')])
-    // 生成物 e2e 真跑（connector 臂）：夹具→映射→场景→候选/规则/证据/人审断言
+    // 生成插件 tsc 构建闸（type-check 生成源）+ e2e 真跑（connector 臂）：夹具→映射→场景→候选/规则/证据/人审断言
+    runGeneratedTsc(outDir)
     runGeneratedE2E(outDir)
     // 包零改动
     assert.equal(readFileSync(join(dir, 'package.yaml'), 'utf8'), before)
@@ -264,10 +323,13 @@ test('plugin generate dataset 模式：纯内容包出业务页（无 bindings�
       const text = readFileSync(join(outDir, rel), 'utf8')
       assert.ok(!/__[A-Z][A-Z0-9_]*__/.test(text), `${rel} 残留占位`)
     }
+    // .ps1 落盘带 UTF-8 BOM（与 connector 臂同机制）
+    assertPs1Bom(outDir, result.files)
     // e2e 模式分支在位
     const e2e = readFileSync(join(outDir, 'tests', 'run-e2e.test.mjs'), 'utf8')
     assert.ok(e2e.includes("config.dataMode === 'dataset'"), 'e2e 须按模式取夹具')
-    // 生成物 e2e 真跑（dataset 臂）：内联数据通道 → 场景 → 候选/规则/证据/人审断言
+    // 生成插件 tsc 构建闸 + e2e 真跑（dataset 臂）：内联数据通道 → 场景 → 候选/规则/证据/人审断言
+    runGeneratedTsc(outDir)
     runGeneratedE2E(outDir)
     // 包零改动（ISSUED 只读）
     assert.equal(readFileSync(join(versionDir, 'package.yaml'), 'utf8'), before)

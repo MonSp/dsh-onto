@@ -20,7 +20,9 @@ import {
   runtimeContextForHost,
 } from '../dist/index.js'
 import {
+  PackageWorkspace,
   buildRunRecord,
+  derivePackage,
   loadExperienceNote,
   loadPackage,
   saveExperienceNote,
@@ -229,6 +231,8 @@ test('annotateExperience：新建缺 outcome 拒；新建/回填 + misTransfer.b
     assert.equal(created.humanReviewRequired, true)
     assert.equal(created.note.outcome, 'success')
     assert.deepEqual(created.note.reviewFocus, ['txCount24h'])
+    // reviewedBy 转发：新建路径落宿主可信身份（区分机械映射与人审定性）
+    assert.equal(created.note.reviewedBy, 'host:u-exp')
 
     // 回填：误迁移 by 忽略入参自报，一律宿主身份
     const patched = await f.service.remoteExportAnnotateExperience({
@@ -238,6 +242,8 @@ test('annotateExperience：新建缺 outcome 拒；新建/回填 + misTransfer.b
     assert.equal(patched.created, false)
     assert.equal(patched.note.misTransfer.judged, true)
     assert.equal(patched.note.misTransfer.by, 'host:u-exp')
+    // reviewedBy 转发：回填路径同落宿主可信身份
+    assert.equal(patched.note.reviewedBy, 'host:u-exp')
   } finally {
     f.dispose()
   }
@@ -275,6 +281,8 @@ test('reviewExperience：misTransfer.by 不收自报——覆盖为宿主可信�
       misTransfer: { judged: true, by: '张三（表单自称）', note: '复用到异域' },
     })
     assert.equal(note.misTransfer.by, 'host:u-exp')
+    // reviewedBy 转发：reviewExperience 同落宿主可信身份
+    assert.equal(note.reviewedBy, 'host:u-exp')
   } finally {
     f.dispose()
   }
@@ -303,21 +311,25 @@ test('annotateExperience / reviewExperience：counterexample 可改判——机�
   }
 })
 
-/** 组一个「1.0.0 生产经验 + 1.1.0 DRAFT」工作区（断链 B 复现场景）。 */
-function forkWorkspace(f) {
-  const dir110 = join(f.wsRoot, 'packages', 'aml-analysis', '1.1.0')
-  mkdirSync(join(dir110, '..'), { recursive: true })
-  cpSync(AML_SRC, dir110, { recursive: true })
-  const pkg110 = loadPackage(dir110)
-  pkg110.meta.version = '1.1.0'
-  pkg110.meta.status = 'DRAFT'
-  pkg110.meta.issueRecord = []
-  savePackage(dir110, pkg110)
+/**
+ * 组「1.0.0 生产经验 + 1.1.0 DRAFT」工作区（断链 B 复现场景）。
+ * issue100：1.0.0 走状态机两步真正签发（IN_REVIEW→ISSUED，状态机留痕）——
+ * 「生产经验」名实相符；默认 false 仅给 1.0.0 作为抽象目标的用例（ISSUED 只读拒目标）。
+ */
+function forkWorkspace(f, { issue100 = false } = {}) {
+  const ws = new PackageWorkspace(f.wsRoot)
+  ws.forkVersion('aml-analysis', '1.0.0', '1.1.0')
+  derivePackage(join(f.wsRoot, 'packages', 'aml-analysis', '1.1.0'))
   // 两条 1.0.0 成功经验（同 stepShape 聚簇）
   const pkg100 = loadPackage(join(f.wsRoot, 'packages', 'aml-analysis', '1.0.0'))
   for (const runId of ['run-prd000001', 'run-prd000002']) {
     const rec = seedRun(f.wsRoot, runId)
     saveExperienceNote(f.wsRoot, experienceFromRun(rec, pkg100))
+  }
+  if (issue100) {
+    ws.transition('aml-analysis', '1.0.0', 'IN_REVIEW')
+    ws.transition('aml-analysis', '1.0.0', 'ISSUED', '授权复核人（人工）')
+    derivePackage(join(f.wsRoot, 'packages', 'aml-analysis', '1.0.0'))
   }
 }
 
@@ -337,10 +349,17 @@ test('abstractExperiences：聚簇入队（只入队不直写包）+ humanReview
   }
 })
 
-test('abstractExperiences：断链 B——默认精确版本匹配不到 ISSUED 经验；includePriorVersions 回流 DRAFT', async () => {
+test('abstractExperiences：断链 B——默认精确版本匹配不到 ISSUED 经验；includePriorVersions 回流 DRAFT；ISSUED 目标拒', async () => {
   const f = fixture()
   try {
-    forkWorkspace(f)
+    forkWorkspace(f, { issue100: true })
+    // N8 夹具诚实化：1.0.0 已是状态机签发的 ISSUED（不是手写 meta.status）
+    assert.equal(loadPackage(join(f.wsRoot, 'packages', 'aml-analysis', '1.0.0')).meta.status, 'ISSUED')
+    // ISSUED 只读（P1）：抽象目标为生产版 → 拒，须 fork 新版本
+    await expectOrigCode(
+      () => f.service.remoteExportAbstractExperiences({ packageId: 'aml-analysis@1.0.0' }),
+      'INVALID_ARGS',
+    )
     // 死锁复现：1.1.0 默认匹配不到绑定 1.0.0 的生产经验
     const none = await f.service.remoteExportAbstractExperiences({ packageId: 'aml-analysis@1.1.0' })
     assert.equal(none.skills, 0)
@@ -355,6 +374,88 @@ test('abstractExperiences：断链 B——默认精确版本匹配不到 ISSUED 
     assert.equal(abs.queued.length, 1)
     assert.equal(abs.queued[0].targetKind, 'SkillTemplate')
     assert.equal(abs.queued[0].members, 2)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G2 桥接自愈：无经验卡的 RunRecord 走 recordReviewDecision → experience.created=true（缺卡补建）+ reviewedBy', async () => {
+  const f = fixture()
+  try {
+    // 只落 RunRecord、不写经验卡（模拟学习层写回失败/旁路后的缺卡态）
+    const rec = seedRun(f.wsRoot, 'run-nocard0001')
+    assert.throws(() => loadExperienceNote(f.wsRoot, rec.runId), (e) => e.code === 'NOT_FOUND', '前置：经验卡确实缺失')
+    const out = await f.service.remoteExportRecordReviewDecision({
+      runId: rec.runId,
+      candidateIds: ['CAND-001'],
+      snapshotDigest: rec.datasetDigest,
+      ruleFingerprint: 'aml-analysis@1.0.0',
+      decision: 'approved',
+    })
+    assert.equal(out.experience.created, true, '缺卡补建')
+    assert.equal(out.experience.runId, rec.runId)
+    // 补建/桥接同口径：reviewedBy = 决定复核人（宿主可信身份）
+    const note = loadExperienceNote(f.wsRoot, rec.runId)
+    assert.equal(note.reviewedBy, 'host:u-exp')
+    assert.ok(note.outcomeReason.includes('复核决定 approved'), note.outcomeReason)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('N9 扫全库 + includePriorVersions：fork DRAFT 从历史（ISSUED）经验出草案、常见场景不重复入队', async () => {
+  const f = fixture()
+  try {
+    forkWorkspace(f, { issue100: true })
+    // 扫全库（不传 packageId）：ISSUED 生产版记 skipped 不整单失败；fork DRAFT 收历史版经验出草案
+    const out = await f.service.remoteExportAbstractExperiences({ includePriorVersions: true })
+    assert.equal(out.humanReviewRequired, true)
+    const iss = out.scanned.find((s) => s.package === 'aml-analysis@1.0.0')
+    assert.ok(iss !== undefined && iss.skipped !== undefined, 'ISSUED 生产版只记 skipped')
+    const draftRow = out.scanned.find((s) => s.package === 'aml-analysis@1.1.0')
+    assert.ok(draftRow !== undefined && draftRow.skipped === undefined)
+    // 常见场景不重复入队：1.0.0 被跳过、同簇只在 1.1.0 进一次
+    assert.equal(out.queued.length, 1, '同簇不重复入队')
+    assert.equal(out.queued[0].members, 2)
+    assert.equal(out.queued[0].package, 'aml-analysis@1.1.0')
+    // 不带 includePriorVersions：历史版经验不参赛（精确版本匹配）
+    const none = await f.service.remoteExportAbstractExperiences({})
+    assert.equal(none.queued.length, 0)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('runScenario wire seedIds 透传（N10c）：无 prep.expand 拒 / 未知种子不冒认 / 全部缺失拒', async () => {
+  const f = fixture()
+  try {
+    const base = {
+      name: 'aml-analysis',
+      version: '1.0.0',
+      scenarioId: 'SCN-AML-FIND-CLUES',
+      dataset: AML_RUN,
+    }
+    // 未声明 prep.expand：seedIds 意图无处落地 → 受控拒（文案指明 prep.expand）
+    await expectOrigCode(
+      () => f.service.remoteExportRunScenario({ ...base, seedIds: ['ACCT-001'] }),
+      'INVALID_ARGS',
+    )
+    // 声明 prep.expand：未知种子不冒认（missingSeedIds 语义——seeds 只含命中种子）
+    const dir = join(f.wsRoot, 'packages', 'aml-analysis', '1.0.0')
+    const pkg = loadPackage(dir)
+    pkg.scenarios.find((s) => s.id === 'SCN-AML-FIND-CLUES').prep = { expand: { hops: 1 } }
+    savePackage(dir, pkg)
+    derivePackage(dir)
+    const { result } = await f.service.remoteExportRunScenario({
+      ...base,
+      seedIds: ['ACCT-001', 'GHOST-9'],
+    })
+    assert.deepEqual(result.prep.expanded.seeds, ['ACCT-001'], '未知种子进 missingSeedIds、不冒认进 seeds')
+    // 全部种子缺失 → 受控拒（INVALID_ARGS）
+    await expectOrigCode(
+      () => f.service.remoteExportRunScenario({ ...base, seedIds: ['GHOST-9'] }),
+      'INVALID_ARGS',
+    )
   } finally {
     f.dispose()
   }

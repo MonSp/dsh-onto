@@ -49,7 +49,7 @@ test('脚手架部署：保留原签发、重复导入幂等、显式激活、�
     assert.notEqual(seed(profile, 'activate').status, 0)
     assert.notEqual(seed(profile, 'activate', 'agent').status, 0)
     assert.equal(existsSync(active), false)
-    const activation = seed(profile, 'activate', '测试部署人')
+    const activation = seed(profile, 'activate', 'host:测试部署人')
     assert.equal(activation.status, 0, activation.stderr)
     assert.equal(JSON.parse(readFileSync(active, 'utf8')).packages['wst-ops'], '1.0.0')
 

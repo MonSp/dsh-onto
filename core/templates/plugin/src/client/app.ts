@@ -44,6 +44,19 @@ function errText(e: unknown): string {
   return String(e)
 }
 
+/** outcome 原 token → locale key（展示本地化；提交值仍传原 token）。 */
+const OUTCOME_KEY: Record<string, string> = {
+  success: 'outcomeSuccess',
+  partial: 'outcomePartial',
+  failure: 'outcomeFailure',
+  'pending-human': 'outcomePendingHuman',
+}
+
+function outcomeText(t: (k: string) => string, token: string): string {
+  const key = OUTCOME_KEY[token]
+  return key === undefined ? token : t(key)
+}
+
 interface ScenarioRow {
   id: string
   name: string
@@ -652,6 +665,17 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
     return h('div', { className: 'txri-gov' }, h('p', { className: 'txri-err' }, 'remote.ontoRuntime missing'))
   }
 
+  // 经验卡可缺（S5.4.2 前的旧 run）：缺卡 → null（回填面进新建模式）；
+  // 网络/权限等其它错误上墙 setError，不吞成「缺卡」，也不让主流程（openRun/submitReview）失败。
+  const loadExpNote = (runId: string, seq: number): Promise<ExperienceNoteView | null> =>
+    Promise.resolve(api.showExperience({ runId }))
+      .then((v) => unwrap<{ note: ExperienceNoteView }>(v).note)
+      .catch((e: unknown) => {
+        const msg = errText(e)
+        if (!/not[-_ ]?found|不存在/i.test(msg) && seq === reqGuard.n) setError(msg)
+        return null
+      })
+
   // 原子切换：先清空 detail/chain，避免「新 run 证据 + 旧 run 治理链」半成功态
   const openRun = (runId: string) => {
     const seq = ++reqGuard.n
@@ -676,10 +700,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         const [detailOut, chainOut, expOut] = await Promise.all([
           Promise.resolve(api.showRun({ runId })).then((v) => unwrap<RunDetail>(v)),
           Promise.resolve(api.reviewChain({ runId })).then((v) => unwrap<ChainData>(v)),
-          // 经验卡可缺（S5.4.2 前的旧 run）——缺卡不堵复核面，回填时补建
-          Promise.resolve(api.showExperience({ runId }))
-            .then((v) => unwrap<{ note: ExperienceNoteView }>(v).note)
-            .catch(() => null),
+          // 经验卡可缺（S5.4.2 前的旧 run）——缺卡不堵复核面，回填时补建；其它错误上墙（loadExpNote）
+          loadExpNote(runId, seq),
         ])
         if (seq !== reqGuard.n) return
         setDetail(detailOut)
@@ -729,10 +751,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         // 先取链再复位表单；busy 保持到全部在途工作结束（防连点重复提交同一决定）
         const [chainOut, expOut] = await Promise.all([
           Promise.resolve(api.reviewChain({ runId: rec.runId })).then((v) => unwrap<ChainData>(v)),
-          // 认定→经验卡桥接（断链 A）：决定落库即补建/更新经验卡，刷新回填面
-          Promise.resolve(api.showExperience({ runId: rec.runId }))
-            .then((v) => unwrap<{ note: ExperienceNoteView }>(v).note)
-            .catch(() => null),
+          // 认定→经验卡桥接（断链 A）：决定落库即补建/更新经验卡，刷新回填面；缺卡/错误不推翻已落库的决定
+          loadExpNote(rec.runId, seq),
         ])
         if (seq !== reqGuard.n) return
         setChain(chainOut)
@@ -1089,6 +1109,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
               { key: c.candidateId, style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
               h('input', {
                 type: 'checkbox',
+                // e2e 稳定定位：候选勾选框（不与经验回填反例框混淆）
+                'data-e2e': 'cand-check',
                 checked: on,
                 onChange: () => {
                   setSelectedIds((prev) =>
@@ -1128,6 +1150,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
           h('span', { className: 'txri-note' }, reasonRequired ? t('reasonRequired') : t('reasonLabel')),
           h('input', {
             type: 'text',
+            // e2e 稳定定位：复核理由框（不依赖 placeholder 文案）
+            'data-e2e': 'review-reason',
             value: reason,
             placeholder: t('reasonLabel'),
             style: { flex: '1', minWidth: '160px' },
@@ -1179,7 +1203,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
               'div',
               { key: 'en', className: 'txri-note' },
               h(Tag, {
-                text: note.outcome,
+                text: outcomeText(t, note.outcome),
                 tone: note.outcome === 'success' ? 'ok' : note.outcome === 'failure' ? 'err' : 'warn',
               }),
               note.counterexample ? h(Tag, { text: t('expCounter'), tone: 'warn' }) : null,
@@ -1212,7 +1236,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             },
             h('option', { value: '' }, '—'),
             ...(['success', 'partial', 'failure', 'pending-human'] as const).map((o) =>
-              h('option', { key: o, value: o }, o),
+              h('option', { key: o, value: o }, outcomeText(t, o)),
             ),
           ),
           h('input', {

@@ -242,8 +242,9 @@ export interface O3ScenarioCard {
   /**
    * 随包默认报表页契约（chat-run-report 图注「契约＝设计时定义」的布局侧）：
    * 预置可复用报表 surface，随 O3 场景卡发布（进派生指纹/发布台账）。
-   * 运行页/固定结果页缺省用它替代 buildDefaultReportSurface()；不合法时校验上墙、
-   * 运行面回退默认模板（reportBadSurface）。工作区沉淀的 ReportPage 仍可覆盖。
+   * 消费方：生成页客户端（缺省用它替代 buildDefaultReportSurface，不合法时运行面回退默认模板）
+   * 与 listScenarios 透出；core reportpage / runtime 对话报表工具暂不消费此字段。
+   * 不合法时校验上墙（REPORT_SURFACE_INVALID）。工作区沉淀的 ReportPage 仍可覆盖。
    */
   reportSurface?: import('./surface.js').A2uiSurfaceMessage
 }

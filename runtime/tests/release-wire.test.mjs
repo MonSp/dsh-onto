@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, readdirSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -17,7 +17,7 @@ import {
   runtimeContextForHost,
 } from '../dist/index.js'
 import { PackageWorkspace, derivePackage, savePackage } from '@dsh-onto/core'
-import { minimalPkg } from '../../core/tests/helpers.mjs'
+import { minimalPkg, REPO_ROOT } from '../../core/tests/helpers.mjs'
 
 function issuePkg(ws, name, version) {
   const dir = ws.createPackage({ name, version, domain: 'TST' })
@@ -204,6 +204,40 @@ test('发布台账 wire：无身份 fail-closed REVIEWER_UNCONFIRMED', async () 
       'REVIEWER_UNCONFIRMED',
     )
     await expectOrigCode(() => f.service.remoteExportListReleases(), 'REVIEWER_UNCONFIRMED')
+  } finally {
+    f.dispose()
+  }
+})
+
+test('checkReplay 通过路径（N10d）：真实 shape+夹具+基线 → 回放验收过；缺夹具拒', async () => {
+  const f = fixture()
+  try {
+    // wst-ops@1.0.0：apiSources shape + source-maps + fixtures/replay-*.json + expected 基线，随包冻结
+    const wstSrc = join(REPO_ROOT, 'packages', 'wst', '1.0.0')
+    const wstDir = join(f.wsRoot, 'packages', 'wst-ops', '1.0.0')
+    mkdirSync(join(wstDir, '..'), { recursive: true })
+    cpSync(wstSrc, wstDir, { recursive: true })
+    const pub = await f.service.remoteExportPublishRelease({
+      name: 'wst-ops',
+      version: '1.0.0',
+      checkReplay: true,
+    })
+    assert.equal(pub.replayChecked, 1, '全场景夹具回放通过（缺数诊断 0 + 基线对照一致）')
+    assert.equal(pub.activated, false)
+    assert.equal(pub.humanReviewRequired, true)
+
+    // 缺夹具拒：fork DRAFT 后删掉夹具，不得空验收
+    const ws = new PackageWorkspace(f.wsRoot)
+    ws.forkVersion('wst-ops', '1.0.0', '1.1.0')
+    const wstDir2 = join(f.wsRoot, 'packages', 'wst-ops', '1.1.0')
+    derivePackage(wstDir2)
+    for (const name of readdirSync(join(wstDir2, 'fixtures'))) {
+      unlinkSync(join(wstDir2, 'fixtures', name))
+    }
+    await expectOrigCode(
+      () => f.service.remoteExportPublishRelease({ name: 'wst-ops', version: '1.1.0', checkReplay: true }),
+      'INVALID_ARGS',
+    )
   } finally {
     f.dispose()
   }

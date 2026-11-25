@@ -9,6 +9,19 @@ import type { Ctx } from '../types'
 import { Tag, ErrorBanner } from '../ui'
 import { unwrap, errText } from '../helpers'
 
+/** outcome 原 token → locale key（展示本地化；提交值仍传原 token）。 */
+const OUTCOME_KEY: Record<string, string> = {
+  success: 'outcomeSuccess',
+  partial: 'outcomePartial',
+  failure: 'outcomeFailure',
+  'pending-human': 'outcomePendingHuman',
+}
+
+function outcomeText(t: (k: string) => string, token: string): string {
+  const key = OUTCOME_KEY[token]
+  return key === undefined ? token : t(key)
+}
+
 export function ExperiencePanel(props: {
   t: (k: string) => string
   apis: Ctx
@@ -222,7 +235,7 @@ export function ExperiencePanel(props: {
                 h('td', null, r.scenarioId),
                 h('td', null, r.packageScope),
                 h('td', null, h(Tag, {
-                  text: r.outcome,
+                  text: outcomeText(t, r.outcome),
                   tone: r.outcome === 'success' ? 'ok' : r.outcome === 'failure' ? 'err' : 'warn',
                 })),
                 h('td', null, r.counterexample ? '✓' : '—'),
@@ -255,10 +268,10 @@ export function ExperiencePanel(props: {
             onChange: (e: { target: { value: string } }) => setFormOutcome(e.target.value),
           },
             h('option', { value: '' }, '—'),
-            h('option', { value: 'success' }, 'success'),
-            h('option', { value: 'partial' }, 'partial'),
-            h('option', { value: 'failure' }, 'failure'),
-            h('option', { value: 'pending-human' }, 'pending-human')),
+            h('option', { value: 'success' }, outcomeText(t, 'success')),
+            h('option', { value: 'partial' }, outcomeText(t, 'partial')),
+            h('option', { value: 'failure' }, outcomeText(t, 'failure')),
+            h('option', { value: 'pending-human' }, outcomeText(t, 'pending-human'))),
           h('input', {
             className: 'ow-in',
             placeholder: t('expReason'),

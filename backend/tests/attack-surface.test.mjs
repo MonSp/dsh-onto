@@ -10,6 +10,12 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
+import {
+  OntoRuntime,
+  runtimeContextForHost,
+} from '@dsh-onto/runtime'
+import { minimalPkg } from '../../core/tests/helpers.mjs'
 import {
   AgentToolError,
   assertBatchContract,
@@ -1537,5 +1543,205 @@ test('INV-5/6 连接器性质按 kind 标注 + businessWindow 按记录时间（
     assert.equal(res.dataBasis.fresh, false, 'businessWindow.to 空 → fresh=false（时效不可证）')
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/* ── G8 wire 端点不变量表（PR#32 复审）：人审写操作同族 6 端点（全表重放） ────
+ * 口径参照 reviewExperience/recordReviewDecision 人审写操作条目：
+ * 无身份 → REVIEWER_UNCONFIRMED（fail-closed 先行，防探测）；写操作 humanReviewRequired 恒 true；
+ * 输出过禁语断言（N10a）。listReleases 为只读台账面，仅身份不变量。 */
+
+const WIRE_PHRASES = ['认定违规'] // minimalPkg 场景红线
+
+async function expectWireCode(fn, origCode) {
+  await assert.rejects(fn, (e) => {
+    const got = e.details?.origCode ?? e.code
+    assert.equal(got, origCode, `expected origCode ${origCode}, got ${got} (code=${e.code})`)
+    return true
+  })
+}
+
+function wireFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-onto-g8-'))
+  const wsRoot = join(dir, 'dsh-onto', 'workspace')
+  mkdirSync(wsRoot, { recursive: true })
+  const ws = new PackageWorkspace(wsRoot)
+  const issuePkg = (name, version) => {
+    const vdir = ws.createPackage({ name, version, domain: 'TST' })
+    const pkg = minimalPkg({
+      meta: {
+        kind: 'BusinessOntologyPackage',
+        name,
+        version,
+        domain: 'TST',
+        metaFrameworkVersion: '1.0',
+        status: 'DRAFT',
+        issueRecord: [],
+        externalRefs: [],
+      },
+    })
+    savePackage(vdir, pkg)
+    ws.transition(name, version, 'IN_REVIEW')
+    ws.transition(name, version, 'ISSUED', '授权人（人工）')
+    derivePackage(vdir)
+    return vdir
+  }
+  const dir100 = issuePkg('test-pkg', '1.0.0')
+  const ctx = new Context()
+  ctx.reflect.provide('profileContext', { dir })
+  const service = new OntoRuntime(ctx)
+  const runtime = runtimeContextForHost(ctx.root)
+  const setIdentity = (provider) => {
+    runtime.run(() => businessPolicy.setIdentityProvider(provider))
+  }
+  setIdentity(() => ({
+    userId: 'u-g8',
+    tenant: 't1',
+    roles: ['analyst'],
+    dataScope: { objectTypes: [] },
+  }))
+  return {
+    dir,
+    ws,
+    wsRoot,
+    service,
+    dir100,
+    issuePkg,
+    setIdentity,
+    dispose() {
+      runtime.run(() => businessPolicy.setIdentityProvider(null))
+      closeActionStore(wsRoot)
+      rmSync(dir, { recursive: true, force: true })
+    },
+  }
+}
+
+/** 最小运行留痕（供 annotateExperience 有卡面）：直接走 core runScenario + RunRecord。 */
+function seedWireRun(wsRoot, dir, runId) {
+  const dataset = {
+    objects: [{ id: 'INST-1', type: 'OBJ-TST-A' }],
+    relations: [],
+    behaviors: [],
+    candidates: [{ candidateId: 'CAND-1', objectRef: 'OBJ-TST-A:INST-1', features: {} }],
+  }
+  const result = runScenario(dir, 'SCN-TST-1', dataset)
+  const rec = buildRunRecord({
+    package: { name: 'test-pkg', version: '1.0.0' },
+    dataset,
+    result,
+    redlines: [],
+  })
+  saveRunRecord(wsRoot, rec)
+  return rec
+}
+
+test('G8-EXA annotateExperience：无身份 REVIEWER_UNCONFIRMED；humanReviewRequired 恒 true + 禁语零命中', async () => {
+  const f = wireFixture()
+  try {
+    const rec = seedWireRun(f.wsRoot, f.dir100, 'run-g8exa00001')
+    f.setIdentity(null)
+    await expectWireCode(
+      () => f.service.remoteExportAnnotateExperience({ runId: rec.runId, outcome: 'success' }),
+      'REVIEWER_UNCONFIRMED',
+    )
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    const out = await f.service.remoteExportAnnotateExperience({ runId: rec.runId, outcome: 'success' })
+    assert.equal(out.humanReviewRequired, true)
+    assert.equal(out.created, true)
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G8-EXB abstractExperiences：无身份 REVIEWER_UNCONFIRMED；humanReviewRequired 恒 true + 禁语零命中', async () => {
+  const f = wireFixture()
+  try {
+    f.setIdentity(null)
+    await expectWireCode(
+      () => f.service.remoteExportAbstractExperiences({ packageId: 'test-pkg@1.0.0' }),
+      'REVIEWER_UNCONFIRMED',
+    )
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    // 发现面（扫全库）：空库也回 humanReviewRequired 恒 true（物化必经人审）
+    const out = await f.service.remoteExportAbstractExperiences({})
+    assert.equal(out.humanReviewRequired, true)
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G8-RLS listReleases：无身份 REVIEWER_UNCONFIRMED（只读台账面同 fail-closed）', async () => {
+  const f = wireFixture()
+  try {
+    f.setIdentity(null)
+    await expectWireCode(() => f.service.remoteExportListReleases(), 'REVIEWER_UNCONFIRMED')
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    const out = await f.service.remoteExportListReleases()
+    assert.ok(Array.isArray(out.packages))
+    assert.ok(Array.isArray(out.history))
+    assert.ok(out.packages.some((p) => p.name === 'test-pkg'))
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G8-RPS publishRelease：无身份 REVIEWER_UNCONFIRMED；humanReviewRequired 恒 true + 禁语零命中', async () => {
+  const f = wireFixture()
+  try {
+    f.setIdentity(null)
+    await expectWireCode(
+      () => f.service.remoteExportPublishRelease({ name: 'test-pkg', version: '1.0.0' }),
+      'REVIEWER_UNCONFIRMED',
+    )
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    const out = await f.service.remoteExportPublishRelease({ name: 'test-pkg', version: '1.0.0' })
+    assert.equal(out.humanReviewRequired, true)
+    assert.equal(out.activated, false, '发布不激活——激活是独立人工动作')
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G8-RAC activateRelease：无身份 REVIEWER_UNCONFIRMED；humanReviewRequired 恒 true + 禁语零命中', async () => {
+  const f = wireFixture()
+  try {
+    f.setIdentity(null)
+    await expectWireCode(
+      () => f.service.remoteExportActivateRelease({ name: 'test-pkg', version: '1.0.0' }),
+      'REVIEWER_UNCONFIRMED',
+    )
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    await f.service.remoteExportPublishRelease({ name: 'test-pkg', version: '1.0.0' })
+    const out = await f.service.remoteExportActivateRelease({ name: 'test-pkg', version: '1.0.0' })
+    assert.equal(out.humanReviewRequired, true)
+    assert.equal(out.previous, null)
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
+  }
+})
+
+test('G8-RBR rollbackRelease：无身份 REVIEWER_UNCONFIRMED；humanReviewRequired 恒 true + 禁语零命中', async () => {
+  const f = wireFixture()
+  try {
+    f.setIdentity(null)
+    await expectWireCode(() => f.service.remoteExportRollbackRelease({ name: 'test-pkg' }), 'REVIEWER_UNCONFIRMED')
+    f.setIdentity(() => ({ userId: 'u-g8', tenant: 't1', roles: ['analyst'], dataScope: { objectTypes: [] } }))
+    // 双版本激活后回滚（成功面）
+    await f.service.remoteExportPublishRelease({ name: 'test-pkg', version: '1.0.0' })
+    await f.service.remoteExportActivateRelease({ name: 'test-pkg', version: '1.0.0' })
+    f.issuePkg('test-pkg', '1.1.0')
+    await f.service.remoteExportPublishRelease({ name: 'test-pkg', version: '1.1.0' })
+    await f.service.remoteExportActivateRelease({ name: 'test-pkg', version: '1.1.0' })
+    const out = await f.service.remoteExportRollbackRelease({ name: 'test-pkg' })
+    assert.equal(out.humanReviewRequired, true)
+    assert.equal(out.rolledBackTo, '1.0.0')
+    assertNoForbiddenPhrases(out, WIRE_PHRASES)
+  } finally {
+    f.dispose()
   }
 })

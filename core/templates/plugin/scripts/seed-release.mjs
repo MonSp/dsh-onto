@@ -29,12 +29,16 @@ const releases = new ReleaseStore({
   versions: { core: '0.2.3', runtime: '0.2.3', plugin: '__PKG_ID__@0.1.0' },
   capabilities: () => ['dryrun'],
 })
+// 激活/回滚操作者须为宿主可信身份 host:<userId>（assertAuthorizedActor fail-closed）：
+// 运维传裸名（如 "张三"）时归一为 host: 形态，显式带前缀则原样保留
+const actor = authorizedBy === undefined ? undefined
+  : authorizedBy.trim().startsWith('host:') ? authorizedBy.trim() : `host:${authorizedBy.trim()}`
 if (command === 'activate') {
-  const act = releases.activate('__PKG_NAME__', '__PKG_VERSION__', { authorizedBy })
+  const act = releases.activate('__PKG_NAME__', '__PKG_VERSION__', { authorizedBy: actor })
   console.log('activate:', JSON.stringify(act))
 } else if (command === 'rollback') {
   // 版本回滚同机制（图注「激活」）：history 保留、目标不存在 fail-loud
-  const rolled = releases.rollback('__PKG_NAME__', { authorizedBy })
+  const rolled = releases.rollback('__PKG_NAME__', { authorizedBy: actor })
   console.log('rollback:', JSON.stringify(rolled))
 } else {
   const manifest = buildReleaseManifest(SRC_PKG_DIR, {

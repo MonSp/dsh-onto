@@ -1,6 +1,7 @@
 /** 经验闭环验收（spec experience-loop S4.1/S4.3）：任务结构签名 + 经验记录围栏存取。 */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -26,7 +27,7 @@ import {
   isLegacySignature,
   upgradeLegacySignature,
 } from '../dist/index.js'
-import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace } from './helpers.mjs'
+import { minimalPkg, mkWorkspaceWithPkg, rmWorkspace, REPO_ROOT } from './helpers.mjs'
 
 const SUMMARY = { objects: 2, relations: 1, behaviors: 1, candidates: 10 }
 
@@ -797,6 +798,132 @@ test('abstractCounterexampleDrafts：includePriorVersions——历史反例经�
     assert.equal(ex.length, 1)
     assert.deepEqual([...ex[0].memberRunIds].sort(), ['run-pc1', 'run-pc2'])
     assert.equal(ex[0].draft.targetKind, 'ExclusionRule')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── 审阅遗留修复回归（PR#32 review：验形 / 空跑 / prior 语义 / 悬空 scenarioId / reviewedBy） ── */
+
+test('experienceFromRun：零候选空跑 → partial（不机械定性 success，空跑不进技能聚簇）', () => {
+  const empty = makeRec()
+  empty.result.candidates = []
+  const note = experienceFromRun(empty, minimalPkg())
+  assert.equal(note.outcome, 'partial')
+  assert.equal(note.counterexample, false)
+})
+
+test('saveExperienceNote 落盘验形（sink 闸）：坏值拒于门外、不落毒丸', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    assert.throws(
+      () => saveExperienceNote(root, makeNote({ runId: 'run-v1', outcome: 'nope' })),
+      /INVALID_ARGS|invalid experience note/,
+    )
+    assert.throws(
+      () =>
+        saveExperienceNote(
+          root,
+          makeNote({ runId: 'run-v2', misTransfer: { judged: true, by: '  ', note: '' } }),
+        ),
+      /INVALID_ARGS|invalid experience note/,
+    )
+    assert.throws(
+      () => saveExperienceNote(root, makeNote({ runId: 'run-v3', reviewFocus: ['ok', 42] })),
+      /INVALID_ARGS|invalid experience note/,
+    )
+    const badScope = makeNote({ runId: 'run-v4' })
+    badScope.signature.packageScope = 'no-at-sign'
+    assert.throws(() => saveExperienceNote(root, badScope), /INVALID_ARGS|invalid experience note/)
+    // 坏值落不了盘——run-v1 不存在
+    assert.throws(() => loadExperienceNote(root, 'run-v1'), /NOT_FOUND|not found/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('includePriorVersions：只放行历史版（≤ 当前版）——未来版经验不参赛', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    const at = (scope, runId, savedAt) => {
+      const n = makeNote({ runId, savedAt })
+      n.signature = { ...n.signature, packageScope: scope }
+      return n
+    }
+    saveExperienceNote(root, at('test-pkg@1.0.0', 'run-now1', '2026-11-08T03:00:00.000Z'))
+    saveExperienceNote(root, at('test-pkg@0.9.0', 'run-old1', '2026-11-08T01:00:00.000Z'))
+    saveExperienceNote(root, at('test-pkg@2.0.0', 'run-fut1', '2026-11-08T02:00:00.000Z'))
+    const draft = minimalPkg()
+    draft.meta.version = '1.0.0'
+    // 三条同名版本经验若全参赛 → minCluster 3 成簇；future 排除后只剩 2 条 → 不成簇
+    assert.equal(abstractSkillDrafts(root, { pkg: draft, includePriorVersions: true, minCluster: 3 }).length, 0)
+    // 历史版 + 当前版成簇（2 条）
+    const abs = abstractSkillDrafts(root, { pkg: draft, includePriorVersions: true, minCluster: 2 })
+    assert.equal(abs.length, 1)
+    assert.deepEqual([...abs[0].memberRunIds].sort(), ['run-now1', 'run-old1'])
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('抽象聚簇：跨版本代表 scenarioId 不悬空；证据语境带成员 packageScope', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    // 最新一条来自旧版（scenarioId 在当前包已不存在）——不得进 draft.payload
+    const old = makeNote({ runId: 'run-old1', savedAt: '2026-11-08T02:00:00.000Z' })
+    old.signature = { ...old.signature, scenarioId: 'SCN-OLD-GONE', packageScope: 'test-pkg@0.9.0' }
+    saveExperienceNote(root, old)
+    saveExperienceNote(root, makeNote({ runId: 'run-now1', savedAt: '2026-11-08T01:00:00.000Z' }))
+    const draft = minimalPkg()
+    draft.meta.version = '1.1.0'
+    const abs = abstractSkillDrafts(root, { pkg: draft, includePriorVersions: true })
+    assert.equal(abs.length, 1)
+    assert.equal(abs[0].draft.payload.scenarioId, 'SCN-TST-1', '代表 scenarioId 须落在当前包场景集内')
+    assert.match(abs[0].draft.rationale, /run-old1\(test-pkg@0\.9\.0\)/)
+    assert.match(abs[0].draft.rationale, /run-now1\(test-pkg@1\.0\.0\)/)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('reviewExperienceNote：reviewedBy 落档——机器初稿无、人审回填后有', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-rb1' }))
+    assert.equal(loadExperienceNote(root, 'run-rb1').reviewedBy, undefined, '机器初稿不带 reviewedBy')
+    const updated = reviewExperienceNote(root, 'run-rb1', {
+      outcome: 'partial',
+      reviewedBy: 'host:u-1',
+    })
+    assert.equal(updated.reviewedBy, 'host:u-1')
+    assert.equal(loadExperienceNote(root, 'run-rb1').reviewedBy, 'host:u-1')
+    assert.throws(
+      () => reviewExperienceNote(root, 'run-rb1', { reviewedBy: '  ' }),
+      /INVALID_ARGS|invalid reviewedBy/,
+    )
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('exp abstract（CLI）：--dir 指向已签发版本拒绝——ISSUED 只读，不出死端草案', () => {
+  const { ws, dir, root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-cli1' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-cli2', savedAt: '2026-11-08T02:00:00.000Z' }))
+    ws.transition('test-pkg', '1.0.0', 'IN_REVIEW')
+    ws.transition('test-pkg', '1.0.0', 'ISSUED', '授权部署人（人工）')
+    const cli = join(REPO_ROOT, 'core', 'dist', 'cli.js')
+    let err = null
+    try {
+      execFileSync(process.execPath, [cli, 'exp', 'abstract', '--dir', dir, '--root', root], {
+        encoding: 'utf8',
+      })
+    } catch (e) {
+      err = e
+    }
+    assert.ok(err !== null, 'ISSUED 目标须拒绝')
+    assert.match(String(err.stderr), /已签发/)
   } finally {
     rmWorkspace(root)
   }

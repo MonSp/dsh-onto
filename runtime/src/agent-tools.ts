@@ -1001,14 +1001,22 @@ export function runScenarioBatch(input: {
         accessBinding: input.accessBinding,
       })
       saveRunRecord(ws.root, rec)
-      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）
-      saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
+      // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+      // 写回失败不吞事实：受控信封带 runId 与原因（状态仍 ok——RunRecord 已保存）。
+      let experience: NonNullable<BatchRunItem['experience']> = { runId: rec.runId, created: true }
+      try {
+        saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+      } catch (e) {
+        experience = { runId: rec.runId, skipped: e instanceof Error ? e.message : String(e) }
+      }
       rememberPhrases(result.runId, phrases)
       results.push({
         scenarioId,
         status: 'ok',
         runId: result.runId,
         summary: summarizeRunResult(result),
+        experience,
       })
     } catch (e) {
       // 失败隔离：单项错误落受控信封（机器码 + 整段禁语退避），不中断批次。
@@ -1408,8 +1416,15 @@ export function annotateExperienceForTool(
   if (!hasPatch) {
     throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / counterexample / misTransfer / reviewFocus / reusedFromRunId 之一')
   }
-  // 误迁移只由人判：by 一律取宿主可信身份（fail-closed），不收模型/表单自报
-  const reviewer = args.misTransfer !== undefined ? requireReviewerHostId() : undefined
+  // 误迁移只由人判：by 一律取宿主可信身份（fail-closed），不收模型/表单自报。
+  // reviewedBy 同源（宿主身份已绑 by）：两条路径（回填/新建）都落人审定性留痕；
+  // 无 misTransfer 时尽力解析宿主身份（本函数可在无宿主上下文的人审契约下被调——
+  // 缺身份则不落 reviewedBy，不为此新增 fail-closed 面）。
+  const optionalHostReviewer = (): string | undefined => {
+    const id = businessPolicy.resolveIdentity()?.userId
+    return typeof id === 'string' && id !== '' ? `host:${id}` : undefined
+  }
+  const reviewer = args.misTransfer !== undefined ? requireReviewerHostId() : optionalHostReviewer()
   const misPatch = args.misTransfer !== undefined
     ? {
         judged: args.misTransfer.judged,
@@ -1460,6 +1475,8 @@ export function annotateExperienceForTool(
       reviewFocus: args.reviewFocus,
       reusedFromRunId: args.reusedFromRunId,
       upgradePkg,
+      // 人审回填者留痕（宿主身份已绑 by）：区分机械映射与人审定性
+      ...(reviewer !== undefined ? { reviewedBy: reviewer } : {}),
     })
     return projectAnnotateReceipt(note, false)
   }
@@ -1501,6 +1518,8 @@ export function annotateExperienceForTool(
         ? { judged: misPatch.judged, by: misPatch.by, note: misPatch.note ?? '' }
         : undefined,
     reviewFocus: args.reviewFocus !== undefined ? [...args.reviewFocus] : undefined,
+    // 人审回填者留痕（宿主身份已绑 by）：新建即人审定性（区别于 experienceFromRun 机械初稿）
+    ...(reviewer !== undefined ? { reviewedBy: reviewer } : {}),
     savedAt: new Date().toISOString(),
   }
   saveExperienceNote(ws.root, note)
@@ -2941,8 +2960,15 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             accessBinding: identity && runAccessBinding(identity),
           })
           saveRunRecord(ws.root, rec)
-          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）
-          saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
+          // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+          // 纯 fire-and-forget（出口是运行结果契约，无独立回执位）：写回失败不改判本次交付，
+          // 事实留在 experiences/ 缺卡状态——复核面 recordReviewDecision/annotateExperience 自愈补建。
+          try {
+            saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+          } catch {
+            /* 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建 */
+          }
           rememberPhrases(result.runId, phrases)
           return toolOut(enforceOutputPolicy(result, phrases))
         },
@@ -4724,7 +4750,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             summary: `授权人激活后新运行绑定 ${args.version}`,
           })
           const act = releases.activate(args.name, args.version, {
-            authorizedBy: identity.userId,
+            // 激活操作者 = 宿主可信身份（N11：assertAuthorizedActor 只放行 host:<userId>）
+            authorizedBy: `host:${identity.userId}`,
             approvalDigest: grant.approvalDigest,
           })
           return toolOut(
@@ -4788,7 +4815,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             summary: `活动指针回上一版本（仅 ${args.name} 自身）`,
           })
           const act = releases.rollback(args.name, {
-            authorizedBy: identity.userId,
+            // 回滚操作者 = 宿主可信身份（N11：assertAuthorizedActor 只放行 host:<userId>）
+            authorizedBy: `host:${identity.userId}`,
             approvalDigest: grant.approvalDigest,
           })
           const rolled = (act as { package?: { version?: string } }).package?.version ?? ''

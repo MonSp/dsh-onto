@@ -291,7 +291,11 @@ export class OntoRuntime extends RuntimeRemoteService {
     analysisMode?: 'formal' | 'explore'
     /** 种子扩图运行（与 Agent run_scenario 同参）：场景须声明 prep.expand。 */
     seedIds?: string[]
-  }): Promise<{ result: ScenarioRunResult }> {
+  }): Promise<{
+    result: ScenarioRunResult
+    /** 运行回写回执（学习层旁路）：缺卡/写回失败显式 skipped——RunRecord 已保存，交付不回滚。 */
+    experience: { runId: string; created: true } | { runId: string; skipped: string }
+  }> {
     return guard(async () => {
       this.assertActive(request.name, request.version)
       const dir = this.ws.versionDir(request.name, request.version)
@@ -353,8 +357,18 @@ export class OntoRuntime extends RuntimeRemoteService {
       saveRunRecord(this.ws.root, rec)
       // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
       // 运行即有经验卡（outcome 机械映射），复核面可衔接人工回填（annotateExperience）。
-      saveExperienceNote(this.ws.root, experienceFromRun(rec, pkg))
-      return { result }
+      // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+      // 写回失败不吞事实：回执显式带 runId 与原因（RunRecord 已保存，交付不回滚）。
+      let experience: { runId: string; created: true } | { runId: string; skipped: string } = {
+        runId: rec.runId,
+        created: true,
+      }
+      try {
+        saveExperienceNote(this.ws.root, experienceFromRun(rec, pkg))
+      } catch (e) {
+        experience = { runId: rec.runId, skipped: e instanceof Error ? e.message : String(e) }
+      }
+      return { result, experience }
     })
   }
 
@@ -647,6 +661,8 @@ export class OntoRuntime extends RuntimeRemoteService {
         note.outcomeReason !== undefined && note.outcomeReason !== ''
           ? `${note.outcomeReason}；${stamp}`
           : stamp
+      // 补建/桥接同口径：人审认定即定性留痕（reviewedBy=决定复核人，宿主可信身份）
+      note.reviewedBy = dec.reviewer
       note.savedAt = new Date().toISOString()
       saveExperienceNote(this.ws.root, note)
       return { runId: note.runId, outcome: note.outcome, created }
@@ -1178,6 +1194,8 @@ export class OntoRuntime extends RuntimeRemoteService {
             }
           : undefined,
         reviewFocus: request.reviewFocus,
+        // 人审回填者留痕（宿主可信身份）：区分机械映射与人审定性
+        reviewedBy: reviewer,
       }) }
     })
   }
@@ -1244,6 +1262,8 @@ export class OntoRuntime extends RuntimeRemoteService {
           misTransfer: misPatch,
           reviewFocus: request.reviewFocus,
           ...(request.reusedFromRunId !== undefined ? { reusedFromRunId: request.reusedFromRunId } : {}),
+          // 人审回填者留痕（宿主可信身份）：区分机械映射与人审定性
+          reviewedBy: reviewer,
         })
         return { note, created: false, humanReviewRequired: true as const }
       }
@@ -1270,6 +1290,8 @@ export class OntoRuntime extends RuntimeRemoteService {
               },
             }
           : {}),
+        // 人审回填者留痕（宿主可信身份）：新建即人审定性（区别于 experienceFromRun 机械初稿）
+        reviewedBy: reviewer,
         savedAt: new Date().toISOString(),
       }
       saveExperienceNote(this.ws.root, note)
