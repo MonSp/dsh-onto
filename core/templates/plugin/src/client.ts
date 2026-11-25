@@ -104,7 +104,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listReviewQueue', false, 'RRQ', 'List review queue (RunRecord x ReviewDecision).'),
       desc('ontoRuntime', 'reviewChain', true, 'RRC', 'Governance chain: decision -> proposal -> action.'),
       desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record a human review decision (UI face).'),
-      desc('ontoRuntime', 'createActionProposal', true, 'RCP', 'Create an action proposal (governed, single-use).'),
+      desc('ontoRuntime', 'createActionProposal', true, 'CAP', 'Create an action proposal (governed, single-use).'),
       desc('ontoRuntime', 'prepareAction', true, 'RPA', 'Issue a UI approval challenge (two-phase approval card).'),
       desc('ontoRuntime', 'executeAction', true, 'REA', 'Execute an action with UI approval proof (page face).'),
       desc('ontoRuntime', 'reconcileAction', true, 'RRL', 'Manual reconcile of an unknown/in-flight action record.'),

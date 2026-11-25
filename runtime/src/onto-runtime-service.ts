@@ -765,6 +765,19 @@ export class OntoRuntime extends RuntimeRemoteService {
         if (proposal.status !== 'pending') {
           throw new AgentToolError('PROPOSAL_NOT_PENDING', `动作提案 ${request.proposalId} 状态 ${proposal.status}——须为 pending 才能批准`)
         }
+        // 提案↔意图绑定在批准卡签发时即核（与 executeAction 同口径 fail-closed）：
+        // 卡面不得混搭「提案 A 的 operationId + 意图 B 的行为/载荷」误导批准人。
+        const intentDigest = digestAction(intent)
+        if (
+          proposal.behaviorId !== intent.behaviorId
+          || proposal.objectRef !== intent.objectRef
+          || proposal.intentDigest !== intentDigest
+        ) {
+          throw new AgentToolError(
+            'PROPOSAL_INTENT_MISMATCH',
+            `批准卡意图与提案 ${request.proposalId} 不符（行为/对象/载荷指纹）——错提案不可套用，须新提案并重新批准`,
+          )
+        }
         operationId = proposal.operationId
       }
       const challenge = issueUiApprovalChallenge(contextDigest)

@@ -60,12 +60,12 @@ function fixture() {
 }
 
 /** act 目标存在性证据：运行台账候选对象Ref（数据面实例）。 */
-function seedRun(wsRoot, runId = 'run-wpa000001') {
+function seedRun(wsRoot, runId = 'run-wpa000001', instance = 'ACCT-001') {
   const dataset = {
-    objects: [{ id: 'ACCT-001', type: 'OBJ-AML-ACCOUNT' }],
+    objects: [{ id: instance, type: 'OBJ-AML-ACCOUNT' }],
     relations: [],
     behaviors: [],
-    candidates: [{ candidateId: 'CAND-001', objectRef: 'OBJ-AML-ACCOUNT:ACCT-001' }],
+    candidates: [{ candidateId: 'CAND-001', objectRef: `OBJ-AML-ACCOUNT:${instance}` }],
   }
   const result = {
     scenarioId: 'SCN-AML-FIND-CLUES',
@@ -74,7 +74,7 @@ function seedRun(wsRoot, runId = 'run-wpa000001') {
     candidates: [
       {
         candidateId: 'CAND-001',
-        objectRef: 'OBJ-AML-ACCOUNT:ACCT-001',
+        objectRef: `OBJ-AML-ACCOUNT:${instance}`,
         riskScore: 0.9,
         hitRuleIds: ['RULE-X'],
         evidenceChains: [{ ruleId: 'RULE-X', score: 0.9, evidence: 'e' }],
@@ -208,6 +208,41 @@ test('prepareAction → executeAction：两段式批准全链（提案消费 + a
     assert.equal(chain.actions.length, 1)
     assert.equal(chain.actions[0].proposalId, proposal.proposalId)
     assert.equal(chain.actions[0].approvedBy, 'host:u-wpa')
+  } finally {
+    f.dispose()
+  }
+})
+
+test('prepareAction：提案↔意图不符 → PROPOSAL_INTENT_MISMATCH（卡面不得混搭错提案）', async () => {
+  const f = fixture()
+  try {
+    const rec = seedRun(f.wsRoot, 'run-wpa000011')
+    const dec = seedDecision(f.wsRoot, rec.runId)
+    const proposal = await f.service.remoteExportCreateActionProposal({
+      decisionId: dec.decisionId, runId: rec.runId, candidateId: 'CAND-001', ...ACTION_ARGS,
+    })
+    // 载荷被篡改：卡面若签发会显示「提案 operationId + 异意图载荷」误导批准人
+    await expectOrigCode(
+      () => f.service.remoteExportPrepareAction({
+        ...ACTION_ARGS,
+        payload: { amount: 999, note: 'tampered' },
+        proposalId: proposal.proposalId,
+      }),
+      'PROPOSAL_INTENT_MISMATCH',
+    )
+    // 对象引用被替换为另一可见实例（授权过、但意图不符）：同拒
+    seedRun(f.wsRoot, 'run-wpa000012', 'ACCT-002')
+    await expectOrigCode(
+      () => f.service.remoteExportPrepareAction({
+        ...ACTION_ARGS,
+        objectRef: 'OBJ-AML-ACCOUNT:ACCT-002',
+        proposalId: proposal.proposalId,
+      }),
+      'PROPOSAL_INTENT_MISMATCH',
+    )
+    // 同意图可正常签发（负例对照）
+    const ok = await f.service.remoteExportPrepareAction({ ...ACTION_ARGS, proposalId: proposal.proposalId })
+    assert.match(ok.challengeId, /^uiac-/)
   } finally {
     f.dispose()
   }

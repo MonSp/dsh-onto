@@ -144,6 +144,16 @@ export const zh = {
   actOnObject: '发起动作',
   pagePrev: '上一页',
   pageNext: '下一页',
+  challenge: '挑战',
+  contextDigest: '上下文摘要',
+  expired: '已过期，请重新签发批准卡',
+  verified: '已核实',
+  unverified: '未核实',
+  auditPass: '通过',
+  auditFail: '未过',
+  closed: '已闭合',
+  open: '未闭合',
+  replayed: '（重放）',
 }
 
 export const en: Record<string, string> = {
@@ -290,4 +300,14 @@ export const en: Record<string, string> = {
   actOnObject: 'Act on object',
   pagePrev: 'Prev',
   pageNext: 'Next',
+  challenge: 'Challenge',
+  contextDigest: 'Context digest',
+  expired: 'Expired — re-issue the approval card',
+  verified: 'verified',
+  unverified: 'unverified',
+  auditPass: 'PASS',
+  auditFail: 'FAIL',
+  closed: 'closed',
+  open: 'open',
+  replayed: '(replayed)',
 }

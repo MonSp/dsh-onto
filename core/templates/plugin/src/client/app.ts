@@ -147,7 +147,8 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             scenarioId,
             // sourceId（正式）与 dataset（探索）互斥——服务端同口径校验
             ...(channel === 'dataset' ? { dataset } : { sourceId }),
-            analysisMode: 'explore',
+            // 正式（受控源）通道按 formal 可信口径（缺依据→insufficient）；探索通道 explore 降级轴
+            analysisMode: channel === 'source' ? 'formal' : 'explore',
           }),
         )
         setDataTrust(out.result.dataTrust ?? null)
@@ -177,7 +178,7 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         report.summary.contractStatus !== undefined
           ? h('span', { className: `tag ${statusTone(report.summary.contractStatus) ?? ''}` }, `${t('contractStatus')}: ${report.summary.contractStatus}`)
           : null,
-        h('span', { className: `tag ${report.summary.auditPassed ? 'ok' : 'err'}` }, `${t('audit')}: ${report.summary.auditPassed ? 'PASS' : 'FAIL'}`),
+        h('span', { className: `tag ${report.summary.auditPassed ? 'ok' : 'err'}` }, `${t('audit')}: ${report.summary.auditPassed ? t('auditPass') : t('auditFail')}`),
         h('span', { className: 'tag ok' }, t('humanReview')),
       ),
       h(ReportSurface, {
@@ -276,7 +277,7 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
       ? h(
           'p',
           { className: 'txri-note' },
-          `${t('dataTrust')}: ${dataTrust.provenance} (${dataTrust.verified ? 'verified' : 'unverified'}) — ${dataTrust.note}`,
+          `${t('dataTrust')}: ${dataTrust.provenance} (${dataTrust.verified ? t('verified') : t('unverified')}) — ${dataTrust.note}`,
         )
       : null,
     h('div', { className: 'txri-panel' }, ...resultView()),
@@ -319,16 +320,22 @@ function ReportPages(props: { t: (k: string) => string; ctx: Ctx }) {
 
   useEffect(() => {
     if (!api || pageId === '' || runId === '') return
+    let live = true
+    setReport(null)
     void (async () => {
       setError('')
-      setReport(null)
       try {
         const out = unwrap<{ report: RunReport }>(await api.getRunReport({ runId }))
+        if (!live) return
         setReport(out.report)
       } catch (e) {
+        if (!live) return
         setError(errText(e))
       }
     })()
+    return () => {
+      live = false
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId, runId])
 
@@ -449,6 +456,20 @@ function chainTone(status: string): 'ok' | 'warn' | 'err' | undefined {
   return undefined
 }
 
+/** 执行/对账结果色调：succeeded 绿；补偿/在途存疑 警示；failed 红（不得把 unknown 当成功）。 */
+function statusToneOf(status: string): 'ok' | 'warn' | 'err' {
+  if (status === 'succeeded') return 'ok'
+  if (status === 'failed') return 'err'
+  return 'warn'
+}
+
+/** 演练/模拟判定（与服务端 connectorNature 同口径）：kind 非 formal 一律演练标注。 */
+function connectorSimulated(connector?: { id: string; env: string; kind?: string }): boolean {
+  if (connector === undefined) return false
+  const kind = connector.kind ?? (connector.id === 'dryrun' ? 'dryrun' : 'simulated')
+  return kind !== 'formal'
+}
+
 type ReviewStatus = 'pending' | 'approved' | 'rejected'
 
 interface RunRow {
@@ -531,6 +552,7 @@ interface ChainData {
     phase?: string
     approvalDigest: string
     externalRef?: string
+    connector?: { id: string; env: string; kind?: string }
   }>
 }
 
@@ -545,6 +567,8 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [filter, setFilter] = useState<'all' | ReviewStatus>('all')
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [chain, setChain] = useState<ChainData | null>(null)
+  // 请求序号守卫：detail/chain 取数竞态时只认最后一次请求（旧响应不落新选择）
+  const [reqGuard] = useState(() => ({ n: 0 }))
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
@@ -553,14 +577,19 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [decision, setDecision] = useState<'approved' | 'rejected'>('approved')
   const [reason, setReason] = useState('')
 
+  const fetchRuns = async (): Promise<void> => {
+    if (!api) return
+    const out = unwrap<{ runs: RunRow[] }>(await api.listReviewQueue())
+    setRuns(out.runs ?? [])
+  }
+
   const loadRuns = () => {
     if (!api) return
     void (async () => {
       setError('')
       setBusy('runs')
       try {
-        const out = unwrap<{ runs: RunRow[] }>(await api.listReviewQueue())
-        setRuns(out.runs ?? [])
+        await fetchRuns()
       } catch (e) {
         setError(errText(e))
       } finally {
@@ -580,6 +609,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
 
   // 原子切换：先清空 detail/chain，避免「新 run 证据 + 旧 run 治理链」半成功态
   const openRun = (runId: string) => {
+    const seq = ++reqGuard.n
     void (async () => {
       setError('')
       setOkMsg('')
@@ -595,6 +625,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
           Promise.resolve(api.showRun({ runId })).then((v) => unwrap<RunDetail>(v)),
           Promise.resolve(api.reviewChain({ runId })).then((v) => unwrap<ChainData>(v)),
         ])
+        if (seq !== reqGuard.n) return
         setDetail(detailOut)
         setChain(chainOut)
         const cands = detailOut.record?.result?.candidates ?? []
@@ -602,11 +633,12 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         setSelectedIds([])
         setSelectedCandidate(cands[0]?.candidateId ?? '')
       } catch (e) {
+        if (seq !== reqGuard.n) return
         setDetail(null)
         setChain(null)
         setError(errText(e))
       } finally {
-        setBusy('')
+        if (seq === reqGuard.n) setBusy('')
       }
     })()
   }
@@ -617,6 +649,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
 
   const submitReview = () => {
     if (!detail || !canSubmit) return
+    const seq = ++reqGuard.n
     void (async () => {
       setError('')
       setOkMsg('')
@@ -634,13 +667,19 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
           }),
         )
         setOkMsg(`${t('reviewSubmitted')}: ${out.decisionId} (${out.decision})`)
-        loadRuns()
+        // 先取链再复位表单；busy 保持到全部在途工作结束（防连点重复提交同一决定）
         const chainOut = unwrap<ChainData>(await api.reviewChain({ runId: rec.runId }))
+        if (seq !== reqGuard.n) return
         setChain(chainOut)
+        setSelectedIds([])
+        setReason('')
+        // 队列静默刷新：不碰 busy（否则会提前清掉本轮 review busy）
+        void fetchRuns().catch(() => { /* 刷新失败不推翻已落库的决定提示 */ })
       } catch (e) {
+        if (seq !== reqGuard.n) return
         setError(errText(e))
       } finally {
-        setBusy('')
+        if (seq === reqGuard.n) setBusy('')
       }
     })()
   }
@@ -734,7 +773,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
                       ? h('div', { className: 'txri-note' }, r.latestDecision.reason)
                       : null,
                   ),
-                  h('td', null, h(Tag, { text: r.auditPassed ? 'PASS' : 'FAIL', tone: r.auditPassed ? 'ok' : 'err' })),
+                  h('td', null, h(Tag, { text: r.auditPassed ? t('auditPass') : t('auditFail'), tone: r.auditPassed ? 'ok' : 'err' })),
                   h('td', { className: 'txri-mono' }, r.savedAt.slice(0, 19).replace('T', ' ')),
                   h(
                     'td',
@@ -774,7 +813,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         `${t('threshold')}: ${res.reviewGate?.threshold ?? '—'} · `,
         `${t('savedAt')}: ${rec.savedAt.slice(0, 19).replace('T', ' ')} · `,
         `${t('audit')}: `,
-        h(Tag, { text: res.audit?.passed ? 'PASS' : 'FAIL', tone: res.audit?.passed ? 'ok' : 'err' }),
+        h(Tag, { text: res.audit?.passed ? t('auditPass') : t('auditFail'), tone: res.audit?.passed ? 'ok' : 'err' }),
       ),
     ]
     if (cands.length === 0) {
@@ -903,7 +942,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
               h(
                 'li',
                 { key: i },
-                h(Tag, { text: c.closed ? 'closed' : 'open', tone: c.closed ? 'ok' : 'warn' }),
+                h(Tag, { text: c.closed ? t('closed') : t('open'), tone: c.closed ? 'ok' : 'warn' }),
                 ' ',
                 h('span', { className: 'txri-mono' }, `${c.check}: `),
                 c.detail,
@@ -1112,6 +1151,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
                 h('th', null, t('action')),
                 h('th', null, t('status')),
                 h('th', null, t('behaviorObject')),
+                h('th', null, t('connector')),
                 h('th', null, t('externalRef')),
                 h('th', null, t('approval')),
               ),
@@ -1131,8 +1171,16 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
                     recon
                       ? h(Tag, { text: t('pendingReconcile'), tone: 'warn' })
                       : h(Tag, { text: a.status, tone: chainTone(a.status) }),
+                    connectorSimulated(a.connector) ? h(Tag, { text: t('simulated'), tone: 'warn' }) : null,
                   ),
                   h('td', { className: 'txri-mono' }, `${a.behaviorId} → ${a.objectRef}`),
+                  h(
+                    'td',
+                    { className: 'txri-mono' },
+                    a.connector
+                      ? `${a.connector.id}/${a.connector.env}${a.connector.kind ? `/${a.connector.kind}` : ''}`
+                      : '—',
+                  ),
                   h('td', { className: 'txri-mono' }, a.externalRef ?? '—'),
                   h('td', { className: 'txri-mono' }, a.approvalDigest.slice(0, 12)),
                 )
@@ -1198,6 +1246,8 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
   const [runs, setRuns] = useState<RunRow[]>([])
   const [runId, setRunId] = useState('')
   const [chain, setChain] = useState<ChainData | null>(null)
+  // 请求序号守卫：快速切换 run 时旧 reviewChain 响应不覆盖新选择
+  const [reqGuard] = useState(() => ({ n: 0 }))
   const [decisionId, setDecisionId] = useState('')
   const [candidateId, setCandidateId] = useState('')
   const [behaviorId, setBehaviorId] = useState('')
@@ -1207,6 +1257,7 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
+  const [okTone, setOkTone] = useState<'ok' | 'warn' | 'err'>('ok')
 
   // 对象视图「按对象发起动作」→ 预填锚点对象
   useEffect(() => {
@@ -1234,15 +1285,18 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
 
   const loadChain = (id: string) => {
     if (!api || id === '') return
+    const seq = ++reqGuard.n
     void (async () => {
       setError('')
       try {
         const out = unwrap<ChainData>(await api.reviewChain({ runId: id }))
+        if (seq !== reqGuard.n) return
         setChain(out)
         const approvedDec = [...out.decisions].reverse().find((d) => d.decision === 'approved')
         setDecisionId(approvedDec?.decisionId ?? '')
         setCandidateId(approvedDec?.candidateIds[0] ?? '')
       } catch (e) {
+        if (seq !== reqGuard.n) return
         setError(errText(e))
       }
     })()
@@ -1380,9 +1434,12 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
             approval: { challengeId: prep.challengeId, contextDigest: prep.contextDigest },
           }),
         )
+        // 结果如实呈现：按 status 分色调（succeeded=绿；compensated/unknown/dispatched=警示；failed=红），note 不丢
+        setOkTone(statusToneOf(out.status))
         setOkMsg(
-          `${t('executed')}: ${out.actionId} · ${out.status}${out.replayed ? ' (replay)' : ''}`
-            + ` · ${out.externalRef ?? '—'} · ${out.connectorKind}${out.simulated ? ` (${t('simulated')})` : ''}`,
+          `${t('executed')}: ${out.actionId} · ${out.status}${out.replayed ? ` ${t('replayed')}` : ''}`
+            + ` · ${out.externalRef ?? '—'} · ${out.connectorKind}${out.simulated ? ` (${t('simulated')})` : ''}`
+            + (out.note !== undefined && out.note !== '' ? ` · ${out.note}` : ''),
         )
         setPrep(null)
         loadChain(runId)
@@ -1403,6 +1460,7 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
         const out = unwrap<{ actionId: string; status: string; externalRef?: string; note?: string }>(
           await api.reconcileAction({ actionId }),
         )
+        setOkTone(statusToneOf(out.status))
         setOkMsg(`${t('reconcileDone')}: ${out.actionId} → ${out.status} · ${out.externalRef ?? '—'} · ${out.note ?? ''}`)
         loadChain(runId)
       } catch (e) {
@@ -1499,6 +1557,7 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
 
   const cardView = (): ReactNode[] => {
     if (!prep) return []
+    const expired = Date.now() > Date.parse(prep.expiresAt)
     return [
       h(
         'div',
@@ -1513,13 +1572,30 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
           ` · ${t('connector')}: ${prep.connector.id}/${prep.connector.env}${prep.connector.kind ? `/${prep.connector.kind}` : ''}`,
         ),
         h('pre', { className: 'txri-mono', style: { margin: '6px 0', whiteSpace: 'pre-wrap' as const } }, JSON.stringify(prep.payload, null, 2)),
-        h('p', { className: 'txri-note txri-mono' }, `${t('expires')}: ${prep.expiresAt.slice(0, 19).replace('T', ' ')}`),
+        // 挑战摘要回显：操作者据此核对绑定面（challengeId + contextDigest 与回带值一致才生效）
+        h(
+          'div',
+          { className: 'txri-note txri-mono', style: { wordBreak: 'break-all' as const } },
+          `${t('challenge')}: ${prep.challengeId} · ${t('contextDigest')}: `,
+          h('code', { title: prep.contextDigest }, prep.contextDigest),
+        ),
+        h(
+          'p',
+          { className: 'txri-note txri-mono' },
+          `${t('expires')}: ${prep.expiresAt.slice(0, 19).replace('T', ' ')}`,
+          expired ? ` · ${t('expired')}` : '',
+        ),
         h(
           'div',
           { className: 'txri-bar' },
           h(
             'button',
-            { type: 'button', className: 'txri-primary', disabled: !!busy, onClick: () => confirmExecute() },
+            {
+              type: 'button',
+              className: 'txri-primary',
+              disabled: !!busy || expired,
+              onClick: () => confirmExecute(),
+            },
             busy === 'execute' ? t('executing') : t('confirmExecute'),
           ),
           h('button', { type: 'button', disabled: !!busy, onClick: () => setPrep(null) }, t('cancel')),
@@ -1597,6 +1673,7 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
             h('th', null, t('action')),
             h('th', null, t('status')),
             h('th', null, t('behaviorObject')),
+            h('th', null, t('connector')),
             h('th', null, t('externalRef')),
             h('th', null, ''),
           ),
@@ -1616,8 +1693,16 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
                 needReconcile
                   ? h(Tag, { text: t('pendingReconcile'), tone: 'warn' })
                   : h(Tag, { text: a.status, tone: chainTone(a.status) }),
+                connectorSimulated(a.connector) ? h(Tag, { text: t('simulated'), tone: 'warn' }) : null,
               ),
               h('td', { className: 'txri-mono' }, `${a.behaviorId} → ${a.objectRef}`),
+              h(
+                'td',
+                { className: 'txri-mono' },
+                a.connector
+                  ? `${a.connector.id}/${a.connector.env}${a.connector.kind ? `/${a.connector.kind}` : ''}`
+                  : '—',
+              ),
               h('td', { className: 'txri-mono' }, a.externalRef ?? '—'),
               h(
                 'td',
@@ -1644,7 +1729,7 @@ function ActionPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: stri
     h('h3', null, t('actionTitle')),
     h('p', { className: 'txri-sub' }, t('actionSubtitle')),
     error ? h('p', { className: 'txri-err' }, `${t('error')}: ${error}`) : null,
-    okMsg ? h('p', { className: 'txri-ok' }, okMsg) : null,
+    okMsg ? h('p', { className: okTone === 'ok' ? 'txri-ok' : okTone === 'warn' ? 'txri-warnbox' : 'txri-err' }, okMsg) : null,
     h(
       'div',
       { className: 'txri-bar' },
@@ -1819,7 +1904,7 @@ function ObjectPanel(props: { t: (k: string) => string; ctx: Ctx; onActFromObjec
           'div',
           { key: 'st', className: 'txri-bar' },
           h('span', { className: 'txri-note' },
-            `${t('objects')}: ${expanded.stats.objects} · ${t('relations')}: ${expanded.stats.relations} · candidates: ${expanded.stats.candidates}`),
+            `${t('objects')}: ${expanded.stats.objects} · ${t('relations')}: ${expanded.stats.relations} · ${t('candidates')}: ${expanded.stats.candidates}`),
           expanded.truncated ? h(Tag, { text: t('truncatedBadge'), tone: 'warn' }) : null,
           expanded.missingSeedIds.length > 0
             ? h(Tag, { text: `${t('missingSeeds')}: ${expanded.missingSeedIds.join(',')}`, tone: 'err' })
@@ -1965,7 +2050,7 @@ function ObjectPanel(props: { t: (k: string) => string; ctx: Ctx; onActFromObjec
         { type: 'button', disabled: !!busy || offset === 0, onClick: () => browse(Math.max(0, offset - pageSize)) },
         t('pagePrev'),
       ),
-      h('span', { className: 'txri-note' }, `${offset + 1}–${Math.min(offset + pageSize, total)}`),
+      h('span', { className: 'txri-note' }, total === 0 ? '—' : `${offset + 1}–${Math.min(offset + pageSize, total)}`),
       h(
         'button',
         { type: 'button', disabled: !!busy || offset + pageSize >= total, onClick: () => browse(offset + pageSize) },

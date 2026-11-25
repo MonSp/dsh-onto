@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, readdirSync, lstatSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,7 +65,7 @@ test('脚手架部署：保留原签发、重复导入幂等、显式激活、�
     assert.deepEqual(readFileSync(target), existing)
     assert.deepEqual(readFileSync(join(WST_SRC, 'package.yaml')), original)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    rmFence(root)
   }
 })
 
@@ -148,7 +148,23 @@ function setupWst(issued) {
   return { fence, ws, dir }
 }
 
+/**
+ * 摘链后删树：Windows 上 rmSync(recursive) 顺着 junction 递归删目标内容——
+ * 本文件的部署夹具把真身 backend/node_modules junction 进围栏（seed 脚本要解析模块），
+ * 不摘链会穿透 @deepseek-ai/* 误删 deepseek-harness（铁律：harness 只读）。
+ */
+function stripLinks(dir) {
+  if (!existsSync(dir)) return
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    const st = lstatSync(p)
+    if (st.isSymbolicLink()) unlinkSync(p)
+    else if (st.isDirectory()) stripLinks(p)
+  }
+}
+
 function rmFence(fence) {
+  stripLinks(fence)
   rmSync(fence, { recursive: true, force: true })
 }
 

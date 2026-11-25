@@ -120,11 +120,21 @@ test('I5：全部建模/专家工具登记进 ONTOOL_NAMES（guard 白名单）'
 
 /* ── 描述符手工表同步（AGENTS.md：新增 @Remote 必须登记） ─────────────── */
 
-test('手工描述符表登记 getGraph / saveSkeleton / listSourceConfigs', () => {
+test('手工描述符表登记 getGraph / saveSkeleton / issue #30 页面系统化七 wire', () => {
   const src = readFileSync(join(REPO, 'backend', 'src', 'client.ts'), 'utf8')
   assert.ok(src.includes(`desc('ontoModel', 'getGraph'`), 'ontoModel.getGraph 未登记')
   assert.ok(src.includes(`desc('ontoKnowledge', 'saveSkeleton'`), 'ontoKnowledge.saveSkeleton 未登记')
-  assert.ok(src.includes(`desc('ontoRuntime', 'listSourceConfigs'`), 'ontoRuntime.listSourceConfigs 未登记')
+  for (const method of [
+    'listSourceConfigs',
+    'createActionProposal',
+    'prepareAction',
+    'executeAction',
+    'reconcileAction',
+    'browseObjects',
+    'expandEntity',
+  ]) {
+    assert.ok(src.includes(`desc('ontoRuntime', '${method}'`), `ontoRuntime.${method} 未登记`)
+  }
 })
 
 /* ── 图谱组装（I1/I2/I3） ────────────────────────────────────────────── */
