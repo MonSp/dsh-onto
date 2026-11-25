@@ -54,7 +54,8 @@ export default {
         const cb = panel.locator('input[type="checkbox"]').first()
         await cb.waitFor({ timeout: 10000 })
         await cb.check()
-        const reason = panel.locator('input[type="text"]').last()
+        // 理由框按 placeholder 精确定位（经验回填区也有文本输入，位置选择器不再可靠）
+        const reason = panel.getByPlaceholder('理由', { exact: true })
         await reason.fill('browser-e2e：证据链齐全，同意进入动作面')
         await panel.getByRole('button', { name: '提交复核', exact: true }).click()
         await page.waitForTimeout(2500)

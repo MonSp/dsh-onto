@@ -1,12 +1,13 @@
-import { h, useState, useEffect, useCallback, useMemo, useRef } from '../react'
-import type { ReactNode } from '../types'
+/* ─────────────────────────────────────────────────────────────────────────
+ * 经验闭环（experience-loop P2-1）：经验列表 + 人审回填 + 新建回填 + 抽象草案
+ * （反馈闭环②断链 A/B）：annotateExperience 新建/回填一体（缺卡按 RunRecord 补建）；
+ * abstractExperiences 把经验聚簇成草案入人审队列（只入队不直写包），
+ * includePriorVersions 放行同名历史版本经验（ISSUED 生产经验回流当前 DRAFT）。
+ * ───────────────────────────────────────────────────────────────────────── */
+import { h, useState, useEffect } from '../react'
 import type { Ctx } from '../types'
-import { Tag, Row, Card, ErrorBanner, OkBanner, Loading, Field, PipelineView } from '../ui'
-import { unwrap, errText, fmt } from '../helpers'
-
-/* ═══════════════════════════════════════════════════════════════
- * 经验闭环（experience-loop P2-1）：经验列表 + 人审回填
- * ═══════════════════════════════════════════════════════════════ */
+import { Tag, ErrorBanner } from '../ui'
+import { unwrap, errText } from '../helpers'
 
 export function ExperiencePanel(props: {
   t: (k: string) => string
@@ -28,14 +29,19 @@ export function ExperiencePanel(props: {
   const [busy, setBusy] = useState('')
   const [viewRun, setViewRun] = useState('')
   const [viewNote, setViewNote] = useState<Record<string, unknown> | null>(null)
-  // 回填表单
+  // 回填表单（新建/回填同面：缺卡时 outcome 必填）
   const [formOutcome, setFormOutcome] = useState('')
   const [formReason, setFormReason] = useState('')
-  // 三态：'' 不改 | 'true' 判误迁移 | 'false' 判非误迁移（by 两者皆必填）
+  // 三态：'' 不改 | 'true' 判误迁移 | 'false' 判非误迁移（by 取宿主身份，不收自报）
   const [formMis, setFormMis] = useState('')
-  const [formBy, setFormBy] = useState('')
   const [formNote, setFormNote] = useState('')
   const [formFocus, setFormFocus] = useState('')
+  const [formCounter, setFormCounter] = useState(false)
+  // 新建回填：手动输入 runId（经验列表外的旧 run）
+  const [newRunId, setNewRunId] = useState('')
+  // 抽象草案：含同名历史版本经验（断链 B）
+  const [includePrior, setIncludePrior] = useState(false)
+  const [abstractOut, setAbstractOut] = useState('')
   const api = apis.remote['ontoRuntime']
 
   const load = () => {
@@ -64,11 +70,13 @@ export function ExperiencePanel(props: {
         const patch: Record<string, unknown> = { runId }
         if (formOutcome) patch.outcome = formOutcome
         if (formReason.trim()) patch.outcomeReason = formReason
+        if (viewNote === null) patch.counterexample = formCounter
         if (formMis === 'true' || formMis === 'false') {
-          patch.misTransfer = { judged: formMis === 'true', by: formBy, note: formNote }
+          // misTransfer.by 不收自报：服务端取宿主可信身份（host:<userId>）
+          patch.misTransfer = { judged: formMis === 'true', note: formNote }
         }
         if (formFocus.trim()) patch.reviewFocus = formFocus.split(',').map((s) => s.trim()).filter(Boolean)
-        const out = unwrap<{ note: Record<string, unknown> }>(await api.reviewExperience(patch as never))
+        const out = unwrap<{ note: Record<string, unknown> }>(await api.annotateExperience(patch as never))
         setViewNote(out.note)
         load()
       } catch (e) {
@@ -77,6 +85,71 @@ export function ExperiencePanel(props: {
         setBusy('')
       }
     })()
+  }
+
+  const abstract = () => {
+    if (!api) return
+    void (async () => {
+      setBusy('abstract')
+      setError('')
+      setAbstractOut('')
+      try {
+        const out = unwrap<{
+          package: string
+          skills: number
+          counters: number
+          queued: Array<{ id: string; name: string; targetKind: string; status: string }>
+        }>(await api.abstractExperiences({ includePriorVersions: includePrior } as never))
+        setAbstractOut(
+          `${t('expAbstracted')}: ${out.package} skills=${out.skills} counters=${out.counters} → `
+            + out.queued.map((q) => `${q.id}(${q.targetKind}/${q.status})`).join(', '),
+        )
+      } catch (e) {
+        setError(errText(e))
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const openNote = (runId: string) => {
+    if (!api) return
+    void (async () => {
+      setBusy('show')
+      setError('')
+      setViewRun(runId)
+      setFormOutcome('')
+      setFormReason('')
+      setFormMis('')
+      setFormNote('')
+      setFormCounter(false)
+      setFormFocus('')
+      try {
+        const out = unwrap<{ note: Record<string, unknown> }>(await api.showExperience({ runId }))
+        setViewNote(out.note)
+        const focus = (out.note as { reviewFocus?: string[] }).reviewFocus
+        if (Array.isArray(focus)) setFormFocus(focus.join(', '))
+      } catch (e) {
+        // 缺卡（S5.4.2 前旧 run）→ 新建模式：回填即补建
+        setViewNote(null)
+        setError('')
+      } finally {
+        setBusy('')
+      }
+    })()
+  }
+
+  const startCreate = () => {
+    const runId = newRunId.trim()
+    if (runId === '') return
+    setViewRun(runId)
+    setViewNote(null)
+    setFormOutcome('')
+    setFormReason('')
+    setFormMis('')
+    setFormNote('')
+    setFormCounter(false)
+    setFormFocus('')
   }
 
   return h(
@@ -89,7 +162,33 @@ export function ExperiencePanel(props: {
       'div',
       { className: 'ow-row' },
       h('button', { className: 'ow-btn ghost', disabled: !!busy, onClick: () => load() }, t('refresh')),
+      h('input', {
+        className: 'ow-in',
+        placeholder: t('expRunId'),
+        value: newRunId,
+        onChange: (e: { target: { value: string } }) => setNewRunId(e.target.value),
+      }),
+      h('button', {
+        className: 'ow-btn ghost',
+        disabled: !!busy || newRunId.trim() === '',
+        onClick: () => startCreate(),
+      }, t('expCreateBtn')),
+      h('button', {
+        className: 'ow-btn',
+        disabled: !!busy,
+        onClick: () => abstract(),
+      }, t('expAbstractBtn')),
+      h('label', { className: 'ow-note', style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+        h('input', {
+          type: 'checkbox',
+          checked: includePrior,
+          onChange: (e: { target: { checked: boolean } }) => setIncludePrior(e.target.checked),
+        }),
+        t('expIncludePrior'),
+      ),
     ),
+    h('p', { className: 'ow-note' }, t('expAbstractHint')),
+    abstractOut ? h('p', { className: 'ow-note' }, abstractOut) : null,
     rows.length > 0
       ? h(
           'table',
@@ -127,28 +226,7 @@ export function ExperiencePanel(props: {
                   {
                     className: 'ow-btn ghost',
                     disabled: !!busy,
-                    onClick: () =>
-                      void (async () => {
-                        setBusy('show')
-                        setError('')
-                        setViewRun(r.runId)
-                        setFormOutcome('')
-                        setFormReason('')
-                        setFormMis('')
-                        setFormBy('')
-                        setFormNote('')
-                        setFormFocus(r.reviewFocus.join(', '))
-                        try {
-                          const out = unwrap<{ note: Record<string, unknown> }>(
-                            await api!.showExperience({ runId: r.runId }),
-                          )
-                          setViewNote(out.note)
-                        } catch (e) {
-                          setError(errText(e))
-                        } finally {
-                          setBusy('')
-                        }
-                      })(),
+                    onClick: () => openNote(r.runId),
                   },
                   t('expReviewBtn'),
                 )),
@@ -157,11 +235,11 @@ export function ExperiencePanel(props: {
           ),
         )
       : h('p', { className: 'ow-note' }, t('empty')),
-    viewRun && viewNote
+    viewRun
       ? h(
           'div',
           { className: 'ow-row' },
-          h('span', { className: 'ow-stat' }, `${viewRun}`),
+          h('span', { className: 'ow-stat' }, `${viewRun}${viewNote === null ? `（${t('expCreateTitle')}）` : ''}`),
           h('select', {
             className: 'ow-sel',
             value: formOutcome,
@@ -178,6 +256,15 @@ export function ExperiencePanel(props: {
             value: formReason,
             onChange: (e: { target: { value: string } }) => setFormReason(e.target.value),
           }),
+          viewNote === null
+            ? h('label', { className: 'ow-note', style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: formCounter,
+                  onChange: () => setFormCounter((v: boolean) => !v),
+                }),
+                t('expCounter'))
+            : null,
           h('select', {
             className: 'ow-sel',
             value: formMis,
@@ -186,14 +273,6 @@ export function ExperiencePanel(props: {
             h('option', { value: '' }, `${t('expMis')} —`),
             h('option', { value: 'true' }, `${t('expMis')} true`),
             h('option', { value: 'false' }, `${t('expMis')} false`)),
-          formMis !== ''
-            ? h('input', {
-                className: 'ow-in',
-                placeholder: t('expMisBy'),
-                value: formBy,
-                onChange: (e: { target: { value: string } }) => setFormBy(e.target.value),
-              })
-            : null,
           formMis !== ''
             ? h('input', {
                 className: 'ow-in',
@@ -214,13 +293,14 @@ export function ExperiencePanel(props: {
               className: 'ow-btn',
               disabled:
                 !!busy ||
-                (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim())
-                // 误迁移判定必须带 by（人工身份）——前端先拦，不再把必填报错甩给后端。
-                || (formMis !== '' && !formBy.trim()),
+                // 新建须 outcome（人审定性）；回填至少一项
+                (viewNote === null && !formOutcome) ||
+                (!formOutcome && !formReason.trim() && formMis === '' && !formFocus.trim() && !formCounter),
               onClick: () => review(viewRun),
             },
             t('expReviewBtn'),
           ),
+          h('span', { className: 'ow-note' }, t('expMisByHost')),
         )
       : null,
   )

@@ -1719,6 +1719,41 @@ test('abstract_experience：humanApproved 契约 + 聚簇入队结构位回执�
   }
 })
 
+test('abstract_experience：includePriorVersions——生产经验回流 fork 出的 DRAFT（断链 B）', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    mkRun()
+    mkRun()
+    // fork 出 1.1.0（DRAFT）：生产经验绑定 1.0.0，物化只能落 1.1.0
+    ws.forkVersion('aml-analysis', '1.0.0', '1.1.0')
+    // 默认精确版本匹配：死锁复现——1.1.0 找不到 1.0.0 的经验
+    const none = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.1.0',
+      humanApproved: true,
+    })
+    assert.equal(none.skills, 0)
+    assert.equal(none.queued.length, 0)
+
+    // includePriorVersions：同名历史版本经验参赛，草案落当前 DRAFT 版本
+    const abs = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.1.0',
+      includePriorVersions: true,
+      humanApproved: true,
+    })
+    assert.equal(abs.package, 'aml-analysis@1.1.0')
+    assert.equal(abs.skills, 1)
+    assert.equal(abs.queued.length, 1)
+    assert.equal(abs.queued[0].targetKind, 'SkillTemplate')
+    assert.equal(abs.queued[0].members, 2)
+    assert.equal(abs.humanReviewRequired, true)
+    // 只入队：草案在知识库队列（pending），不直写包
+    const cands = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(cands.length, 1)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('abstract_experience 渲染（E2-1）：结构位回执、空簇说明、humanReviewRequired 在场', () => {
   const text = renderAbstractText({
     package: 'aml-analysis@1.0.0',

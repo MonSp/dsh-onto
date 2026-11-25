@@ -3,11 +3,13 @@
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -AuthorizedBy "..." -Restart -Port 3081 -EnvFile .env
+#   powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Rollback -AuthorizedBy "..."（版本回滚同机制）
 # 前提：PATH 上有受支持的 node 与 pnpm（宿主启动同口径）。
 param(
     [string]$AuthorizedBy = '',
     [switch]$SkipBuild,
     [switch]$Restart,
+    [switch]$Rollback,
     [int]$Port = 0,
     [string]$EnvFile = '',
     [string]$Data = '',
@@ -33,6 +35,34 @@ $ApiEnvName = $Config.env.apiUrl
 function Step([string]$msg) { Write-Host ''; Write-Host ('==> ' + $msg) -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ('FAILED: ' + $msg) -ForegroundColor Red; exit 1 }
 
+# 受控重启：只杀「本插件 profile 宿主」（命令行含 --profile <本 profile>），不触碰其他进程
+function Restart-ProfileHost {
+    if ($Port -le 0) { Fail '-Restart requires -Port <target host port>' }
+    Step ('controlled restart on port ' + $Port)
+    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if ($listeners) {
+        foreach ($procId in ($listeners | Select-Object -ExpandProperty OwningProcess -Unique)) {
+            # 只杀「本插件 profile 宿主」：核对进程命令行含 --profile <本 profile>，否则拒绝（不误杀端口上的其它进程）
+            $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $procId) -ErrorAction SilentlyContinue
+            $cmdline = if ($proc -and $proc.CommandLine) { $proc.CommandLine } else { '' }
+            if ($cmdline -notmatch ('--profile\s+' + [regex]::Escape($Profile))) {
+                Fail ('port ' + $Port + ' 上进程 ' + $procId + ' 不是本 profile（' + $Profile + '）宿主，拒绝杀进程: ' + $cmdline)
+            }
+            Stop-Process -Id $procId -Force
+        }
+        Start-Sleep -Seconds 2
+    }
+    $outLog = Join-Path $Root ('deploy-' + $Port + '.out.log')
+    $errLog = Join-Path $Root ('deploy-' + $Port + '.err.log')
+    # 数据（plugin.config.json / 参数）不拼代码：单引号转义 + -LiteralPath；profile 已过字符集校验并同样加引号
+    $harnessQ = $HarnessDir.Replace("'", "''")
+    $profileQ = $Profile.Replace("'", "''")
+    $cmd = "Set-Location -LiteralPath '" + $harnessQ + "'; pnpm dsh --profile '" + $profileQ + "' --no-open --port " + [int]$Port
+    Start-Process -FilePath 'powershell' -ArgumentList '-ExecutionPolicy', 'Bypass', '-Command', $cmd `
+        -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden
+    Write-Host ('host starting: profile=' + $Profile + ' port=' + $Port + ' log=' + $outLog)
+}
+
 # 信任边界：plugin.config.json 是生成期数据（跨人交接），不是代码。
 # profile 名进入命令行/进程匹配，限定安全字符集；harness 路径进入 -Command 时按单引号转义。
 if ($Profile -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
@@ -57,6 +87,22 @@ if ($EnvFile -ne '') {
         Set-Item -Path ('Env:' + $k) -Value $kv[1].Trim()
     }
     Write-Host ('env loaded from ' + $EnvFile)
+}
+
+# 回滚模式（版本回滚同机制，图注「激活」）：人工授权回滚到上一活动版本 + 可选受控重启，
+# 不走构建/导入/激活链（回滚对象是已导入的发布台账，与包构建无关）。
+if ($Rollback) {
+    if ($AuthorizedBy.Trim() -eq '') {
+        $AuthorizedBy = Read-Host 'Authorizing deployer name (manual rollback, required)'
+    }
+    if ($AuthorizedBy.Trim() -eq '') { Fail 'rollback requires an authorized human' }
+    Step ('rollback by ' + $AuthorizedBy)
+    node (Join-Path $PSScriptRoot 'seed-release.mjs') rollback $AuthorizedBy
+    if ($LASTEXITCODE -ne 0) { Fail 'seed-release rollback' }
+    if ($Restart) { Restart-ProfileHost }
+    Write-Host ''
+    Write-Host 'rollback done (release history kept). humanReviewRequired=true.' -ForegroundColor Yellow
+    exit 0
 }
 
 # 1) build + fixture e2e (fixture -> scenario, score idempotency)
@@ -105,30 +151,7 @@ if ($LASTEXITCODE -ne 0) { Fail 'dump-config' }
 
 # 6) controlled restart: only this profile host on -Port; platform / other profiles untouched
 if ($Restart) {
-    if ($Port -le 0) { Fail '-Restart requires -Port <target host port>' }
-    Step ('controlled restart on port ' + $Port)
-    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($listeners) {
-        foreach ($procId in ($listeners | Select-Object -ExpandProperty OwningProcess -Unique)) {
-            # 只杀「本插件 profile 宿主」：核对进程命令行含 --profile <本 profile>，否则拒绝（不误杀端口上的其它进程）
-            $proc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $procId) -ErrorAction SilentlyContinue
-            $cmdline = if ($proc -and $proc.CommandLine) { $proc.CommandLine } else { '' }
-            if ($cmdline -notmatch ('--profile\s+' + [regex]::Escape($Profile))) {
-                Fail ('port ' + $Port + ' 上进程 ' + $procId + ' 不是本 profile（' + $Profile + '）宿主，拒绝杀进程: ' + $cmdline)
-            }
-            Stop-Process -Id $procId -Force
-        }
-        Start-Sleep -Seconds 2
-    }
-    $outLog = Join-Path $Root ('deploy-' + $Port + '.out.log')
-    $errLog = Join-Path $Root ('deploy-' + $Port + '.err.log')
-    # 数据（plugin.config.json / 参数）不拼代码：单引号转义 + -LiteralPath；profile 已过字符集校验并同样加引号
-    $harnessQ = $HarnessDir.Replace("'", "''")
-    $profileQ = $Profile.Replace("'", "''")
-    $cmd = "Set-Location -LiteralPath '" + $harnessQ + "'; pnpm dsh --profile '" + $profileQ + "' --no-open --port " + [int]$Port
-    Start-Process -FilePath 'powershell' -ArgumentList '-ExecutionPolicy', 'Bypass', '-Command', $cmd `
-        -RedirectStandardOutput $outLog -RedirectStandardError $errLog -WindowStyle Hidden
-    Write-Host ('host starting: profile=' + $Profile + ' port=' + $Port + ' log=' + $outLog)
+    Restart-ProfileHost
 }
 
 # 7) dual-entry acceptance anchors: baseline proven current by step 2; -Data (RuntimeDataset) runs live instead.

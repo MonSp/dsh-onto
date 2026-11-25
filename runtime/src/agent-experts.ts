@@ -16,10 +16,12 @@ import {
   DERIVED_FILES,
   buildRunRecord,
   buildTaskSignature,
+  experienceFromRun,
   loadPackage,
   loadYaml,
   retrieveSimilar,
   runScenario,
+  saveExperienceNote,
   saveRunRecord,
   type OntologyPackage,
   type ScenarioRunResult,
@@ -558,17 +560,17 @@ export function registerExpertTools(
           rememberPhrases(result.runId, phrases)
           // T5 缺陷修复：专家通道同样落 RunRecord（export_audit/annotate/compare 的留痕前提）。
           const effective = result.effectiveDataset ?? dataset
-          saveRunRecord(
-            ws.root,
-            buildRunRecord({
-              package: { name: pkg.meta.name, version: pkg.meta.version },
-              dataset: effective,
-              inputDataset: dataset,
-              result,
-              redlines: phrases,
-              accessBinding: identity && runAccessBinding(identity),
-            }),
-          )
+          const rec = buildRunRecord({
+            package: { name: pkg.meta.name, version: pkg.meta.version },
+            dataset: effective,
+            inputDataset: dataset,
+            result,
+            redlines: phrases,
+            accessBinding: identity && runAccessBinding(identity),
+          })
+          saveRunRecord(ws.root, rec)
+          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 run_scenario 同口径）
+          saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
 
           const profile = buildExpertProfiles(versionDir).experts.find((e) => e.expertId === scenario.id)
           const expert = profile ?? {

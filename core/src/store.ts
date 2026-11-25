@@ -314,6 +314,10 @@ function normalizeScenario(raw: Record<string, unknown>): OntologyPackage['scena
     ...(normalizeScenarioPrep(raw['prep']) !== undefined
       ? { prep: normalizeScenarioPrep(raw['prep'])! }
       : {}),
+    // 随包默认报表页契约：错型保留，validate 报 REPORT_SURFACE_INVALID
+    ...(raw['reportSurface'] !== undefined
+      ? { reportSurface: raw['reportSurface'] as OntologyPackage['scenarios'][number]['reportSurface'] }
+      : {}),
     outputContract,
     reviewGate,
     auditChecks: (raw['auditChecks'] as string[]) ?? [],
@@ -360,6 +364,7 @@ function scenarioToYaml(s: OntologyPackage['scenarios'][number]): Record<string,
     ...(s.exclusionRefs ? { exclusionRefs: s.exclusionRefs } : {}),
     ...(s.scoreRefs ? { scoreRefs: s.scoreRefs } : {}),
     ...(s.prep ? { prep: s.prep } : {}),
+    ...(s.reportSurface ? { reportSurface: s.reportSurface } : {}),
     output_contract: s.outputContract,
     review_gate: s.reviewGate,
     auditChecks: s.auditChecks,

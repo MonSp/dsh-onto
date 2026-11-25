@@ -11,6 +11,7 @@ import {
   loadExperienceNote,
   listExperienceNotes,
   experiencesDir,
+  experienceFromRun,
   retrieveSimilar,
   signatureFieldReasons,
   buildDiffTable,
@@ -632,6 +633,148 @@ test('compressExperiences：分层保留 + 陈旧未引用归档 + 压缩比', (
     const after = listExperienceNotes(root)
     assert.equal(after.length, 5)
     assert.ok(!after.some((n) => n.runId === 'run-stale'))
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+/* ── S5.4.2 运行回写映射：RunRecord → ExperienceNote 初稿 ── */
+
+/** 构造 RunRecord 形状（experienceFromRun 只读 runId/scenarioId/datasetSummary/result）。 */
+function makeRec({ auditPassed = true, pendingChecks = [], runId = 'run-map00001' } = {}) {
+  return {
+    runId,
+    package: { name: 'test-pkg', version: '1.0.0' },
+    scenarioId: 'SCN-TST-1',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    datasetDigest: 'd'.repeat(64),
+    datasetSummary: SUMMARY,
+    redlines: [],
+    result: {
+      scenarioId: 'SCN-TST-1',
+      runId,
+      startedAt: '2026-11-19T00:00:00.000Z',
+      candidates: [
+        {
+          candidateId: 'CAND-001',
+          objectRef: 'OBJ-TST-A:1',
+          riskScore: 0.9,
+          hitRuleIds: ['RULE-TST-S1'],
+          evidenceChains: [],
+          narrative: [],
+          pendingChecks,
+          pendingVerification: pendingChecks.length > 0,
+        },
+      ],
+      excluded: [],
+      humanReviewRequired: true,
+      reviewGate: { threshold: 0.5, required: true, requireReviewFor: ['high'] },
+      ruleHitLog: [],
+      audit: { checks: [], forbiddenPhraseHits: [], passed: auditPassed },
+    },
+    savedAt: '2026-11-19T00:00:00.000Z',
+  }
+}
+
+test('experienceFromRun：全闭合 → success；签名机械导出', () => {
+  const note = experienceFromRun(makeRec(), minimalPkg())
+  assert.equal(note.outcome, 'success')
+  assert.equal(note.counterexample, false)
+  assert.equal(note.runId, 'run-map00001')
+  assert.equal(note.signature.scenarioId, 'SCN-TST-1')
+  assert.deepEqual(note.skillRefsUsed, ['SKL-TST-N'])
+  assert.match(note.signature.digest, /^[0-9a-f]{64}$/)
+  assert.ok(note.savedAt)
+})
+
+test('experienceFromRun：审计过但有 pendingChecks → partial；结构位沉淀 reviewFocus', () => {
+  const note = experienceFromRun(
+    makeRec({
+      pendingChecks: [
+        { ruleId: 'RULE-TST-S1', missing: ['txCount24h'], note: '证据不足：缺 txCount24h 特征依据' },
+        { ruleId: 'RULE-TST-E1', missing: [], note: '排除依据待核实' },
+      ],
+    }),
+    minimalPkg(),
+  )
+  assert.equal(note.outcome, 'partial')
+  assert.equal(note.counterexample, false)
+  // 只收结构位（ruleId / missing 特征名）；自由文本 note 不进正文
+  assert.deepEqual([...note.reviewFocus].sort(), ['RULE-TST-E1', 'RULE-TST-S1', 'txCount24h'])
+})
+
+test('experienceFromRun：审计失败 → failure + counterexample=true', () => {
+  const note = experienceFromRun(makeRec({ auditPassed: false }), minimalPkg())
+  assert.equal(note.outcome, 'failure')
+  assert.equal(note.counterexample, true)
+})
+
+test('experienceFromRun：reviewFocus 只收结构位（结论性/中文句被过滤）', () => {
+  const note = experienceFromRun(
+    makeRec({
+      auditPassed: false,
+      pendingChecks: [
+        { note: '已构成认定洗钱' },
+        { missing: ['确定为高风险'], note: '缺依据' },
+        { ruleId: 'RULE-TST-S1', missing: ['listHitCount'], note: '缺特征' },
+      ],
+    }),
+    minimalPkg(),
+  )
+  assert.deepEqual(note.reviewFocus, ['RULE-TST-S1', 'listHitCount'])
+})
+
+/* ── 断链 B：ISSUED 生产经验跨版本抽象（includePriorVersions） ── */
+
+test('abstractSkillDrafts：默认精确 scope——1.0.0 经验不参赛 1.1.0（死锁复现）', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    // 生产运行经验绑定 pkg@1.0.0（ISSUED）；fork 出的 1.1.0 默认匹配不到
+    saveExperienceNote(root, makeNote({ runId: 'run-p1', savedAt: '2026-11-08T01:00:00.000Z' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-p2', savedAt: '2026-11-08T02:00:00.000Z' }))
+    const draft = minimalPkg()
+    draft.meta.version = '1.1.0'
+    assert.equal(abstractSkillDrafts(root, { pkg: draft }).length, 0)
+    assert.equal(abstractCounterexampleDrafts(root, { pkg: draft }).length, 0)
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('abstractSkillDrafts：includePriorVersions——同名历史版本经验聚簇入当前 DRAFT 版本', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-p1', savedAt: '2026-11-08T01:00:00.000Z' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-p2', savedAt: '2026-11-08T02:00:00.000Z' }))
+    // 异包经验不参赛（只放行同 meta.name）
+    const other = makeNote({ runId: 'run-o1' })
+    other.signature.packageScope = 'other-pkg@1.0.0'
+    saveExperienceNote(root, other)
+    const draft = minimalPkg()
+    draft.meta.version = '1.1.0'
+    const abs = abstractSkillDrafts(root, { pkg: draft, includePriorVersions: true })
+    assert.equal(abs.length, 1)
+    assert.deepEqual([...abs[0].memberRunIds].sort(), ['run-p1', 'run-p2'])
+    // 草案物化语境 = 当前 DRAFT 版本：weights 对齐当前包规则
+    assert.deepEqual(abs[0].draft.payload.weights, { 'RULE-TST-S1': 1 })
+    // 历史轨迹只作证据：签名不重写（仍指 1.0.0）
+    assert.equal(abs[0].signature.packageScope, 'test-pkg@1.0.0')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('abstractCounterexampleDrafts：includePriorVersions——历史反例经验参赛当前 DRAFT', () => {
+  const { root } = mkWorkspaceWithPkg()
+  try {
+    saveExperienceNote(root, makeNote({ runId: 'run-pc1', counterexample: true, outcomeReason: '特征缺失导致误报', reviewFocus: ['listHitCount'], savedAt: '2026-11-08T01:00:00.000Z' }))
+    saveExperienceNote(root, makeNote({ runId: 'run-pc2', counterexample: true, outcomeReason: '数据漂移', savedAt: '2026-11-08T02:00:00.000Z' }))
+    const draft = minimalPkg()
+    draft.meta.version = '1.1.0'
+    const ex = abstractCounterexampleDrafts(root, { pkg: draft, includePriorVersions: true })
+    assert.equal(ex.length, 1)
+    assert.deepEqual([...ex[0].memberRunIds].sort(), ['run-pc1', 'run-pc2'])
+    assert.equal(ex[0].draft.targetKind, 'ExclusionRule')
   } finally {
     rmWorkspace(root)
   }

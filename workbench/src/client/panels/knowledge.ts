@@ -205,7 +205,7 @@ export function KnowledgePanel(props: {
           className: 'ow-sel',
           value: sourceType,
           onChange: (e: { target: { value: string } }) => setSourceType(e.target.value),
-        }, ...['LEGACY_SYS', 'CASE_SAMPLE', 'POLICY', 'SCHEMA_API', 'WORK_ORDER'].map((k) => h('option', { key: k, value: k }, k))),
+        }, ...['LEGACY_SYS', 'CASE_SAMPLE', 'POLICY', 'SCHEMA_API', 'WORK_ORDER', 'CONVERSATION'].map((k) => h('option', { key: k, value: k }, k))),
         h('input', { className: 'ow-in', placeholder: t('sourceName'), value: sourceName, onChange: (e: { target: { value: string } }) => setSourceName(e.target.value) }),
       ),
       h('textarea', {

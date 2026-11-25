@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { findConclusionPhrases } from './llm.js'
-import { isSafeRunId } from './runstore.js'
+import { isSafeRunId, type RunRecord } from './runstore.js'
 import { isInsideDir, PackageStoreError } from './store.js'
 import type { DraftItem, OntologyPackage } from './types.js'
 
@@ -267,6 +267,40 @@ export function listExperienceNotes(root: string): ExperienceNote[] {
   return out.sort((a, b) =>
     a.savedAt === b.savedAt ? (a.runId < b.runId ? -1 : 1) : a.savedAt > b.savedAt ? -1 : 1,
   )
+}
+
+/**
+ * S5.4.2 运行回写：RunRecord → ExperienceNote 初稿（人审回填前的学习层标注）。
+ * 映射：审计失败 → `failure` + `counterexample=true`（反例警示，类比不参赛）；
+ * 审计过但候选带 pendingChecks（证据部分闭合）→ `partial`；全闭合 → `success`。
+ * 三分支都把 pendingChecks 的结构位（ruleId / missing 特征名）沉淀 reviewFocus
+ * （下轮检索提示）；自由文本 note 不进正文（方法论正文只收结构位）。
+ * 人工改判（annotate / review 回填）可覆盖 outcome——认定在人工。
+ */
+export function experienceFromRun(rec: RunRecord, pkg: OntologyPackage): ExperienceNote {
+  const signature = buildTaskSignature({
+    pkg,
+    scenarioId: rec.scenarioId,
+    datasetSummary: rec.datasetSummary,
+  })
+  const pending = rec.result.candidates.flatMap((c) => c.pendingChecks)
+  const reviewFocus = [
+    ...new Set(
+      pending
+        .flatMap((p) => [p.ruleId, ...(p.missing ?? [])])
+        .filter((t): t is string => typeof t === 'string'),
+    ),
+  ].filter(isStructuralFocusToken)
+  const auditPassed = rec.result.audit.passed === true
+  return {
+    runId: rec.runId,
+    signature,
+    outcome: !auditPassed ? 'failure' : pending.length > 0 ? 'partial' : 'success',
+    skillRefsUsed: signature.skillRefs,
+    counterexample: !auditPassed,
+    ...(reviewFocus.length > 0 ? { reviewFocus } : {}),
+    savedAt: new Date().toISOString(),
+  }
 }
 
 /* ───────────────────────── 结构检索（S5.1） ───────────────────────── */
@@ -660,6 +694,12 @@ export function reviewFocusFrom(rev: DiffRevision): string[] {
 
 /* ───────────────────────── 抽象巩固（S6，P3-1） ───────────────────────── */
 
+/** 经验 scope 参赛判定：默认精确同包版本；includePriorVersions 放行同 meta.name 全版本。 */
+function scopeMatches(noteScope: string, scope: string, includePriorVersions: boolean): boolean {
+  if (noteScope === scope) return true
+  return includePriorVersions && noteScope.split('@')[0] === scope.split('@')[0]
+}
+
 export interface SkillAbstraction {
   /** 聚簇键：packageScope + stepShape。 */
   clusterKey: string
@@ -670,27 +710,32 @@ export interface SkillAbstraction {
 }
 
 /**
- * 自动技能抽象（S6）：成功且非反例、未判误迁移的经验按 packageScope+stepShape 聚簇；
+ * 自动技能抽象（S6）：成功且非反例、未判误迁移的经验按包名+stepShape 聚簇；
  * 簇员 ≥ minCluster（默认 2）→ 产出 SkillTemplate 草案（weights 对齐包内打分规则，
  * steps 含 reviewFocus 沉淀）。草案只入队列（pending），物化必经人审——自动化止步于草案。
+ *
+ * includePriorVersions（反馈闭环②断链 B）：生产经验的 packageScope 绑定在 ISSUED 版本
+ * （如 pkg@1.0.0），而物化只能落在 DRAFT（fork 出的 pkg@1.1.0）。置 true 时同包
+ * meta.name 的历史版本经验（含已签发版本）一并参赛聚簇——草案落当前 DRAFT 版本，
+ * weights 对齐当前包规则；签名不重写、经验不搬仓，历史轨迹只作证据。
  */
 export function abstractSkillDrafts(
   root: string,
-  input: { pkg: OntologyPackage; minCluster?: number },
+  input: { pkg: OntologyPackage; minCluster?: number; includePriorVersions?: boolean },
 ): SkillAbstraction[] {
   const { pkg } = input
   const minCluster = input.minCluster ?? 2
   const scope = `${pkg.meta.name}@${pkg.meta.version}`
   const pool = listExperienceNotes(root).filter(
     (n) =>
-      n.signature.packageScope === scope &&
+      scopeMatches(n.signature.packageScope, scope, input.includePriorVersions === true) &&
       n.outcome === 'success' &&
       !n.counterexample &&
       n.misTransfer?.judged !== true,
   )
   const clusters = new Map<string, ExperienceNote[]>()
   for (const n of pool) {
-    const key = `${n.signature.packageScope}|${n.signature.stepShape}`
+    const key = `${pkg.meta.name}|${n.signature.stepShape}`
     const arr = clusters.get(key) ?? []
     arr.push(n)
     clusters.set(key, arr)
@@ -734,26 +779,27 @@ export interface CounterAbstraction {
 }
 
 /**
- * 反例利用（S6，P3-2）：counterexample 经验按 packageScope+stepShape 聚簇；
+ * 反例利用（S6，P3-2）：counterexample 经验按包名+stepShape 聚簇；
  * 簇员 ≥ minCluster → 草案——outcomeReason 含结论性表述 → RedLine（只落红线），
  * 否则 → ExclusionRule（downweight，条件待人审细化）。confidence 0.7 < 0.75 → 强制人审。
+ * includePriorVersions 同 abstractSkillDrafts：同名历史版本反例经验可参赛（断链 B）。
  */
 export function abstractCounterexampleDrafts(
   root: string,
-  input: { pkg: OntologyPackage; minCluster?: number },
+  input: { pkg: OntologyPackage; minCluster?: number; includePriorVersions?: boolean },
 ): CounterAbstraction[] {
   const { pkg } = input
   const minCluster = input.minCluster ?? 2
   const scope = `${pkg.meta.name}@${pkg.meta.version}`
   const pool = listExperienceNotes(root).filter(
     (n) =>
-      n.signature.packageScope === scope &&
+      scopeMatches(n.signature.packageScope, scope, input.includePriorVersions === true) &&
       n.counterexample &&
       n.misTransfer?.judged !== true,
   )
   const clusters = new Map<string, ExperienceNote[]>()
   for (const n of pool) {
-    const key = `${n.signature.packageScope}|${n.signature.stepShape}`
+    const key = `${pkg.meta.name}|${n.signature.stepShape}`
     const arr = clusters.get(key) ?? []
     arr.push(n)
     clusters.set(key, arr)

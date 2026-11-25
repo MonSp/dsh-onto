@@ -6,15 +6,19 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteErrorDetailsMap } from '@deepseek-ai/dsh-typert-protocol'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  KnowledgeStore,
+  PackageStoreError,
   PackageWorkspace,
+  buildDiffTable,
   buildRunRecord,
   buildRunReport,
   compareRunRecords,
   exportRunArchive,
   expandEntity,
+  experienceFromRun,
   isSafeRunId,
   listExperienceNotes,
   listReportPages,
@@ -25,11 +29,15 @@ import {
   listRunRecords,
   readPackageMeta,
   reviewExperienceNote,
+  runReplay,
   runScenario,
+  saveExperienceNote,
   saveRunRecord,
   verifyDerived,
   type DataBasisInput,
   type ExpandResult,
+  type ExperienceNote,
+  type ExperienceOutcome,
   type OntologyPackage,
   type ReportPage,
   type RunDiff,
@@ -54,16 +62,25 @@ import {
 import { checkGrant, readToolContracts } from './agent-grants.js'
 import { consumeUiApprovalChallenge, issueUiApprovalChallenge } from './ui-approval.js'
 import { dataSources } from './data-sources.js'
+import { createMappedDataConnector } from './data-source-map.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 import { isStrictReleaseMode, ReleaseStore } from './release-store.js'
-import { ReleaseError } from './release.js'
+import { buildReleaseBundle, buildReleaseManifest, ReleaseError } from './release.js'
 import {
   actChecks,
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, parseTargetRef,
   requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery,
 } from './business-policy.js'
 import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
-import { loadSourceConfigs } from './source-config.js'
+import { abstractExperienceInto, readOwnVersion, validateRunSeedIds } from './agent-tools.js'
+import {
+  loadSourceConfigs,
+  parseControlledBaseUrl,
+  parseSourceKind,
+  parseTokenEnvName,
+  resolveTokenEnv,
+  upsertSourceConfig,
+} from './source-config.js'
 
 /** wire 错误 details：origCode 保留业务机器码（REVIEW_* / INVALID_ARGS…），便于 UI 展示。 */
 type OntoErrorDetails = { origCode?: string }
@@ -124,6 +141,9 @@ function toRemoteError(e: unknown): RemoteError {
   if (code.startsWith('ISSUE_GATE')) return ontoError('onto/issue-gate', message, code || undefined)
   if (code === 'DERIVED_DRIFT') return ontoError('onto/drift', message, code || undefined)
   if (/not found|NOT_FOUND/.test(code + message)) return ontoError('onto/not-found', message, code || undefined)
+  // 发布台账业务码（交付线）：冲突单独映射；其余 RELEASE_* 保持业务码可回指
+  if (code === 'RELEASE_CONFLICT') return ontoError('onto/conflict', message, code || undefined)
+  if (code.startsWith('RELEASE_')) return ontoError('onto/bad-request', message, code || undefined)
   return ontoError('onto/bad-request', message, code || undefined)
 }
 
@@ -182,7 +202,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     this.releases = new ReleaseStore({
       root: join(dataDir, 'releases'),
       workspace: this.ws,
-      versions: { core: '0.0.0', runtime: '0.0.0' },
+      versions: { core: readOwnVersion('core'), runtime: readOwnVersion('runtime') },
       requireActive: this.strict,
     })
   }
@@ -217,13 +237,26 @@ export class OntoRuntime extends RuntimeRemoteService {
 
   @Remote('listScenarios')
   async remoteExportListScenarios(request: { name: string; version: string }): Promise<{
-    scenarios: Array<{ id: string; name: string; goal: string; boundary: string }>
+    scenarios: Array<{
+      id: string
+      name: string
+      goal: string
+      boundary: string
+      /** 随包默认报表页契约（O3 预置；缺省无 = 运行面用 buildDefaultReportSurface）。 */
+      reportSurface?: unknown
+    }>
   }> {
     return guard(() => {
       this.assertActive(request.name, request.version)
       const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
       return {
-        scenarios: pkg.scenarios.map((s) => ({ id: s.id, name: s.name, goal: s.goal, boundary: s.boundary })),
+        scenarios: pkg.scenarios.map((s) => ({
+          id: s.id,
+          name: s.name,
+          goal: s.goal,
+          boundary: s.boundary,
+          ...(s.reportSurface !== undefined ? { reportSurface: s.reportSurface } : {}),
+        })),
       }
     })
   }
@@ -257,6 +290,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
     /** 计算策略（缺省 explore）：formal=正式可信分析（缺依据 → dataStatus=insufficient）。 */
     analysisMode?: 'formal' | 'explore'
+    /** 种子扩图运行（与 Agent run_scenario 同参）：场景须声明 prep.expand。 */
+    seedIds?: string[]
   }): Promise<{ result: ScenarioRunResult }> {
     return guard(async () => {
       this.assertActive(request.name, request.version)
@@ -268,6 +303,11 @@ export class OntoRuntime extends RuntimeRemoteService {
       const analysisMode = request.analysisMode === 'formal' ? 'formal' : 'explore'
       const identity = this.strict ? requireBusinessIdentity('read') : undefined
       const pkg = loadPackage(dir)
+      // seedIds 与 Agent 面同口径：错型/空/超限拒；场景须声明 prep.expand
+      const seedIds = validateRunSeedIds(request.seedIds)
+      if (seedIds !== undefined && pkg.scenarios.find((s) => s.id === request.scenarioId)?.prep?.expand === undefined) {
+        throw new AgentToolError('INVALID_ARGS', `场景 ${request.scenarioId} 未声明 prep.expand，无法应用 seedIds`)
+      }
       let dataset: RuntimeDataset
       let dataBasis: DataBasisInput | undefined
       if (hasSource) {
@@ -288,6 +328,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         if (identity) assertBusinessDataset(identity, pkg, dataset)
       }
       const result = runScenario(dir, request.scenarioId, dataset, {
+        ...(seedIds !== undefined ? { seedIds } : {}),
         analysisMode,
         ...(dataBasis !== undefined ? { dataBasis } : {}),
       })
@@ -302,17 +343,18 @@ export class OntoRuntime extends RuntimeRemoteService {
           ].filter((p) => typeof p === 'string' && p !== ''),
         ),
       ]
-      saveRunRecord(
-        this.ws.root,
-        buildRunRecord({
-          package: { name: meta.name, version: meta.version },
-          dataset: result.effectiveDataset ?? dataset,
-          inputDataset: dataset,
-          result,
-          redlines,
-          accessBinding: identity && runAccessBinding(identity),
-        }),
-      )
+      const rec = buildRunRecord({
+        package: { name: meta.name, version: meta.version },
+        dataset: result.effectiveDataset ?? dataset,
+        inputDataset: dataset,
+        result,
+        redlines,
+        accessBinding: identity && runAccessBinding(identity),
+      })
+      saveRunRecord(this.ws.root, rec)
+      // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
+      // 运行即有经验卡（outcome 机械映射），复核面可衔接人工回填（annotateExperience）。
+      saveExperienceNote(this.ws.root, experienceFromRun(rec, pkg))
       return { result }
     })
   }
@@ -547,6 +589,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     reviewer: string
     createdAt: string
     humanReviewRequired: true
+    /** 反馈闭环②衔接回执：经验卡已建/已桥接；桥接失败显式 skipped（不回滚决定）。 */
+    experience: { runId: string; outcome: ExperienceOutcome; created: boolean } | { skipped: string }
   }> {
     return guard(() => {
       const reviewer = requireReviewerHostId()
@@ -564,6 +608,10 @@ export class OntoRuntime extends RuntimeRemoteService {
       )
       if (this.strict) assertBusinessRun(requireBusinessIdentity('history'), validated.runRec)
       const dec = persistReviewDecision(this.ws.root, validated, reviewer)
+      // 反馈闭环②断链 A：人工认定落 ReviewDecision 的同时桥接经验卡——缺卡按 S5.4.2 补建，
+      // 认定回执进 outcomeReason（人审可在经验回填面继续改判 outcome/误迁移）。
+      // 学习层不否决人审：桥接失败不回滚已落决定，回执显式 skipped（不静默吞）。
+      const experience = this.bridgeExperienceFromDecision(validated.runRec, dec)
       return {
         decisionId: dec.decisionId,
         runId: dec.runId,
@@ -572,8 +620,40 @@ export class OntoRuntime extends RuntimeRemoteService {
         reviewer: dec.reviewer,
         createdAt: dec.createdAt,
         humanReviewRequired: true as const,
+        experience,
       }
     })
+  }
+
+  /** 认定→经验卡桥接（断链 A）：缺卡补建（S5.4.2 映射），认定回执追加进 outcomeReason。 */
+  private bridgeExperienceFromDecision(
+    rec: RunRecord,
+    dec: ReviewDecision,
+  ): { runId: string; outcome: ExperienceOutcome; created: boolean } | { skipped: string } {
+    try {
+      let note: ExperienceNote | null = null
+      try {
+        note = loadExperienceNote(this.ws.root, rec.runId)
+      } catch (e) {
+        if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') note = null
+        else throw e
+      }
+      const created = note === null
+      if (note === null) {
+        const pkg = loadPackage(this.ws.versionDir(rec.package.name, rec.package.version))
+        note = experienceFromRun(rec, pkg)
+      }
+      const stamp = `复核决定 ${dec.decision}（${dec.decisionId}）${dec.reason !== undefined ? `: ${dec.reason}` : ''}`
+      note.outcomeReason =
+        note.outcomeReason !== undefined && note.outcomeReason !== ''
+          ? `${note.outcomeReason}；${stamp}`
+          : stamp
+      note.savedAt = new Date().toISOString()
+      saveExperienceNote(this.ws.root, note)
+      return { runId: note.runId, outcome: note.outcome, created }
+    } catch (e) {
+      return { skipped: e instanceof Error ? e.message : String(e) }
+    }
   }
 
   private reviewChainOf(runId: string): {
@@ -1068,23 +1148,408 @@ export class OntoRuntime extends RuntimeRemoteService {
     })
   }
 
-  /** 人审回填（S5.4）：改判 outcome、误迁移只由人判（by 必填）、reviewFocus 沉淀。 */
+  /**
+   * 人审回填（S5.4）：改判 outcome、误迁移只由人判、reviewFocus 沉淀。
+   * 身份口径（与 recordReviewDecision 同）：宿主可信身份 fail-closed 先行，
+   * misTransfer.by 只信 `host:<userId>`——不收前端表单自报字符串。
+   */
   @Remote('reviewExperience')
   async remoteExportReviewExperience(request: {
     runId: string
     outcome?: 'success' | 'partial' | 'failure' | 'pending-human'
     outcomeReason?: string
-    misTransfer?: { judged: boolean; by: string; note?: string }
+    misTransfer?: { judged: boolean; by?: string; note?: string }
     reviewFocus?: string[]
   }): Promise<{ note: Awaited<ReturnType<typeof loadExperienceNote>> }> {
     return guard(() => {
+      const reviewer = requireReviewerHostId()
       if (this.strict) this.readRun(request.runId)
       return { note: reviewExperienceNote(this.ws.root, request.runId, {
         outcome: request.outcome,
         outcomeReason: request.outcomeReason,
-        misTransfer: request.misTransfer,
+        misTransfer: request.misTransfer !== undefined
+          ? {
+              judged: request.misTransfer.judged,
+              // 误迁移只由人判（模型/表单不自评）：by 一律取宿主可信身份，入参 by 只作形状兼容
+              by: reviewer,
+              ...(request.misTransfer.note !== undefined ? { note: request.misTransfer.note } : {}),
+            }
+          : undefined,
         reviewFocus: request.reviewFocus,
       }) }
+    })
+  }
+
+  /**
+   * 经验回填（反馈闭环②断链 A）：新建 + 回填一条经验卡——生成页复核面/工作台的
+   * 「经验回填」入口。note 缺失时按 S5.4.2 从 RunRecord 新建（须带 outcome，人审定性）；
+   * 已存在走 reviewExperienceNote 回填。本人点击即人审事件（不走批准卡）；
+   * misTransfer.by 一律取宿主可信身份。机器闸不否决人审——本面不设审计闸。
+   */
+  @Remote('annotateExperience')
+  async remoteExportAnnotateExperience(request: {
+    runId: string
+    outcome?: 'success' | 'partial' | 'failure' | 'pending-human'
+    outcomeReason?: string
+    counterexample?: boolean
+    misTransfer?: { judged: boolean; note?: string }
+    reviewFocus?: string[]
+    reusedFromRunId?: string
+  }): Promise<{
+    note: ExperienceNote
+    created: boolean
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      const reviewer = requireReviewerHostId()
+      if (this.strict) this.readRun(request.runId)
+      const hasPatch =
+        request.outcome !== undefined ||
+        request.outcomeReason !== undefined ||
+        request.counterexample !== undefined ||
+        request.misTransfer !== undefined ||
+        request.reviewFocus !== undefined ||
+        request.reusedFromRunId !== undefined
+      if (!hasPatch) {
+        throw new AgentToolError(
+          'INVALID_ARGS',
+          '至少提供 outcome / outcomeReason / counterexample / misTransfer / reviewFocus / reusedFromRunId 之一',
+        )
+      }
+      if (request.misTransfer !== undefined && typeof request.misTransfer.judged !== 'boolean') {
+        throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
+      }
+      const misPatch = request.misTransfer !== undefined
+        ? {
+            judged: request.misTransfer.judged,
+            by: reviewer,
+            ...(request.misTransfer.note !== undefined ? { note: request.misTransfer.note } : {}),
+          }
+        : undefined
+
+      let existing: ExperienceNote | null = null
+      try {
+        existing = loadExperienceNote(this.ws.root, request.runId)
+      } catch (e) {
+        if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') existing = null
+        else throw e
+      }
+      if (existing !== null) {
+        const note = reviewExperienceNote(this.ws.root, request.runId, {
+          outcome: request.outcome,
+          outcomeReason: request.outcomeReason,
+          misTransfer: misPatch,
+          reviewFocus: request.reviewFocus,
+          ...(request.reusedFromRunId !== undefined ? { reusedFromRunId: request.reusedFromRunId } : {}),
+        })
+        return { note, created: false, humanReviewRequired: true as const }
+      }
+
+      // 新建路径：outcome 必填（人审定性）；签名从 RunRecord + 包机械导出（同 S5.4.2）
+      if (request.outcome === undefined) {
+        throw new AgentToolError('INVALID_ARGS', '经验记录不存在：创建时必须提供 outcome')
+      }
+      const rec = loadRunRecord(this.ws.root, request.runId)
+      const pkg = loadPackage(this.ws.versionDir(rec.package.name, rec.package.version))
+      const base = experienceFromRun(rec, pkg)
+      const note: ExperienceNote = {
+        ...base,
+        outcome: request.outcome,
+        ...(request.outcomeReason !== undefined ? { outcomeReason: request.outcomeReason } : {}),
+        counterexample: request.counterexample === true,
+        ...(misPatch !== undefined ? { misTransfer: { ...misPatch, note: misPatch.note ?? '' } } : {}),
+        ...(request.reviewFocus !== undefined ? { reviewFocus: [...request.reviewFocus] } : {}),
+        ...(request.reusedFromRunId !== undefined
+          ? {
+              reusedFrom: {
+                runId: request.reusedFromRunId,
+                diff: buildDiffTable(base.signature, loadExperienceNote(this.ws.root, request.reusedFromRunId).signature),
+              },
+            }
+          : {}),
+        savedAt: new Date().toISOString(),
+      }
+      saveExperienceNote(this.ws.root, note)
+      return { note, created: true, humanReviewRequired: true as const }
+    })
+  }
+
+  /**
+   * 经验抽象（反馈闭环②断链 A 工作台入口 / 断链 B includePriorVersions）：
+   * 聚簇成功/反例经验 → SkillTemplate/RedLine/ExclusionRule 草案入知识库人审队列。
+   * 只入队、永不直写包；物化必经 ontoKnowledge.materialize 人审。
+   * includePriorVersions：同包 meta.name 历史版本经验（含 ISSUED 生产版）参赛，
+   * 草案落当前 DRAFT 版本——fork 后不必绕 CLI 先在旧版本出草案。
+   */
+  @Remote('abstractExperiences')
+  async remoteExportAbstractExperiences(request: {
+    packageId?: string
+    minCluster?: number
+    includePriorVersions?: boolean
+  }): Promise<{
+    package: string
+    scanned?: Array<{ package: string; skipped?: string; queued: number; skills: number; counters: number }>
+    queued: Array<{ id: string; name: string; targetKind: string; status: string; members: number; runId: string }>
+    skills: number
+    counters: number
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      requireReviewerHostId()
+      const knowledge = new KnowledgeStore(this.dataDir)
+      return abstractExperienceInto(this.ws, knowledge, {
+        ...(request.packageId !== undefined ? { packageId: request.packageId } : {}),
+        ...(request.minCluster !== undefined ? { minCluster: request.minCluster } : {}),
+        ...(request.includePriorVersions !== undefined
+          ? { includePriorVersions: request.includePriorVersions }
+          : {}),
+      })
+    })
+  }
+
+  /* ── 发布台账（交付线双轨对称，图注「激活 · 版本回滚同机制」）────────────
+   * 平台轨 UI 面（工作台包管理）与客户轨 seed-release.mjs、Agent 工具面共用同一
+   * ReleaseStore。人审口径：本人点击即人审事件——宿主可信身份留痕（authorizedBy），
+   * 不走工具面批准卡（与客户轨 seed-release activate 同信任级）。激活/回滚只动
+   * 自身活动指针，history 保留。 */
+
+  /** 发布台账视图（人审面）：活动指针 + 工作区版本 × manifest 状态 + 历史。 */
+  @Remote('listReleases')
+  async remoteExportListReleases(): Promise<{
+    packages: Array<{
+      name: string
+      activeVersion: string | null
+      versions: Array<{ version: string; status: string; hasManifest: boolean }>
+    }>
+    history: Array<{
+      action: 'import' | 'activate' | 'rollback'
+      package: { name: string; version: string }
+      from: string | null
+      to: string | null
+      at: string
+      by: string
+    }>
+  }> {
+    return guard(() => {
+      requireReviewerHostId()
+      const manifests = this.releases.listManifests()
+      const byName = new Map<string, Array<{ version: string; status: string; hasManifest: boolean }>>()
+      for (const v of this.ws.listVersions()) {
+        const list = byName.get(v.name) ?? []
+        list.push({
+          version: v.version,
+          status: v.status,
+          hasManifest: manifests.some((m) => m.package.name === v.name && m.package.version === v.version),
+        })
+        byName.set(v.name, list)
+      }
+      // 已发布但工作区无源的版本也可见（发布台账是独立外层，不依赖工作区目录）
+      for (const m of manifests) {
+        const list = byName.get(m.package.name) ?? []
+        if (!list.some((v) => v.version === m.package.version)) {
+          list.push({ version: m.package.version, status: 'ISSUED', hasManifest: true })
+          byName.set(m.package.name, list)
+        }
+      }
+      return {
+        packages: [...byName.entries()].map(([name, versions]) => ({
+          name,
+          activeVersion: this.releases.activeVersion(name),
+          versions: [...versions].sort((a, b) => (a.version < b.version ? 1 : -1)),
+        })),
+        history: this.releases.readHistory().map((h) => ({
+          action: h.action,
+          package: h.package,
+          from: h.from ?? null,
+          to: h.to,
+          at: h.at,
+          by: h.by,
+        })),
+      }
+    })
+  }
+
+  /**
+   * 发布（平台轨 UI 面）：工作区已签发包 → 发布台账（同摘要幂等）。
+   * 两式：纯内容 dataset 包（无 sourceId，只收编台账）｜连接器包（sourceId +
+   * 受控基址，shape/source-maps 校验 + 数据源配置落盘 + 连接器免重启登记）。
+   * checkReplay：发布前跑随包夹具回放验收（基线对照/缺数；包内无夹具则拒绝空验收）。
+   * 不激活——激活是独立人工动作（activateRelease）。
+   */
+  @Remote('publishRelease')
+  async remoteExportPublishRelease(request: {
+    name: string
+    version: string
+    sourceId?: string
+    sourceKind?: 'simulated' | 'formal'
+    apiBaseUrl?: string
+    apiTokenEnv?: string
+    checkReplay?: boolean
+  }): Promise<{
+    name: string
+    version: string
+    mode: 'content' | 'connector'
+    imported: boolean
+    idempotent: boolean
+    packageDigest: string
+    replayChecked: number
+    activated: false
+    humanReviewRequired: true
+  }> {
+    return guard(() => {
+      const reviewer = requireReviewerHostId()
+      const dir = this.ws.versionDir(request.name, request.version)
+      let pkg: OntologyPackage
+      try {
+        pkg = loadPackage(dir)
+      } catch {
+        throw new AgentToolError('NOT_FOUND', `包不存在或无法加载: ${request.name}@${request.version}`)
+      }
+      const hasSource = typeof request.sourceId === 'string' && request.sourceId !== ''
+      const mode: 'content' | 'connector' = hasSource ? 'connector' : 'content'
+      let sourceCfg:
+        | {
+            sourceId: string
+            sourceKind: 'simulated' | 'formal'
+            apiBaseUrl: string
+            apiTokenEnv?: string
+            shape: NonNullable<OntologyPackage['apiSources'][number]['shape']>
+          }
+        | undefined
+      if (hasSource) {
+        if (request.sourceKind === undefined || request.apiBaseUrl === undefined) {
+          throw new AgentToolError('INVALID_ARGS', '连接器模式须提供 sourceKind 与 apiBaseUrl（纯内容包不传 sourceId）')
+        }
+        const src = pkg.apiSources.find((s) => s.id === request.sourceId)
+        if (src === undefined || src.shape === undefined) {
+          throw new AgentToolError('INVALID_ARGS', `${request.sourceId} 未在包 apiSources 声明 shape`)
+        }
+        if ((pkg.sourceMaps ?? []).length === 0) {
+          throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
+        }
+        const kind = parseSourceKind(request.sourceKind ?? '')
+        const url = parseControlledBaseUrl(request.apiBaseUrl ?? '')
+        const tokenEnv =
+          request.apiTokenEnv !== undefined && request.apiTokenEnv !== ''
+            ? parseTokenEnvName(request.apiTokenEnv)
+            : undefined
+        const token = tokenEnv !== undefined ? resolveTokenEnv(tokenEnv) : null
+        if (tokenEnv !== undefined && token === null) {
+          throw new AgentToolError('INVALID_ARGS', `令牌 env ${tokenEnv} 缺失/为空：请先在宿主 env 配置后重试`)
+        }
+        sourceCfg = {
+          sourceId: request.sourceId as string,
+          sourceKind: kind,
+          apiBaseUrl: request.apiBaseUrl as string,
+          ...(tokenEnv !== undefined ? { apiTokenEnv: tokenEnv } : {}),
+          shape: src.shape,
+        }
+      }
+
+      // 可选回放验收（发布门槛）：随包夹具 → 映射 → 场景 → 基线对照；无夹具不得空验收
+      let replayChecked = 0
+      if (request.checkReplay === true) {
+        for (const s of pkg.scenarios) {
+          const fixture = join(dir, 'fixtures', `replay-${s.id}.json`)
+          if (!existsSync(fixture)) continue
+          const report = runReplay({
+            versionDir: dir,
+            scenarioId: s.id,
+            ...(sourceCfg !== undefined ? { sourceId: sourceCfg.sourceId } : {}),
+            check: true,
+          })
+          replayChecked++
+          if (report.comparison !== undefined && !report.comparison.ok) {
+            throw new AgentToolError(
+              'INVALID_ARGS',
+              `回放验收未过（${s.id}）：基线对照 ${report.comparison.diffs.length} 处不一致——发布拒绝`,
+            )
+          }
+        }
+        if (replayChecked === 0) {
+          throw new AgentToolError('INVALID_ARGS', '要求回放验收但包内无随包夹具（fixtures/replay-<scenarioId>.json）')
+        }
+      }
+
+      const manifest = buildReleaseManifest(dir, {
+        coreCompat: { min: '0.2.0' },
+        runtimeCompat: { min: '0.2.0' },
+        releasedBy: reviewer,
+      })
+      const imported = this.releases.importRelease({
+        kind: 'controlled-upload',
+        bundle: buildReleaseBundle(dir, manifest),
+      })
+      if (sourceCfg !== undefined) {
+        // 受控数据源配置落盘先行 + 连接器免重启登记（与 Agent publish_business 同口径）
+        upsertSourceConfig(this.dataDir, {
+          sourceId: sourceCfg.sourceId,
+          package: { name: request.name, version: request.version },
+          sourceKind: sourceCfg.sourceKind,
+          apiBaseUrl: sourceCfg.apiBaseUrl,
+          ...(sourceCfg.apiTokenEnv !== undefined ? { apiTokenEnv: sourceCfg.apiTokenEnv } : {}),
+          registeredAt: new Date().toISOString(),
+        })
+        const token = sourceCfg.apiTokenEnv !== undefined ? resolveTokenEnv(sourceCfg.apiTokenEnv) : null
+        if (dataSources.has(sourceCfg.sourceId)) dataSources.unregister(sourceCfg.sourceId)
+        dataSources.register(
+          sourceCfg.sourceId,
+          createMappedDataConnector({
+            sourceId: sourceCfg.sourceId,
+            baseUrl: sourceCfg.apiBaseUrl,
+            shape: sourceCfg.shape,
+            maps: pkg.sourceMaps ?? [],
+            kind: sourceCfg.sourceKind,
+            ...(token !== null ? { auth: { token } } : {}),
+          }),
+        )
+      }
+      return {
+        name: request.name,
+        version: request.version,
+        mode,
+        imported: true,
+        idempotent: imported.idempotent,
+        packageDigest: imported.packageDigest,
+        replayChecked,
+        activated: false as const,
+        humanReviewRequired: true as const,
+      }
+    })
+  }
+
+  /** 激活（人工动作）：新运行只绑活动版本；同包其它版本拒绝（受管闸）。 */
+  @Remote('activateRelease')
+  async remoteExportActivateRelease(request: {
+    name: string
+    version: string
+  }): Promise<{ name: string; version: string; previous: string | null; humanReviewRequired: true }> {
+    return guard(() => {
+      const reviewer = requireReviewerHostId()
+      const act = this.releases.activate(request.name, request.version, { authorizedBy: reviewer })
+      return {
+        name: request.name,
+        version: request.version,
+        previous: act.previous,
+        humanReviewRequired: true as const,
+      }
+    })
+  }
+
+  /** 回滚（版本回滚同机制）：只动该包自身活动指针，history 保留；无上一版本拒绝。 */
+  @Remote('rollbackRelease')
+  async remoteExportRollbackRelease(request: {
+    name: string
+  }): Promise<{ name: string; rolledBackTo: string; previous: string | null; humanReviewRequired: true }> {
+    return guard(() => {
+      const reviewer = requireReviewerHostId()
+      const act = this.releases.rollback(request.name, { authorizedBy: reviewer })
+      return {
+        name: request.name,
+        rolledBackTo: act.package.version,
+        previous: act.previous,
+        humanReviewRequired: true as const,
+      }
     })
   }
 }

@@ -48,6 +48,8 @@ interface ScenarioRow {
   id: string
   name: string
   goal: string
+  /** 随包默认报表页契约（O3 预置；缺省无 = 用 buildDefaultReportSurface）。 */
+  reportSurface?: unknown
 }
 
 /** 受控数据源摘要（listSourceConfigs；部署 env 登记的默认源可不在表内）。 */
@@ -78,6 +80,8 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [sourceId, setSourceId] = useState(SOURCE_ID)
   const [sources, setSources] = useState<SourceRow[]>([])
   const [dataTrust, setDataTrust] = useState<{ provenance: string; verified: boolean; note: string } | null>(null)
+  // 种子扩图运行（与 Agent run_scenario 同参；场景须声明 prep.expand）
+  const [seedIdsText, setSeedIdsText] = useState('')
 
   useEffect(() => {
     if (!api) return
@@ -149,6 +153,10 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             ...(channel === 'dataset' ? { dataset } : { sourceId }),
             // 正式（受控源）通道按 formal 可信口径（缺依据→insufficient）；探索通道 explore 降级轴
             analysisMode: channel === 'source' ? 'formal' : 'explore',
+            // 种子扩图（Agent run_scenario 同参）：逗号分隔；场景须声明 prep.expand
+            ...(seedIdsText.trim() !== ''
+              ? { seedIds: seedIdsText.split(',').map((s) => s.trim()).filter(Boolean) }
+              : {}),
           }),
         )
         setDataTrust(out.result.dataTrust ?? null)
@@ -167,6 +175,9 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
 
   const resultView = (): ReactNode[] => {
     if (!report) return [h('p', { key: 'e', className: 'txri-note' }, t('empty'))]
+    // 随包默认报表页（O3 reportSurface，契约＝设计时定义的布局侧）
+    const presetSurface = scenarios.find((s) => s.id === scenarioId)?.reportSurface
+    const presetOk = presetSurface !== undefined && validateReportSurface(presetSurface).ok
     return [
       h('p', { key: 'rid', className: 'txri-note txri-mono' }, `${t('runId')}: ${report.runRef.runId}`),
       h(
@@ -181,9 +192,15 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         h('span', { className: `tag ${report.summary.auditPassed ? 'ok' : 'err'}` }, `${t('audit')}: ${report.summary.auditPassed ? t('auditPass') : t('auditFail')}`),
         h('span', { className: 'tag ok' }, t('humanReview')),
       ),
+      // 随包默认报表页（O3 reportSurface）优先；不合法回退默认模板并上墙提示
+      presetSurface !== undefined && !presetOk
+        ? h('p', { key: 'bs', className: 'txri-note' }, t('reportBadSurface'))
+        : null,
       h(ReportSurface, {
         key: 'rs',
-        surface: buildDefaultReportSurface(),
+        surface: presetSurface !== undefined && presetOk
+          ? (presetSurface as import('@dsh-onto/core/surface').A2uiSurfaceMessage)
+          : buildDefaultReportSurface(),
         report,
         t,
         navigate: () => {},
@@ -250,6 +267,14 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             )
           : h('span', { className: 'txri-note' }, t('sourcesEmpty'))
         : null,
+      h('input', {
+        type: 'text',
+        placeholder: t('seedIds'),
+        value: seedIdsText,
+        disabled: busy !== '',
+        style: { minWidth: '140px' },
+        onChange: (e: { target: { value: string } }) => setSeedIdsText(e.target.value),
+      }),
       h(
         'button',
         { type: 'button', className: 'txri-primary', disabled: !!busy || !scenarioId, onClick: () => run() },
@@ -560,6 +585,18 @@ function isReconcilePending(a: ChainData['actions'][number]): boolean {
   return a.status === 'unknown' || a.status === 'dispatched' || a.phase === 'dispatched'
 }
 
+/** 经验卡（反馈闭环②）：复核面回填用的最小投影（签名/结论/误迁移/沉淀）。 */
+interface ExperienceNoteView {
+  runId: string
+  signature: { scenarioId: string; packageScope: string }
+  outcome: string
+  outcomeReason?: string
+  counterexample: boolean
+  reviewFocus?: string[]
+  misTransfer?: { judged: boolean; by: string; note: string }
+  savedAt: string
+}
+
 function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const { t, ctx } = props
   const api = ctx.remote['ontoRuntime']
@@ -576,6 +613,14 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [decision, setDecision] = useState<'approved' | 'rejected'>('approved')
   const [reason, setReason] = useState('')
+  // 经验回填（反馈闭环②断链 A）：复核面直接衔接经验卡（新建/回填）
+  const [expNote, setExpNote] = useState<ExperienceNoteView | null>(null)
+  const [expOutcome, setExpOutcome] = useState('')
+  const [expReason, setExpReason] = useState('')
+  const [expCounter, setExpCounter] = useState(false)
+  const [expMisJudged, setExpMisJudged] = useState<'' | 'true' | 'false'>('')
+  const [expMisNote, setExpMisNote] = useState('')
+  const [expFocus, setExpFocus] = useState('')
 
   const fetchRuns = async (): Promise<void> => {
     if (!api) return
@@ -620,14 +665,26 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
       setSelectedCandidate('')
       setDecision('approved')
       setReason('')
+      setExpNote(null)
+      setExpOutcome('')
+      setExpReason('')
+      setExpCounter(false)
+      setExpMisJudged('')
+      setExpMisNote('')
+      setExpFocus('')
       try {
-        const [detailOut, chainOut] = await Promise.all([
+        const [detailOut, chainOut, expOut] = await Promise.all([
           Promise.resolve(api.showRun({ runId })).then((v) => unwrap<RunDetail>(v)),
           Promise.resolve(api.reviewChain({ runId })).then((v) => unwrap<ChainData>(v)),
+          // 经验卡可缺（S5.4.2 前的旧 run）——缺卡不堵复核面，回填时补建
+          Promise.resolve(api.showExperience({ runId }))
+            .then((v) => unwrap<{ note: ExperienceNoteView }>(v).note)
+            .catch(() => null),
         ])
         if (seq !== reqGuard.n) return
         setDetail(detailOut)
         setChain(chainOut)
+        setExpNote(expOut)
         const cands = detailOut.record?.result?.candidates ?? []
         // 不默认全选：批准须显式勾选候选，防一键批量误批
         setSelectedIds([])
@@ -668,9 +725,16 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         )
         setOkMsg(`${t('reviewSubmitted')}: ${out.decisionId} (${out.decision})`)
         // 先取链再复位表单；busy 保持到全部在途工作结束（防连点重复提交同一决定）
-        const chainOut = unwrap<ChainData>(await api.reviewChain({ runId: rec.runId }))
+        const [chainOut, expOut] = await Promise.all([
+          Promise.resolve(api.reviewChain({ runId: rec.runId })).then((v) => unwrap<ChainData>(v)),
+          // 认定→经验卡桥接（断链 A）：决定落库即补建/更新经验卡，刷新回填面
+          Promise.resolve(api.showExperience({ runId: rec.runId }))
+            .then((v) => unwrap<{ note: ExperienceNoteView }>(v).note)
+            .catch(() => null),
+        ])
         if (seq !== reqGuard.n) return
         setChain(chainOut)
+        setExpNote(expOut)
         setSelectedIds([])
         setReason('')
         // 队列静默刷新：不碰 busy（否则会提前清掉本轮 review busy）
@@ -699,6 +763,45 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         setError(errText(e))
       } finally {
         setBusy('')
+      }
+    })()
+  }
+
+  /** 经验回填（断链 A）：缺卡新建（须 outcome）/ 有卡回填；misTransfer.by 取宿主身份（服务端覆盖）。 */
+  const submitExperience = () => {
+    if (!detail) return
+    const seq = ++reqGuard.n
+    void (async () => {
+      setError('')
+      setOkMsg('')
+      setBusy('exp')
+      try {
+        const patch: Record<string, unknown> = { runId: detail.record.runId }
+        if (expOutcome) patch.outcome = expOutcome
+        if (expReason.trim()) patch.outcomeReason = expReason.trim()
+        if (!expNote) patch.counterexample = expCounter
+        if (expMisJudged === 'true' || expMisJudged === 'false') {
+          patch.misTransfer = {
+            judged: expMisJudged === 'true',
+            ...(expMisNote.trim() !== '' ? { note: expMisNote.trim() } : {}),
+          }
+        }
+        if (expFocus.trim()) {
+          patch.reviewFocus = expFocus.split(',').map((s) => s.trim()).filter(Boolean)
+        }
+        const out = unwrap<{ note: ExperienceNoteView; created: boolean; humanReviewRequired: true }>(
+          await api.annotateExperience(patch),
+        )
+        if (seq !== reqGuard.n) return
+        setExpNote(out.note)
+        setOkMsg(`${t('expSaved')}（${out.created ? t('expCreated') : t('expBackfilled')}）`)
+        setExpMisJudged('')
+        setExpMisNote('')
+      } catch (e) {
+        if (seq !== reqGuard.n) return
+        setError(errText(e))
+      } finally {
+        if (seq === reqGuard.n) setBusy('')
       }
     })()
   }
@@ -1022,6 +1125,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
           h('input', {
             type: 'text',
             value: reason,
+            placeholder: t('reasonLabel'),
             style: { flex: '1', minWidth: '160px' },
             onInput: (e: { target: { value: string } }) => setReason(e.target.value),
           }),
@@ -1048,6 +1152,135 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             ? h('span', { className: 'txri-note' }, t('reasonRequired'))
             : null,
           okMsg ? h('span', { className: 'txri-ok' }, okMsg) : null,
+        ),
+      ),
+    ]
+  }
+
+  /** 经验回填面（反馈闭环②断链 A）：人工认定 → 经验卡衔接（新建/回填）。 */
+  const experienceView = (): ReactNode[] => {
+    if (!detail) return []
+    const note = expNote
+    const canSubmitExp =
+      !busy &&
+      (expOutcome !== '' || expReason.trim() !== '' || expMisJudged !== '' || expFocus.trim() !== '') &&
+      (note !== null || expOutcome !== '')
+    return [
+      h(
+        'div',
+        { key: 'exp', className: 'txri-section' },
+        h('h4', null, t('expSection')),
+        note
+          ? h(
+              'div',
+              { key: 'en', className: 'txri-note' },
+              h(Tag, {
+                text: note.outcome,
+                tone: note.outcome === 'success' ? 'ok' : note.outcome === 'failure' ? 'err' : 'warn',
+              }),
+              note.counterexample ? h(Tag, { text: t('expCounter'), tone: 'warn' }) : null,
+              ' ',
+              h('span', { className: 'txri-mono' }, `${t('expSignature')}: ${note.signature.packageScope} / ${note.signature.scenarioId}`),
+              note.outcomeReason ? h('div', null, note.outcomeReason) : null,
+              note.reviewFocus?.length
+                ? h('div', { className: 'txri-mono' }, `reviewFocus: ${note.reviewFocus.join(', ')}`)
+                : null,
+              note.misTransfer
+                ? h(
+                    'div',
+                    null,
+                    `${t('expMisBy')}: ${note.misTransfer.by}`,
+                    note.misTransfer.judged ? ` · ${t('expMisTrue')}` : '',
+                    note.misTransfer.note ? ` · ${note.misTransfer.note}` : '',
+                  )
+                : null,
+            )
+          : h('p', { key: 'em', className: 'txri-note' }, t('expNoteMissing')),
+        h(
+          'div',
+          { key: 'ef', className: 'txri-cand-row' },
+          h('span', { className: 'txri-note' }, `${t('expOutcome')}:`),
+          h(
+            'select',
+            {
+              value: expOutcome,
+              onChange: (e: { target: { value: string } }) => setExpOutcome(e.target.value),
+            },
+            h('option', { value: '' }, '—'),
+            ...(['success', 'partial', 'failure', 'pending-human'] as const).map((o) =>
+              h('option', { key: o, value: o }, o),
+            ),
+          ),
+          h('input', {
+            type: 'text',
+            placeholder: t('expReason'),
+            value: expReason,
+            style: { flex: '1', minWidth: '140px' },
+            onInput: (e: { target: { value: string } }) => setExpReason(e.target.value),
+          }),
+        ),
+        h(
+          'div',
+          { key: 'em2', className: 'txri-cand-row' },
+          note === null
+            ? h(
+                'label',
+                { style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+                h('input', {
+                  type: 'checkbox',
+                  checked: expCounter,
+                  onChange: () => setExpCounter((v) => !v),
+                }),
+                h('span', { className: 'txri-note' }, t('expCounter')),
+              )
+            : null,
+          h('span', { className: 'txri-note' }, `${t('expMis')}:`),
+          h(
+            'select',
+            {
+              value: expMisJudged,
+              onChange: (e: { target: { value: string } }) =>
+                setExpMisJudged(e.target.value as '' | 'true' | 'false'),
+            },
+            h('option', { value: '' }, '—'),
+            h('option', { value: 'true' }, t('expMisTrue')),
+            h('option', { value: 'false' }, t('expMisFalse')),
+          ),
+          expMisJudged !== ''
+            ? h('input', {
+                type: 'text',
+                placeholder: t('expMisNote'),
+                value: expMisNote,
+                style: { flex: '1', minWidth: '120px' },
+                onInput: (e: { target: { value: string } }) => setExpMisNote(e.target.value),
+              })
+            : null,
+        ),
+        h(
+          'div',
+          { key: 'efocus', className: 'txri-cand-row' },
+          h('input', {
+            type: 'text',
+            placeholder: t('expFocus'),
+            value: expFocus,
+            style: { flex: '1', minWidth: '200px' },
+            onInput: (e: { target: { value: string } }) => setExpFocus(e.target.value),
+          }),
+        ),
+        h(
+          'div',
+          { key: 'eb', className: 'txri-bar' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'txri-primary',
+              disabled: !canSubmitExp,
+              onClick: () => submitExperience(),
+            },
+            t('expSubmit'),
+          ),
+          h('span', { className: 'txri-note' }, t('humanReview')),
         ),
       ),
     ]
@@ -1208,6 +1441,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         { className: 'txri-panel' },
         ...evidenceView(),
         ...reviewFormView(),
+        ...experienceView(),
         ...chainView(),
       ),
     ),
