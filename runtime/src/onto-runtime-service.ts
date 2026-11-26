@@ -261,6 +261,8 @@ export class OntoRuntime extends RuntimeRemoteService {
       boundary: string
       /** 随包默认报表页契约（O3 预置；缺省无 = 运行面用 buildDefaultReportSurface）。 */
       reportSurface?: unknown
+      /** 场景是否声明 prep.expand（可收 seedIds）；缺 seedIds 补数预填据此门控。 */
+      hasExpand: boolean
     }>
   }> {
     return guard(() => {
@@ -273,6 +275,7 @@ export class OntoRuntime extends RuntimeRemoteService {
           goal: s.goal,
           boundary: s.boundary,
           ...(s.reportSurface !== undefined ? { reportSurface: s.reportSurface } : {}),
+          hasExpand: s.prep?.expand !== undefined,
         })),
       }
     })
@@ -1047,7 +1050,15 @@ export class OntoRuntime extends RuntimeRemoteService {
     if (!isRecord(dataset) || !Array.isArray(dataset.objects) || !Array.isArray(dataset.relations)) {
       throw new AgentToolError('INVALID_ARGS', 'dataset 必须是 JSON 对象（objects/relations 数组）')
     }
-    return dataset
+    // R5 信任面：wire 入参是外部请求，不得自称 connector 获得可信状态——探索通道固定 provenance。
+    const inline = { ...dataset, provenance: 'inline' } as RuntimeDataset
+    // strict 隔离面：与 remoteExportRunScenario 探索分支同口径——过身份 + 数据集收权（deny-by-default）。
+    if (this.strict) {
+      const identity = requireBusinessIdentity('read')
+      const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
+      assertBusinessDataset(identity, pkg, inline)
+    }
+    return inline
   }
 
   /**

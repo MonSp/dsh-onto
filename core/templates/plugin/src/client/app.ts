@@ -63,6 +63,8 @@ interface ScenarioRow {
   goal: string
   /** 随包默认报表页契约（O3 预置；缺省无 = 用 buildDefaultReportSurface）。 */
   reportSurface?: unknown
+  /** 场景是否声明 prep.expand（可收 seedIds）；补数种子预填据此门控。 */
+  hasExpand?: boolean
 }
 
 /** 受控数据源摘要（listSourceConfigs；部署 env 登记的默认源可不在表内）。 */
@@ -104,17 +106,36 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: RunPref
   // 补数关联（issue #33 缺口1）：复核面「补数重算」预填 —— 重算 run 关联原 run
   const [refillsRunId, setRefillsRunId] = useState('')
   const [refillHint, setRefillHint] = useState('')
+  // 补数种子暂存（issue #33 修复）：待场景清单就绪后按 hasExpand 门控应用（无 expand 声明不预填 seedIds）
+  const [seedPrefill, setSeedPrefill] = useState<{ seedIds?: string; scenarioId?: string } | null>(null)
 
   // 预填应用（nonce 触发，同载荷重复点击也生效）
   useEffect(() => {
     const p = props.prefill
     if (!p) return
     if (p.scenarioId !== undefined && p.scenarioId !== '') setScenarioId(p.scenarioId)
-    if (p.seedIds !== undefined) setSeedIdsText(p.seedIds)
+    // 种子先清空、暂存；场景未声明 prep.expand 时后端会拒 seedIds——待清单就绪后门控再填
+    setSeedIdsText('')
+    setSeedPrefill({
+      ...(p.seedIds !== undefined ? { seedIds: p.seedIds } : {}),
+      ...(p.scenarioId !== undefined ? { scenarioId: p.scenarioId } : {}),
+    })
     setRefillsRunId(p.refillsRunId ?? '')
     setRefillHint(p.missingHint ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.prefill?.nonce])
+
+  // 场景清单就绪后按 hasExpand 门控应用补数种子（仅声明 prep.expand 的场景可收 seedIds）
+  useEffect(() => {
+    if (seedPrefill === null || scenarios.length === 0) return
+    const target = seedPrefill.scenarioId !== undefined && seedPrefill.scenarioId !== '' ? seedPrefill.scenarioId : scenarioId
+    const canSeed = scenarios.find((s) => s.id === target)?.hasExpand === true
+    if (canSeed && seedPrefill.seedIds !== undefined && seedPrefill.seedIds !== '') {
+      setSeedIdsText(seedPrefill.seedIds)
+    }
+    setSeedPrefill(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedPrefill, scenarios])
 
   useEffect(() => {
     if (!api) return
@@ -177,6 +198,11 @@ function RunPanel(props: { t: (k: string) => string; ctx: Ctx; prefill?: RunPref
           }
         } else if (sourceId === '') {
           throw new Error(t('sourceRequired'))
+        }
+        // 种子仅在场景声明 prep.expand 时可应用；否则后端会拒——给前端明确提示（不静默丢、不裸抛后端码）
+        const scenHasExpand = scenarios.find((s) => s.id === scenarioId)?.hasExpand === true
+        if (seedIdsText.trim() !== '' && !scenHasExpand) {
+          throw new Error(t('seedNoExpand'))
         }
         const out = unwrap<{ result: { runId: string; dataTrust?: { provenance: string; verified: boolean; note: string } } }>(
           await api.runScenario({
@@ -2524,6 +2550,10 @@ function ObjectPanel(props: {
           onChange: (e: { target: { value: string } }) => setTypeFilter(e.target.value),
         },
         h('option', { value: '' }, '—'),
+        // 预填的 typeFilter 未在已加载 types 里时补一个保底 option，让下拉即时回显（不显示成 '—'）
+        typeFilter !== '' && !types.some((x) => x.type === typeFilter)
+          ? h('option', { key: typeFilter, value: typeFilter }, typeFilter)
+          : null,
         ...types.map((x) => h('option', { key: x.type, value: x.type }, `${x.type} (${x.count})`)),
       ),
       h('label', null, `${t('hops')}: `),
@@ -2548,7 +2578,7 @@ function ObjectPanel(props: {
           style: { width: '100%', boxSizing: 'border-box' as const },
           value: datasetText,
           disabled: busy !== '',
-          placeholder: '{ "objects": [], "relations": [] }',
+          placeholder: '{ "objects": [], "relations": [], "candidates": [] }',
           onChange: (e: { target: { value: string } }) => setDatasetText(e.target.value),
         })
       : null,

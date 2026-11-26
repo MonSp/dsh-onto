@@ -190,3 +190,52 @@ test('CLI: 未知命令与 help', () => {
     rmSync(srcRoot, { recursive: true, force: true })
   }
 })
+
+test('CLI: --by 吞噬缺失值/后续 flag → 用法错误（不静默跳过 --check-replay）', () => {
+  // --by 后跟 flag：不得吞掉 --check-replay 作为 actor
+  const a = parseReleaseCliArgs(['publish', '/x', '--by', '--check-replay'])
+  assert.ok(a.error, '--by 后接 flag 应判参数错误')
+  assert.equal(a.checkReplay, false, '--check-replay 不得被吞掉')
+  // --by 缺值（末尾）
+  const b = parseReleaseCliArgs(['activate', 'p', '1.0.0', '--by'])
+  assert.ok(b.error, '--by 缺值应判参数错误')
+  // CLI 面：解析错误 → 退出码 2（用法错误），不进业务分支
+  const { dataDir, srcRoot } = setupDataDir()
+  try {
+    const r = cli(dataDir, ['publish', '/x', '--by', '--check-replay'])
+    assert.equal(r.code, 2)
+    assert.ok(r.text.includes('用法错误'), r.text)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(srcRoot, { recursive: true, force: true })
+  }
+})
+
+test('CLI: publish --check-replay 回放拒绝 → 受控回执退出码 1（不裸抛堆栈）', () => {
+  const { dataDir, srcWs, srcRoot } = setupDataDir()
+  try {
+    // 纯内容包无 apiSources shape + 无夹具 → runReplayAcceptance 抛 AgentToolError；
+    // 必须落「拒绝」回执码 1，而非未捕获崩溃
+    const dir = issuePkg(srcWs)
+    const r = cli(dataDir, ['publish', dir, '--check-replay'])
+    assert.equal(r.code, 1, r.text)
+    assert.ok(r.text.includes('拒绝'), r.text)
+    assert.ok(/INVALID_ARGS|REJECTED/.test(r.text), r.text)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(srcRoot, { recursive: true, force: true })
+  }
+})
+
+test('CLI: publish 读包失败（缺 package.yaml）→ 受控回执退出码 1', () => {
+  const { dataDir, srcRoot } = setupDataDir()
+  try {
+    const missing = join(srcRoot, 'no-such-dir')
+    const r = cli(dataDir, ['publish', missing])
+    assert.equal(r.code, 1, r.text)
+    assert.ok(r.text.includes('拒绝'), r.text)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(srcRoot, { recursive: true, force: true })
+  }
+})

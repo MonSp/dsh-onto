@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { PackageWorkspace, loadPackage } from '@dsh-onto/core'
+import { PackageWorkspace, loadPackage, PackageStoreError, ScenarioRunError } from '@dsh-onto/core'
 import {
   ReleaseStore,
   ReleaseError,
@@ -28,6 +28,7 @@ import {
   buildReleaseBundle,
   type ReleaseManifest,
 } from './index.js'
+import { AgentToolError } from './agent-policy.js'
 import { runReplayAcceptance } from './agent-tools.js'
 
 export interface ReleaseCliResult {
@@ -40,6 +41,8 @@ interface CliArgs {
   positional: string[]
   by?: string
   checkReplay: boolean
+  /** 参数解析错误（用法错误 → 退出码 2）；缺省无。 */
+  error?: string
 }
 
 const USAGE = `用法：release-cli <command> [options]
@@ -64,14 +67,23 @@ export function parseReleaseCliArgs(argv: readonly string[]): CliArgs {
   const positional: string[] = []
   let by: string | undefined
   let checkReplay = false
+  let error: string | undefined
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]
-    if (a === '--by') by = rest[++i]
-    else if (a === '--check-replay') checkReplay = true
+    if (a === '--by') {
+      // --by 后必须跟一个不以 - 开头的操作者值——否则会吞掉下一个 flag（如 --check-replay）静默失效
+      const v = rest[i + 1]
+      if (v === undefined || v.startsWith('-')) {
+        error = '--by 需要一个不以 - 开头的操作者值'
+        break
+      }
+      by = v
+      i++
+    } else if (a === '--check-replay') checkReplay = true
     else if (a === '--help' || a === '-h') return { command: 'help', positional: [], checkReplay: false }
     else positional.push(a)
   }
-  return { command, positional, ...(by !== undefined ? { by } : {}), checkReplay }
+  return { command, positional, ...(by !== undefined ? { by } : {}), checkReplay, ...(error !== undefined ? { error } : {}) }
 }
 
 function readCliVersion(which: 'core' | 'runtime'): string {
@@ -109,6 +121,9 @@ export function runReleaseCli(
   if (args.command === '' || args.command === 'help') {
     emit(USAGE)
     return { code: args.command === 'help' ? 0 : 2, output: lines.join('\n') }
+  }
+  if (args.error !== undefined) {
+    return usageError(args.error, lines, emit)
   }
 
   const dataDir = opts.dataDir ?? process.env.DSH_ONTO_DATA_DIR
@@ -201,6 +216,13 @@ export function runReleaseCli(
   } catch (e) {
     if (e instanceof ReleaseError) {
       emit(`拒绝（${e.code}）：${e.message}`)
+      return { code: 1, output: lines.join('\n') }
+    }
+    // 业务拒绝同族（回放验收 AgentToolError、读包/派生 PackageStoreError / ScenarioRunError）：
+    // 受控回执退出码 1，不裸抛堆栈。其余（真程序错）照常上抛。
+    if (e instanceof AgentToolError || e instanceof PackageStoreError || e instanceof ScenarioRunError) {
+      const code = typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : 'REJECTED'
+      emit(`拒绝（${code}）：${e instanceof Error ? e.message : String(e)}`)
       return { code: 1, output: lines.join('\n') }
     }
     throw e

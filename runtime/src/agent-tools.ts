@@ -839,28 +839,28 @@ export function resolveRunReportSurface(
   try {
     const pkg = loadPackage(ws.versionDir(rec.package.name, rec.package.version))
     packageSurface = pkg.scenarios.find((s) => s.id === rec.scenarioId)?.reportSurface
-    if (packageSurface === undefined) {
-      notes.push(`场景 ${rec.scenarioId} 未随包声明 reportSurface`)
-    }
   } catch (e) {
+    // 加载异常（非「未提供」）单独留痕；缺席/非法由 resolveReportSurface 统一生成，避免双层重复
     notes.push(
       `包 ${rec.package.name}@${rec.package.version} 不可读（${e instanceof Error ? e.message : String(e)}），随包 reportSurface 不可用`,
     )
+    packageSurface = undefined
   }
+  // 仅当随包不可用（缺席/非法/加载失败）才查工作区沉淀页——随包命中时不再误报「工作区无沉淀页」
+  const packageOk = packageSurface !== undefined && validateReportSurface(packageSurface).ok
   let workspaceSurface: unknown
-  try {
-    const page = findReportPageForScenario(ws.root, {
-      packageName: rec.package.name,
-      packageVersion: rec.package.version,
-      scenarioId: rec.scenarioId,
-      ...(opts.accessBinding !== undefined ? { accessBinding: opts.accessBinding } : {}),
-    })
-    workspaceSurface = page?.surface
-    if (workspaceSurface === undefined) {
-      notes.push('工作区无该场景的沉淀报表页')
+  if (!packageOk) {
+    try {
+      const page = findReportPageForScenario(ws.root, {
+        packageName: rec.package.name,
+        packageVersion: rec.package.version,
+        scenarioId: rec.scenarioId,
+        ...(opts.accessBinding !== undefined ? { accessBinding: opts.accessBinding } : {}),
+      })
+      workspaceSurface = page?.surface
+    } catch (e) {
+      notes.push(`工作区报表页不可读（${e instanceof Error ? e.message : String(e)}）`)
     }
-  } catch (e) {
-    notes.push(`工作区报表页不可读（${e instanceof Error ? e.message : String(e)}）`)
   }
   const resolved = resolveReportSurface({
     ...(packageSurface !== undefined ? { packageSurface } : {}),
@@ -1262,6 +1262,11 @@ export function applyProjectFeatures(
   dataset: RuntimeDataset,
   recipes: FeatureRecipe[],
 ): ProjectFeaturesResult {
+  // 走查 candidates 前先验形状（wire 探索通道不经 loadDatasetFromArgs）：缺数组即拒，
+  // 不让 core projectFeatures 对 undefined 裸抛 TypeError。
+  if (!Array.isArray(dataset.candidates)) {
+    throw new AgentToolError('INVALID_ARGS', 'dataset 需要 candidates 数组（可为空 []）')
+  }
   const nowIso = new Date().toISOString()
   const ready = recipes.map((r) =>
     r.kind === 'since' && (r.now === undefined || r.now === null) ? { ...r, now: nowIso } : r,
@@ -3387,6 +3392,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
           }
           // 收权口径同 wire browseObjects：strict 身份面 + 对象收权清单（deny-by-default）
+          // M1-C 六元组：取数逐对象 read + 候选外关系/行为 related-read（与 run_scenario 同口径）——
+          // 非 strict 但已配 identityProvider 时同样强制，堵住经 browse 绕过 businessPolicy 探测对象
+          gateDatasetAccess(pkg, dataset, hasSource ? 'formal' : 'explore')
           if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, readToolContracts(ws.versionDir(args.name, args.version)))
           const page = browseDatasetPage(dataset, {

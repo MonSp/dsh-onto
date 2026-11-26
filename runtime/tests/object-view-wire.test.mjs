@@ -133,6 +133,13 @@ test('projectFeatures（缺口2）：页面投影调试与工具面同源（data
       () => f.service.remoteExportProjectFeatures({ ...ARGS, dataset, recipes: [{ name: 'x', kind: 'since' }] }),
       'INVALID_ARGS',
     )
+    // 缺 candidates 数组 → 受控 INVALID_ARGS（不让 core projectFeatures 裸抛 TypeError）
+    await expectOrigCode(
+      () => f.service.remoteExportProjectFeatures({
+        ...ARGS, dataset: { objects: DATASET.objects, relations: DATASET.relations },
+      }),
+      'INVALID_ARGS',
+    )
   } finally {
     f.dispose()
   }
