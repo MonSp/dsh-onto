@@ -34,7 +34,9 @@ import {
   expandEntity,
   experienceFromRun,
   exportRunArchive,
+  findReportPageForScenario,
   isInsideDir,
+  isSafeRunId,
   isValidId,
   isSafeRelPath,
   listExperienceNotes,
@@ -47,6 +49,7 @@ import {
   loadRunRedlines,
   MAX_EXPAND_HOPS,
   projectFeatures,
+  resolveReportSurface,
   retrieveSimilar,
   reviewExperienceNote,
   runReplay,
@@ -72,6 +75,7 @@ import {
   type RunDiff,
   type RunRecord,
   type RunReport,
+  type ReportSurfaceSource,
   type RuntimeDataset,
   type ScenarioRunResult,
   type SkeletonRecord,
@@ -137,7 +141,7 @@ import { ReleaseError, buildReleaseBundle, buildReleaseManifest } from './releas
 import {
   actChecks,
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, businessPolicy, parseTargetRef,
-  requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery, type ExistenceChecks,
+  requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery, type BusinessIdentity, type ExistenceChecks,
 } from './business-policy.js'
 import { resolveDataDir } from './onto-runtime-service.js'
 import { dataSources } from './data-sources.js'
@@ -145,6 +149,7 @@ import { createMappedDataConnector } from './data-source-map.js'
 import { loadSourceConfigs, parseControlledBaseUrl, parseSourceKind, parseTokenEnvName, resolveTokenEnv, upsertSourceConfig } from './source-config.js'
 import { compareVersions } from './agent-skills-compare.js'
 import {
+  bridgeExperienceFromDecision,
   persistReviewDecision,
   requireReviewerHostId,
   validateReviewDecision,
@@ -815,15 +820,60 @@ export interface RunReportToolValue {
     pendingVerification: boolean
   }>
   surface: A2uiSurfaceMessage
-  surfaceSource: 'model' | 'default'
+  surfaceSource: ReportSurfaceSource
   humanReviewRequired: true
+}
+
+/**
+ * 运行报表 surface 同源回退链（issue #33 缺口5）：随包 O3 reportSurface → 工作区沉淀
+ * ReportPage → 默认模板——工具面 show_run_report 与 wire getRunReport 共用本函数，
+ * 双入口对同一 run 的默认报表形制一致。strict 隔离经 accessBinding 同 RunRecord 口径。
+ */
+export function resolveRunReportSurface(
+  ws: PackageWorkspace,
+  rec: RunRecord,
+  opts: { accessBinding?: string } = {},
+): { surface: A2uiSurfaceMessage; source: ReportSurfaceSource; fallbackNotes: string[] } {
+  let packageSurface: unknown
+  const notes: string[] = []
+  try {
+    const pkg = loadPackage(ws.versionDir(rec.package.name, rec.package.version))
+    packageSurface = pkg.scenarios.find((s) => s.id === rec.scenarioId)?.reportSurface
+    if (packageSurface === undefined) {
+      notes.push(`场景 ${rec.scenarioId} 未随包声明 reportSurface`)
+    }
+  } catch (e) {
+    notes.push(
+      `包 ${rec.package.name}@${rec.package.version} 不可读（${e instanceof Error ? e.message : String(e)}），随包 reportSurface 不可用`,
+    )
+  }
+  let workspaceSurface: unknown
+  try {
+    const page = findReportPageForScenario(ws.root, {
+      packageName: rec.package.name,
+      packageVersion: rec.package.version,
+      scenarioId: rec.scenarioId,
+      ...(opts.accessBinding !== undefined ? { accessBinding: opts.accessBinding } : {}),
+    })
+    workspaceSurface = page?.surface
+    if (workspaceSurface === undefined) {
+      notes.push('工作区无该场景的沉淀报表页')
+    }
+  } catch (e) {
+    notes.push(`工作区报表页不可读（${e instanceof Error ? e.message : String(e)}）`)
+  }
+  const resolved = resolveReportSurface({
+    ...(packageSurface !== undefined ? { packageSurface } : {}),
+    ...(workspaceSurface !== undefined ? { workspaceSurface } : {}),
+  })
+  return { surface: resolved.surface, source: resolved.source, fallbackNotes: [...notes, ...resolved.fallbackNotes] }
 }
 
 /** RunReport + surface → 模型面精简值（无证据/叙述自由文本）。 */
 export function leanRunReport(
   report: RunReport,
   surface: A2uiSurfaceMessage,
-  surfaceSource: 'model' | 'default',
+  surfaceSource: ReportSurfaceSource,
 ): RunReportToolValue {
   return {
     runRef: { ...report.runRef, package: { ...report.runRef.package } },
@@ -956,6 +1006,29 @@ export function resolveBatchIds(scenarioIds: unknown, pkg: OntologyPackage): str
     throw new AgentToolError('INVALID_ARGS', 'scenarioIds 需要非空字符串条目')
   }
   return [...new Set(scenarioIds as string[])]
+}
+
+/**
+ * 补数关联原 run 校验（issue #33 缺口1）：runId 语法 + RunRecord 台账存在；strict 隔离面
+ * 须同身份可见（assertBusinessRun，防借 refillsRunId 探测他人 run）。无关联返回 undefined。
+ */
+export function validateRefillsRunId(
+  root: string,
+  refillsRunId: unknown,
+  opts: { identity?: BusinessIdentity } = {},
+): string | undefined {
+  if (refillsRunId === undefined || refillsRunId === null) return undefined
+  if (!isSafeRunId(refillsRunId)) {
+    throw new AgentToolError('INVALID_ARGS', 'refillsRunId 不是合法 runId')
+  }
+  let rec: RunRecord
+  try {
+    rec = loadRunRecord(root, refillsRunId)
+  } catch {
+    throw new AgentToolError('INVALID_ARGS', `refillsRunId 指向的运行不存在: ${String(refillsRunId)}`)
+  }
+  if (opts.identity !== undefined) assertBusinessRun(opts.identity, rec)
+  return refillsRunId
 }
 
 /**
@@ -1138,7 +1211,7 @@ export interface ProjectFeaturesResult {
 }
 
 /** recipes 结构校验（A-4：配方是数据不是代码——kind/source 白名单，缺字段即拒）。 */
-function validateRecipes(raw: unknown): FeatureRecipe[] {
+export function validateRecipes(raw: unknown): FeatureRecipe[] {
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) {
     throw new AgentToolError('INVALID_ARGS', 'recipes 须为数组')
@@ -1180,28 +1253,19 @@ function validateRecipes(raw: unknown): FeatureRecipe[] {
 }
 
 /**
- * `project_features` 执行体（导出供 attack-surface 表直测 A-1/A-2/A-4）：
- * 参数校验 → 加载（派生门禁）→ 收权（A-1）→ projectFeatures → deriveFeatures。
- * since 配方缺 now 时在工具边界注入当前时刻（A-7 只约束 core 纯函数不得 new Date()）。
+ * 投影 + 派生共用执行面（工具面 project_features 与 wire projectFeatures 同源）：
+ * since 缺 now 在边界注入当前时刻（A-7 只约束 core 纯函数不得 new Date()）；
+ * 事实优先（可信取数 T1.1）：对象 attrs/配方派生值覆盖调用方预置特征，冲突留痕。
  */
-export function executeProjectFeatures(
-  args: ProjectFeaturesArgs,
-  deps: { ws: PackageWorkspace },
+export function applyProjectFeatures(
+  pkg: OntologyPackage,
+  dataset: RuntimeDataset,
+  recipes: FeatureRecipe[],
 ): ProjectFeaturesResult {
-  if (typeof args.name !== 'string' || args.name === '' || typeof args.version !== 'string' || args.version === '') {
-    throw new AgentToolError('INVALID_ARGS', 'name/version 必须为非空字符串')
-  }
-  const recipes = validateRecipes(args.recipes)
-  const dataset = loadDatasetFromArgs(args)
-  const pkg = loadToolPackage(deps.ws, args.name, args.version)
-  const contracts = readToolContracts(deps.ws.versionDir(args.name, args.version))
-  assertDatasetGranted(dataset, contracts)
-  // 工具边界注入 now（工具面允许当前时刻；core 侧仍由配方携带，保持纯函数）。
   const nowIso = new Date().toISOString()
   const ready = recipes.map((r) =>
     r.kind === 'since' && (r.now === undefined || r.now === null) ? { ...r, now: nowIso } : r,
   )
-  // 事实优先（可信取数 T1.1）：对象 attrs/配方派生值覆盖调用方预置特征，冲突留痕。
   const proj = projectFeatures(pkg, dataset, dataset.candidates)
   const der = deriveFeatures(proj.candidates, dataset, ready)
   const overrides = [...proj.overrides, ...der.overrides]
@@ -1220,7 +1284,114 @@ export function executeProjectFeatures(
 }
 
 /**
- * `expand_entity` 渲染（A-5 摘要级）：统计行 + 种子/对象 ID 清单（截断 50）。
+ * `project_features` 执行体（导出供 attack-surface 表直测 A-1/A-2/A-4）：
+ * 参数校验 → 加载（派生门禁）→ 收权（A-1）→ projectFeatures → deriveFeatures。
+ * since 配方缺 now 时在工具边界注入当前时刻（A-7 只约束 core 纯函数不得 new Date()）。
+ */
+export function executeProjectFeatures(
+  args: ProjectFeaturesArgs,
+  deps: { ws: PackageWorkspace },
+): ProjectFeaturesResult {
+  if (typeof args.name !== 'string' || args.name === '' || typeof args.version !== 'string' || args.version === '') {
+    throw new AgentToolError('INVALID_ARGS', 'name/version 必须为非空字符串')
+  }
+  const recipes = validateRecipes(args.recipes)
+  const dataset = loadDatasetFromArgs(args)
+  const pkg = loadToolPackage(deps.ws, args.name, args.version)
+  const contracts = readToolContracts(deps.ws.versionDir(args.name, args.version))
+  assertDatasetGranted(dataset, contracts)
+  return applyProjectFeatures(pkg, dataset, recipes)
+}
+
+/* ─────────── 实体分页浏览（issue #33 缺口2：Agent 面 browse_objects） ─────────── */
+
+export interface BrowseObjectsArgs {
+  name: string
+  version: string
+  datasetPath?: string
+  dataset?: unknown
+  /** 正式取数通道（M1-B）：与 dataset/datasetPath 互斥。 */
+  sourceId?: string
+  query?: unknown
+  typeFilter?: unknown
+  offset?: unknown
+  limit?: unknown
+}
+
+export interface BrowseObjectsResult {
+  /** 摘要级条目（A-5：零 attrs 正文——页面 wire 才带 attrs 人审面）。 */
+  objects: Array<{ id: string; type: string }>
+  types: Array<{ type: string; count: number }>
+  total: number
+  offset: number
+  limit: number
+}
+
+/** browse 分页上限（wire browseObjects 同口径）。 */
+export const BROWSE_LIMIT_MAX = 200
+
+/**
+ * 纯分页浏览（wire browseObjects 同口径）：类型计数（全集）+ typeFilter 过滤 + offset/limit 分页。
+ * 入参轻校验：offset/limit 须为有限数（clamp 到 0..200），typeFilter 须为字符串。
+ */
+export function browseDatasetPage(
+  dataset: RuntimeDataset,
+  opts: { typeFilter?: unknown; offset?: unknown; limit?: unknown },
+): { objects: RuntimeDataset['objects']; types: Array<{ type: string; count: number }>; total: number; offset: number; limit: number } {
+  const { typeFilter, offset, limit } = opts
+  if (typeFilter !== undefined && typeFilter !== null && typeof typeFilter !== 'string') {
+    throw new AgentToolError('INVALID_ARGS', 'typeFilter 须为字符串')
+  }
+  if (offset !== undefined && offset !== null && (typeof offset !== 'number' || !Number.isFinite(offset))) {
+    throw new AgentToolError('INVALID_ARGS', 'offset 须为有限数')
+  }
+  if (limit !== undefined && limit !== null && (typeof limit !== 'number' || !Number.isFinite(limit))) {
+    throw new AgentToolError('INVALID_ARGS', 'limit 须为有限数')
+  }
+  const counts = new Map<string, number>()
+  for (const o of dataset.objects) {
+    counts.set(o.type, (counts.get(o.type) ?? 0) + 1)
+  }
+  const filter = typeof typeFilter === 'string' ? typeFilter : ''
+  const filtered = filter !== '' ? dataset.objects.filter((o) => o.type === filter) : dataset.objects
+  const off = Math.max(0, Math.floor((offset as number) ?? 0))
+  const lim = Math.min(BROWSE_LIMIT_MAX, Math.max(1, Math.floor((limit as number) ?? 50)))
+  return {
+    objects: filtered.slice(off, off + lim),
+    types: [...counts.entries()].map(([type, count]) => ({ type, count })),
+    total: filtered.length,
+    offset: off,
+    limit: lim,
+  }
+}
+
+/**
+ * `browse_objects` 渲染（A-5 摘要级）：统计行 + 分页对象 ID 清单（截断 50）。
+ * 零 attrs 正文；ID 面撞红线 fail-loud，整段兜底同 renderExpandText。
+ */
+export function renderBrowseText(v: BrowseObjectsResult, phrases: readonly string[] = []): string {
+  const list = phrases.filter((p) => p !== '')
+  const idFace = (key: string, s: string): string => {
+    if (list.some((p) => s.includes(p))) {
+      throw new AgentToolError('INVALID_TOOL_OUTPUT', `输出契约失败: 禁语短语与 ID 回指字段冲突（${key}）`)
+    }
+    return s
+  }
+  const lines: string[] = []
+  lines.push(
+    `实体浏览 共 ${v.total} · 本页 ${v.objects.length}（offset=${v.offset} limit=${v.limit}）`
+      + ` · 类型 ${v.types.map((x) => `${x.type}(${x.count})`).join(', ') || '—'}`,
+  )
+  const shown = v.objects.slice(0, 50)
+  lines.push(
+    `对象: ${shown.map((o) => idFace('id', `${o.type}:${o.id}`)).join(', ')}`
+      + (v.objects.length > 50 ? ` …（本页共 ${v.objects.length} 个）` : ''),
+  )
+  lines.push('浏览是数据准备，不打分；补数后重算用 run_scenario（可带 refillsRunId 关联原 run）')
+  return retreatRenderText(lines.join('\n'), list)
+}
+
+/** `expand_entity` 渲染（A-5 摘要级）：统计行 + 种子/对象 ID 清单（截断 50）。
  * 零 attrs 正文、零绝对路径；ID 面撞红线 fail-loud，跨段拼接经 retreatRenderText 整段兜底。
  */
 export function renderExpandText(v: ExpandResult, phrases: readonly string[] = []): string {
@@ -2325,7 +2496,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         + 'Stat 可带 spark；Timeline 绑 ruleHitLog 等列表 + 行字段映射；任意节点可带 when（bind/field 条件显隐）；'
         + 'Accordion bind 指向 /candidates/<i>/evidenceChains 等列表；Button action="navigate" target="result-page"；'
         + 'Input/Select 为本地交互件（不扩事件面））。'
-        + '省略 surface 用默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。'
+        + '省略 surface 走同源回退链：随包场景 reportSurface → 工作区沉淀报表页 → 默认模板'
+        + '（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表），surfaceSource 标注实际来源。'
         + '数值/规则命中/证据来自受权运行结果，模型只定布局不定数据；'
         + '展开详情经权限校验取数。组件事件只做筛选/展开/跳转。',
       parameters: {
@@ -2338,7 +2510,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           type: 'json',
           description:
             'A2UI 1.0 子集 surface：{version:"1.0",type:"createSurface",surfaceId,catalogId:"dsh-onto/report/v1",root:{id,type,props,children}}。'
-            + '缺省省略=默认模板（KeyValue 摘要 + Badge + Stat 行 + 风险分布图 + 候选表）。',
+            + '缺省省略=同源回退链（随包 reportSurface → 工作区沉淀报表页 → 默认模板）。',
         },
       },
       output: {
@@ -2370,10 +2542,14 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const report = buildRunReport(record)
           const phrases = [...new Set(record.redlines.filter((p) => p !== ''))]
           let surface: A2uiSurfaceMessage
-          let surfaceSource: 'model' | 'default'
+          let surfaceSource: ReportSurfaceSource
           if (args.surface === undefined || args.surface === null) {
-            surface = buildDefaultReportSurface()
-            surfaceSource = 'default'
+            // 缺省 surface 同源回退链（issue #33 缺口5）：随包 reportSurface → 工作区沉淀页 → 默认模板
+            const resolved = resolveRunReportSurface(ws, record, {
+              ...(strict ? { accessBinding: runAccessBinding(requireBusinessIdentity('history')) } : {}),
+            })
+            surface = resolved.surface
+            surfaceSource = resolved.source
           } else {
             const validation = validateReportSurface(args.surface)
             if (!validation.ok) {
@@ -2839,6 +3015,12 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             + 'dataStatus=insufficient 不可处置，待补数）；explore=探索分析（条件性分数，逐候选降级）。'
             + 'formal 仅是计算策略——模拟来源即使通过也不能调用真实业务动作',
         },
+        refillsRunId: {
+          type: 'string',
+          description: '补数关联原运行 ID（issue #33 缺口1）：本次系对原运行 pendingChecks 缺数补数后的重算时传入'
+            + '（pendingChecks[].refill.seedIds 可作 seedIds 预填）——新 run 与原 run 在台账层关联，'
+            + '可用 compare_runs/show_run_diff 对照补数前后变化；须为真实 RunRecord，不存在即拒',
+        },
       },
       output: {
         schema: {
@@ -2857,7 +3039,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           },
         },
         render: (args, value) => {
-          const a = args as { name?: string; version?: string; analysisMode?: string }
+          const a = args as { name?: string; version?: string; analysisMode?: string; refillsRunId?: string }
           const result = value as unknown as ScenarioRunResult
           const text = renderRunText(result, undefined, {
             ...(typeof a.name === 'string' && typeof a.version === 'string'
@@ -2866,7 +3048,11 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             ...(typeof a.analysisMode === 'string' ? { analysisMode: a.analysisMode } : {}),
           })
           // chat-run-report：运行→打开报表动线（提示行同样过渲染闸）
-          const hint = `\n查看交互报表：show_run_report(runId=${result.runId})`
+          let hint = `\n查看交互报表：show_run_report(runId=${result.runId})`
+          // 缺口1：补数关联原 run → 两轮对照动线（refillsRunId 已过台账校验）
+          if (typeof a.refillsRunId === 'string' && a.refillsRunId !== '') {
+            hint += `\n补数关联原运行 ${a.refillsRunId}：compare_runs(runIdA=${a.refillsRunId}, runIdB=${result.runId})`
+          }
           return textBlock(retreatRenderText(text + hint, recallPhrases(result.runId) ?? []))
         },
       },
@@ -2882,6 +3068,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             sourceId?: string
             query?: unknown
             analysisMode?: string
+            refillsRunId?: string
           },
         ) => {
           // 入口策略（M1-B，Agent/wire/CLI 同一语义）：三通道互斥——
@@ -2897,6 +3084,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           }
           const analysisMode = args.analysisMode === 'formal' ? 'formal' : 'explore'
           const identity = strict ? requireBusinessIdentity('read') : undefined
+          // 缺口1：补数关联原 run 先于运行校验（不存在/越权 fail-loud，不静默丢关联）
+          const refillsRunId = validateRefillsRunId(ws.root, args.refillsRunId, identity ? { identity } : {})
           assertReleaseActive(releases, args.name, args.version)
           const pkg = load(args.name, args.version)
           let dataset: RuntimeDataset
@@ -2958,6 +3147,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             result,
             redlines: phrases,
             accessBinding: identity && runAccessBinding(identity),
+            ...(refillsRunId !== undefined ? { refillsRunId } : {}),
           })
           saveRunRecord(ws.root, rec)
           // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
@@ -3108,6 +3298,110 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           assertBatchContract(out)
           // 出口遮蔽基准：包内全部场景红线（覆盖假场景 ID 回显撞红线形态）。
           return toolOut(enforceOutputPolicy(out, phrasesOfPkg(pkg)))
+        },
+        [],
+        (args) => redlines(args),
+      ),
+    }))
+
+  reg('run', () => defineTool({
+      name: 'browse_objects',
+      description:
+        '实体实例分页浏览（只读数据准备，不打分；打分用 run_scenario）。按类型过滤 + offset/limit 分页'
+        + '（limit ≤200 默认 50），返回类型计数与本页对象 ID/类型摘要（零 attrs 明细——详情经 expand_entity'
+        + ' 扩图或 run_scenario 取数）。数据输入二选一：sourceId（正式取数，服务端连接器）'
+        + '或 dataset/datasetPath（探索通道）。pendingChecks[].refill 的 sourceTypes/seedIds 可作'
+        + ' typeFilter/查询回指（补数回查询）。',
+      parameters: {
+        name: { type: 'string', required: true, description: '包名（收权清单按包核对）' },
+        version: { type: 'string', required: true, description: '版本号' },
+        datasetPath: {
+          type: 'string',
+          description: 'RuntimeDataset JSON 文件路径（探索通道；仅限平台进程工作目录内，围栏防穿越）',
+        },
+        dataset: { type: 'json', description: '内联 RuntimeDataset（探索通道）' },
+        sourceId: {
+          type: 'string',
+          description: '正式取数通道（M1-B）：服务端登记数据源 id；与 dataset/datasetPath 互斥',
+        },
+        query: {
+          type: 'json',
+          description: '正式取数查询条件（objectTypes/timeWindow/instanceIds）；sourceId 通道的查询面',
+        },
+        typeFilter: { type: 'string', description: '按对象类型过滤（缺省 = 全部类型）' },
+        offset: { type: 'number', description: '分页偏移（默认 0）' },
+        limit: { type: 'number', description: '分页大小（默认 50，硬上限 200）' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            objects: { type: 'array', required: true },
+            types: { type: 'array', required: true },
+            total: { type: 'number', required: true },
+            offset: { type: 'number', required: true },
+            limit: { type: 'number', required: true },
+          },
+        },
+        render: (args, value) => textBlock(renderBrowseText(value as unknown as BrowseObjectsResult, redlines(args))),
+      },
+      execute: toolExecute(
+        async (args: BrowseObjectsArgs) => {
+          // 入口策略（M1-B，与 run_scenario 同口径）：sourceId 与 dataset/datasetPath 互斥
+          const hasSource = typeof args.sourceId === 'string' && args.sourceId !== ''
+          const hasPath = typeof args.datasetPath === 'string' && args.datasetPath.length > 0
+          const hasInline = args.dataset !== undefined && args.dataset !== null
+          if (hasSource && (hasPath || hasInline)) {
+            throw new AgentToolError('INVALID_ARGS', 'sourceId（正式取数）与 dataset/datasetPath（探索通道）互斥，只能提供一个')
+          }
+          if (!hasSource && !hasPath && !hasInline) {
+            throw new AgentToolError('INVALID_ARGS', '数据输入二选一：sourceId（正式取数）/ datasetPath / dataset')
+          }
+          const identity = strict ? requireBusinessIdentity('read') : undefined
+          assertReleaseActive(releases, args.name, args.version)
+          const pkg = load(args.name, args.version)
+          let dataset: RuntimeDataset
+          if (hasSource) {
+            const query = args.query === undefined || args.query === null ? {} : args.query
+            if (!isRecord(query)) {
+              throw new AgentToolError('INVALID_ARGS', 'query 必须是 JSON 对象（objectTypes/timeWindow/instanceIds）')
+            }
+            const dataQuery = {
+              ...(Array.isArray(query['objectTypes']) ? { objectTypes: query['objectTypes'] as string[] } : {}),
+              ...(isRecord(query['timeWindow'])
+                ? { timeWindow: { from: String(query['timeWindow']['from'] ?? ''), to: String(query['timeWindow']['to'] ?? '') } }
+                : {}),
+              ...(Array.isArray(query['instanceIds']) ? { instanceIds: query['instanceIds'] as string[] } : {}),
+            }
+            const fetched = await dataSources.fetch({
+              sourceId: args.sourceId as string,
+              query: identity ? scopeDataQuery(identity, dataQuery) : dataQuery,
+              tenant: identity?.tenant ?? 'default',
+              dataScope: identity?.dataScope,
+              authorizeDataset: identity ? data => assertBusinessDataset(identity, pkg, data) : undefined,
+              root: ws.root,
+            })
+            dataset = fetched.dataset
+          } else {
+            dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
+          }
+          // 收权口径同 wire browseObjects：strict 身份面 + 对象收权清单（deny-by-default）
+          if (identity) assertBusinessDataset(identity, pkg, dataset)
+          assertDatasetGranted(dataset, readToolContracts(ws.versionDir(args.name, args.version)))
+          const page = browseDatasetPage(dataset, {
+            ...(args.typeFilter !== undefined ? { typeFilter: args.typeFilter } : {}),
+            ...(args.offset !== undefined ? { offset: args.offset } : {}),
+            ...(args.limit !== undefined ? { limit: args.limit } : {}),
+          })
+          const out: BrowseObjectsResult = {
+            objects: page.objects.map((o) => ({ id: o.id, type: o.type })),
+            types: page.types,
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+          }
+          return toolOut(enforceOutputPolicy(out, redlines(args)))
         },
         [],
         (args) => redlines(args),
@@ -4210,6 +4504,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             candidateIds: { type: 'json', required: true },
             reviewer: { type: 'string', required: true },
             humanReviewRequired: { type: 'boolean', required: true, const: true },
+            experience: { type: 'json', required: true },
           },
         },
         render: (_args, value) => {
@@ -4219,11 +4514,20 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             decision: string
             candidateIds: string[]
             reviewer: string
+            experience?: { runId?: string; outcome?: string; created?: boolean; skipped?: string }
           }
+          const exp = v.experience
+          const expLine =
+            exp === undefined
+              ? ''
+              : exp.skipped !== undefined
+                ? `\n经验卡桥接 skipped: ${String(exp.skipped)}（决定已落库，不回滚）`
+                : `\n经验卡已桥接（${exp.created === true ? '新建' : '更新'}，outcome=${String(exp.outcome ?? '')}）`
           return textBlock(
             `业务复核决定 ${v.decisionId} · ${v.decision} · 运行 ${v.runId}\n`
               + `覆盖候选: ${v.candidateIds.join('、')}\n`
-              + `复核人绑定: ${v.reviewer}（经系统批准卡，不收模型自称）\n`
+              + `复核人绑定: ${v.reviewer}（经系统批准卡，不收模型自称）`
+              + expLine + '\n'
               + 'humanReviewRequired=true（复核决定 ≠ 执行批准；动作执行仍须单独过系统批准卡）',
           )
         },
@@ -4271,6 +4575,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           })
           // 复核人 = 宿主用户 id（BusinessIdentity.userId）——不收模型自称、不拿批准摘要冒充
           const dec = persistReviewDecision(ws.root, validated, reviewer)
+          // 反馈闭环②断链 A（与 UI wire recordReviewDecision 同源）：认定落库即桥接经验卡——
+          // 缺卡补建、认定回执进 outcomeReason；桥接失败显式 skipped，不回滚已落决定。
+          const experience = bridgeExperienceFromDecision(ws, validated.runRec, dec)
           return toolOut({
             decisionId: dec.decisionId,
             runId: dec.runId,
@@ -4278,6 +4585,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             candidateIds: dec.candidateIds,
             reviewer: dec.reviewer,
             humanReviewRequired: true,
+            experience,
           })
         },
         [],

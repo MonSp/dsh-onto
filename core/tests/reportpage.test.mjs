@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildDefaultReportSurface,
+  findReportPageForScenario,
   isSafePageId,
   listReportPages,
   loadReportPage,
@@ -167,6 +168,65 @@ test('读盘闸：内嵌 pageId 与文件名不符拒载', () => {
     writeFileSync(file, JSON.stringify(raw), 'utf8')
     assert.throws(() => loadReportPage(root, 'rp-mismatch0001'), (e) => e.code === 'PACKAGE_MALFORMED')
     assert.equal(listReportPages(root).length, 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('findReportPageForScenario（issue #33 缺口5）：同版本优先 + savedAt 倒序 + strict 隔离', () => {
+  const root = mkRoot()
+  try {
+    const mk = (pageId, version, savedAt, accessBinding) => ({
+      pageId,
+      name: pageId,
+      surface: buildDefaultReportSurface({ surfaceId: pageId }),
+      createdFrom: { ...runRef(), package: { name: 'wst-ops', version } },
+      savedAt,
+      ...(accessBinding === undefined ? {} : { accessBinding }),
+    })
+    saveReportPage(root, mk('rp-find0000001', '1.0.0', '2026-11-22T00:02:00.000Z', 'bind-a'))
+    saveReportPage(root, mk('rp-find0000002', '1.0.0', '2026-11-23T00:02:00.000Z', 'bind-a'))
+    saveReportPage(root, mk('rp-find0000003', '1.1.0', '2026-11-24T00:02:00.000Z', 'bind-b'))
+
+    // 同版本 + savedAt 倒序取最新
+    const hit = findReportPageForScenario(root, {
+      packageName: 'wst-ops',
+      packageVersion: '1.0.0',
+      scenarioId: 'SCN-WST-HAZARD-MIX',
+    })
+    assert.equal(hit.pageId, 'rp-find0000002')
+
+    // strict 隔离：只认同指纹页
+    const scoped = findReportPageForScenario(root, {
+      packageName: 'wst-ops',
+      packageVersion: '1.0.0',
+      scenarioId: 'SCN-WST-HAZARD-MIX',
+      accessBinding: 'bind-a',
+    })
+    assert.equal(scoped.pageId, 'rp-find0000002')
+    const scoped2 = findReportPageForScenario(root, {
+      packageName: 'wst-ops',
+      packageVersion: '1.0.0',
+      scenarioId: 'SCN-WST-HAZARD-MIX',
+      accessBinding: 'bind-b',
+    })
+    assert.equal(scoped2.pageId, 'rp-find0000003')
+
+    // 无同版本页 → 跨版本回退；无匹配 → null
+    const cross = findReportPageForScenario(root, {
+      packageName: 'wst-ops',
+      packageVersion: '2.0.0',
+      scenarioId: 'SCN-WST-HAZARD-MIX',
+    })
+    assert.equal(cross.pageId, 'rp-find0000003')
+    assert.equal(
+      findReportPageForScenario(root, {
+        packageName: 'wst-ops',
+        packageVersion: '1.0.0',
+        scenarioId: 'SCN-WST-NOPE',
+      }),
+      null,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -33,12 +33,13 @@ import {
   saveExperienceNote,
   saveRunRecord,
   verifyDerived,
+  type A2uiSurfaceMessage,
   type DataBasisInput,
   type ExpandResult,
   type ExperienceNote,
-  type ExperienceOutcome,
   type OntologyPackage,
   type ReportPage,
+  type ReportSurfaceSource,
   type RunDiff,
   type RunRecord,
   type RunReport,
@@ -70,8 +71,25 @@ import {
   assertBusinessDataset, assertBusinessReportPage, assertBusinessRun, parseTargetRef,
   requireBusinessIdentity, requireBizAuth, runAccessBinding, runPlaneInstances, scopeDataQuery,
 } from './business-policy.js'
-import { persistReviewDecision, requireReviewerHostId, validateReviewDecision } from './review-decision.js'
-import { abstractExperienceInto, readOwnVersion, runReplayAcceptance, validateRunSeedIds } from './agent-tools.js'
+import {
+  bridgeExperienceFromDecision,
+  persistReviewDecision,
+  requireReviewerHostId,
+  validateReviewDecision,
+  type ExperienceBridgeResult,
+} from './review-decision.js'
+import {
+  abstractExperienceInto,
+  applyProjectFeatures,
+  browseDatasetPage,
+  readOwnVersion,
+  resolveRunReportSurface,
+  runReplayAcceptance,
+  validateRecipes,
+  validateRefillsRunId,
+  validateRunSeedIds,
+  type ProjectFeaturesResult,
+} from './agent-tools.js'
 import {
   loadSourceConfigs,
   parseControlledBaseUrl,
@@ -291,6 +309,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     analysisMode?: 'formal' | 'explore'
     /** 种子扩图运行（与 Agent run_scenario 同参）：场景须声明 prep.expand。 */
     seedIds?: string[]
+    /** 补数关联原运行（issue #33 缺口1）：本次系对原运行 pendingChecks 缺数补数后的重算。 */
+    refillsRunId?: string
   }): Promise<{
     result: ScenarioRunResult
     /** 运行回写回执（学习层旁路）：缺卡/写回失败显式 skipped——RunRecord 已保存，交付不回滚。 */
@@ -306,6 +326,12 @@ export class OntoRuntime extends RuntimeRemoteService {
       const analysisMode = request.analysisMode === 'formal' ? 'formal' : 'explore'
       const identity = this.strict ? requireBusinessIdentity('read') : undefined
       const pkg = loadPackage(dir)
+      // 缺口1：补数关联原 run（不存在/越权 fail-loud；strict 下过 assertBusinessRun 防探测）
+      const refillsRunId = validateRefillsRunId(
+        this.ws.root,
+        request.refillsRunId,
+        identity ? { identity } : {},
+      )
       // seedIds 与 Agent 面同口径：错型/空/超限拒；场景须声明 prep.expand
       const seedIds = validateRunSeedIds(request.seedIds)
       if (seedIds !== undefined && pkg.scenarios.find((s) => s.id === request.scenarioId)?.prep?.expand === undefined) {
@@ -353,6 +379,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         result,
         redlines,
         accessBinding: identity && runAccessBinding(identity),
+        ...(refillsRunId !== undefined ? { refillsRunId } : {}),
       })
       saveRunRecord(this.ws.root, rec)
       // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
@@ -504,10 +531,30 @@ export class OntoRuntime extends RuntimeRemoteService {
   /**
    * 运行报表投影（chat-run-report S2.4）：固定结果页与对话报表共用的唯一投影源，
    * 数值一致由构造保证。人审面（完整证据/叙述），鉴权同 showRun。
+   * surface 同源回退链（issue #33 缺口5）：随包 reportSurface → 工作区沉淀页 → 默认模板——
+   * 与对话 show_run_report 同一 resolveRunReportSurface，双入口报表形制一致；
+   * surfaceNotes 显式回退留痕（页面可上墙提示，不静默吞）。
    */
   @Remote('getRunReport')
-  async remoteExportGetRunReport(request: { runId: string }): Promise<{ report: RunReport }> {
-    return guard(() => ({ report: buildRunReport(this.readRun(request.runId)) }))
+  async remoteExportGetRunReport(request: { runId: string }): Promise<{
+    report: RunReport
+    surface: A2uiSurfaceMessage
+    surfaceSource: ReportSurfaceSource
+    surfaceNotes: string[]
+  }> {
+    return guard(() => {
+      const rec = this.readRun(request.runId)
+      const identity = this.strict ? requireBusinessIdentity('history') : undefined
+      const resolved = resolveRunReportSurface(this.ws, rec, {
+        ...(identity ? { accessBinding: runAccessBinding(identity) } : {}),
+      })
+      return {
+        report: buildRunReport(rec),
+        surface: resolved.surface,
+        surfaceSource: resolved.source,
+        surfaceNotes: resolved.fallbackNotes,
+      }
+    })
   }
 
   /** 报表页列表（chat-run-report S2.7；人审面完整 surface，供插件「报表页」渲染）。 */
@@ -603,7 +650,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     createdAt: string
     humanReviewRequired: true
     /** 反馈闭环②衔接回执：经验卡已建/已桥接；桥接失败显式 skipped（不回滚决定）。 */
-    experience: { runId: string; outcome: ExperienceOutcome; created: boolean } | { skipped: string }
+    experience: ExperienceBridgeResult
   }> {
     return guard(() => {
       const reviewer = requireReviewerHostId()
@@ -624,7 +671,8 @@ export class OntoRuntime extends RuntimeRemoteService {
       // 反馈闭环②断链 A：人工认定落 ReviewDecision 的同时桥接经验卡——缺卡按 S5.4.2 补建，
       // 认定回执进 outcomeReason（人审可在经验回填面继续改判 outcome/误迁移）。
       // 学习层不否决人审：桥接失败不回滚已落决定，回执显式 skipped（不静默吞）。
-      const experience = this.bridgeExperienceFromDecision(validated.runRec, dec)
+      // 与工具面 record_review_decision 共用同一桥接 helper（口径同源）。
+      const experience = bridgeExperienceFromDecision(this.ws, validated.runRec, dec)
       return {
         decisionId: dec.decisionId,
         runId: dec.runId,
@@ -636,39 +684,6 @@ export class OntoRuntime extends RuntimeRemoteService {
         experience,
       }
     })
-  }
-
-  /** 认定→经验卡桥接（断链 A）：缺卡补建（S5.4.2 映射），认定回执追加进 outcomeReason。 */
-  private bridgeExperienceFromDecision(
-    rec: RunRecord,
-    dec: ReviewDecision,
-  ): { runId: string; outcome: ExperienceOutcome; created: boolean } | { skipped: string } {
-    try {
-      let note: ExperienceNote | null = null
-      try {
-        note = loadExperienceNote(this.ws.root, rec.runId)
-      } catch (e) {
-        if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') note = null
-        else throw e
-      }
-      const created = note === null
-      if (note === null) {
-        const pkg = loadPackage(this.ws.versionDir(rec.package.name, rec.package.version))
-        note = experienceFromRun(rec, pkg)
-      }
-      const stamp = `复核决定 ${dec.decision}（${dec.decisionId}）${dec.reason !== undefined ? `: ${dec.reason}` : ''}`
-      note.outcomeReason =
-        note.outcomeReason !== undefined && note.outcomeReason !== ''
-          ? `${note.outcomeReason}；${stamp}`
-          : stamp
-      // 补建/桥接同口径：人审认定即定性留痕（reviewedBy=决定复核人，宿主可信身份）
-      note.reviewedBy = dec.reviewer
-      note.savedAt = new Date().toISOString()
-      saveExperienceNote(this.ws.root, note)
-      return { runId: note.runId, outcome: note.outcome, created }
-    } catch (e) {
-      return { skipped: e instanceof Error ? e.message : String(e) }
-    }
   }
 
   private reviewChainOf(runId: string): {
@@ -1056,23 +1071,20 @@ export class OntoRuntime extends RuntimeRemoteService {
     return guard(async () => {
       this.assertActive(request.name, request.version)
       const dataset = await this.resolveBrowseDataset(request)
-      const counts = new Map<string, number>()
-      for (const o of dataset.objects) {
-        counts.set(o.type, (counts.get(o.type) ?? 0) + 1)
-      }
-      const filtered = request.typeFilter !== undefined && request.typeFilter !== ''
-        ? dataset.objects.filter((o) => o.type === request.typeFilter)
-        : dataset.objects
-      const offset = Math.max(0, Math.floor(request.offset ?? 0))
-      const limit = Math.min(200, Math.max(1, Math.floor(request.limit ?? 50)))
+      // 分页与 Agent 面 browse_objects 同一纯函数（口径同源）
+      const page = browseDatasetPage(dataset, {
+        ...(request.typeFilter !== undefined ? { typeFilter: request.typeFilter } : {}),
+        ...(request.offset !== undefined ? { offset: request.offset } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      })
       return {
-        objects: filtered.slice(offset, offset + limit).map((o) => ({
+        objects: page.objects.map((o) => ({
           id: o.id,
           type: o.type,
           ...(o.attrs !== undefined ? { attrs: o.attrs } : {}),
         })),
-        types: [...counts.entries()].map(([type, count]) => ({ type, count })),
-        total: filtered.length,
+        types: page.types,
+        total: page.total,
       }
     })
   }
@@ -1115,6 +1127,29 @@ export class OntoRuntime extends RuntimeRemoteService {
         ...(request.direction !== undefined ? { direction: request.direction } : {}),
         ...(request.relationTypes !== undefined ? { relationTypes: request.relationTypes } : {}),
       })
+    })
+  }
+
+  /**
+   * 特征投影调试（issue #33 缺口2）：页面投影调试入口——包 featureSources 投影 + recipes 派生，
+   * 与 Agent 工具 project_features 同一 applyProjectFeatures（双入口同源）。
+   * 取数/收权口径同 browseObjects（探索/正式双通道 + strict 身份面）。
+   */
+  @Remote('projectFeatures')
+  async remoteExportProjectFeatures(request: {
+    name: string
+    version: string
+    dataset?: RuntimeDataset
+    sourceId?: string
+    query?: { objectTypes?: string[]; timeWindow?: { from: string; to: string }; instanceIds?: string[] }
+    recipes?: unknown
+  }): Promise<ProjectFeaturesResult> {
+    return guard(async () => {
+      this.assertActive(request.name, request.version)
+      const dataset = await this.resolveBrowseDataset(request)
+      const pkg = loadPackage(this.ws.versionDir(request.name, request.version))
+      const recipes = validateRecipes(request.recipes)
+      return applyProjectFeatures(pkg, dataset, recipes)
     })
   }
 

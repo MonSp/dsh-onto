@@ -73,6 +73,26 @@ test('buildRunRecord：摘要/去重红线/掩蔽前完整结果', () => {
   assert.equal(rec.result.audit.forbiddenPhraseHits[0].phrase, '认定违规')
 })
 
+test('缺口1：refillsRunId 随 RunRecord 落盘/回读；无关联不落键', () => {
+  const ws = mkWorkspace()
+  try {
+    const base = {
+      package: { name: 'test-pkg', version: '1.0.0' },
+      dataset: fakeDataset(),
+      result: fakeResult({ runId: 'run-refill0001' }),
+      redlines: [],
+    }
+    const linked = buildRunRecord({ ...base, refillsRunId: 'run-abc12345' })
+    saveRunRecord(ws.root, linked)
+    const back = loadRunRecord(ws.root, 'run-refill0001')
+    assert.equal(back.refillsRunId, 'run-abc12345')
+    const plain = buildRunRecord(base)
+    assert.equal('refillsRunId' in plain, false, '无关联不落键（旧记录零回归）')
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
 test('datasetDigest：键序无关，同数据同指纹；不同数据不同指纹', () => {
   const a = { objects: [{ id: 'o1', type: 'T', attrs: { x: 1, y: 2 } }], relations: [], candidates: [] }
   const b = { relations: [], candidates: [], objects: [{ attrs: { y: 2, x: 1 }, type: 'T', id: 'o1' }] }

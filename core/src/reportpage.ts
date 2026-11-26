@@ -152,3 +152,24 @@ export function listReportPages(root: string): ReportPage[] {
   out.sort((a, b) => (a.savedAt < b.savedAt ? 1 : a.savedAt > b.savedAt ? -1 : a.pageId < b.pageId ? 1 : -1))
   return out
 }
+
+/**
+ * 按场景定位工作区沉淀报表页（issue #33 缺口5 回退链第 3 级）：
+ * 同包 + 同场景匹配；同版本优先，无同版本页再回退同包跨版本；savedAt 倒序取最新。
+ * strict 隔离：给出 accessBinding 时只认同指纹页（旧页无绑定在隔离面不可见，RunRecord 同口径）。
+ */
+export function findReportPageForScenario(
+  root: string,
+  opts: { packageName: string; packageVersion?: string; scenarioId: string; accessBinding?: string },
+): ReportPage | null {
+  const match = listReportPages(root).filter(
+    (p) =>
+      p.createdFrom.package.name === opts.packageName &&
+      p.createdFrom.scenarioId === opts.scenarioId &&
+      (opts.accessBinding === undefined || p.accessBinding === opts.accessBinding),
+  )
+  const sameVersion = match.filter(
+    (p) => opts.packageVersion === undefined || p.createdFrom.package.version === opts.packageVersion,
+  )
+  return sameVersion[0] ?? match[0] ?? null
+}

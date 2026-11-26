@@ -103,6 +103,41 @@ test('browseObjects：类型计数 + 过滤 + 分页（dataset 通道）', async
   }
 })
 
+test('projectFeatures（缺口2）：页面投影调试与工具面同源（dataset 通道）', async () => {
+  const f = fixture()
+  try {
+    const dataset = {
+      ...DATASET,
+      candidates: [{ candidateId: 'C1', objectRef: 'ACCT-001', features: { pre: 1 }, tags: [] }],
+    }
+    const out = await f.service.remoteExportProjectFeatures({ ...ARGS, dataset })
+    assert.ok(Array.isArray(out.projected))
+    assert.ok(Array.isArray(out.overrides))
+    assert.ok(Array.isArray(out.derived))
+    assert.equal(typeof out.stats.projectedWrites, 'number')
+    // recipes 派生计数（count 配方）
+    const withRecipes = await f.service.remoteExportProjectFeatures({
+      ...ARGS,
+      dataset,
+      recipes: [{ name: 'relCount', kind: 'count', source: 'relations' }],
+    })
+    assert.equal(withRecipes.stats.derivedRecipes, 1)
+    // 通道互斥与 browseObjects 同口径
+    await expectOrigCode(() => f.service.remoteExportProjectFeatures({ ...ARGS }), 'INVALID_ARGS')
+    await expectOrigCode(
+      () => f.service.remoteExportProjectFeatures({ ...ARGS, dataset, sourceId: 'SRC-X' }),
+      'INVALID_ARGS',
+    )
+    // 坏 recipes 拒（同工具面白名单）
+    await expectOrigCode(
+      () => f.service.remoteExportProjectFeatures({ ...ARGS, dataset, recipes: [{ name: 'x', kind: 'since' }] }),
+      'INVALID_ARGS',
+    )
+  } finally {
+    f.dispose()
+  }
+})
+
 test('browseObjects / expandEntity：sourceId 与 dataset 互斥（同 runScenario 口径）', async () => {
   const f = fixture()
   try {

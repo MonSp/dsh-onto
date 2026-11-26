@@ -25,6 +25,8 @@ export interface RunRef {
   scenarioId: string
   startedAt: string
   savedAt: string
+  /** 补数关联原 run（issue #33 缺口1）；无关联缺省。 */
+  refillsRunId?: string
 }
 
 export interface ReportSummary {
@@ -82,6 +84,7 @@ export const REPORT_FIELD_REFS = [
   'runRef.scenarioId',
   'runRef.startedAt',
   'runRef.savedAt',
+  'runRef.refillsRunId',
   'summary.candidateCount',
   'summary.excludedCount',
   'summary.maxRiskScore',
@@ -145,6 +148,7 @@ export const REPORT_LIST_REFS = [
   'candidates[].narrative',
   'candidates[].hitRuleIds',
   'candidates[].pendingChecks[].missing',
+  'candidates[].pendingChecks[].refill',
   'ruleHitLog',
 ] as const
 
@@ -169,6 +173,16 @@ export function buildRunReport(record: RunRecord): RunReport {
       ...(p.ruleId === undefined ? {} : { ruleId: p.ruleId }),
       ...(p.missing === undefined ? {} : { missing: [...p.missing] }),
       note: p.note,
+      ...(p.refill === undefined
+        ? {}
+        : {
+            refill: {
+              missingFeatures: [...p.refill.missingFeatures],
+              sourceTypes: [...p.refill.sourceTypes],
+              seedIds: [...p.refill.seedIds],
+              suggestedAction: p.refill.suggestedAction,
+            },
+          }),
     })),
     pendingVerification: c.pendingVerification,
   }))
@@ -182,6 +196,7 @@ export function buildRunReport(record: RunRecord): RunReport {
       scenarioId: result.scenarioId,
       startedAt: result.startedAt,
       savedAt: record.savedAt,
+      ...(record.refillsRunId === undefined ? {} : { refillsRunId: record.refillsRunId }),
     },
     summary: {
       candidateCount: candidates.length,

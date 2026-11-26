@@ -12,7 +12,8 @@
     ".": "./dist/index.js",
     "./agent-tools": "./dist/agent-tools.js",
     "./agent-skills": "./dist/agent-skills.js",
-    "./agent-experts": "./dist/agent-experts.js"
+    "./agent-experts": "./dist/agent-experts.js",
+    "./release-cli": "./dist/release-cli.js"
   },
   "files": ["dist"],
   "dependencies": {

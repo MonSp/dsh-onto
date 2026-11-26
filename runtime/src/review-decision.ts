@@ -13,8 +13,15 @@
  * 无身份不得靠 REVIEW_* 错误码探测 run 存在性/摘要。
  * @module @dsh-onto/runtime/review-decision
  */
-import type { RunRecord } from '@dsh-onto/core'
-import { loadRunRecord } from '@dsh-onto/core'
+import type { ExperienceNote, ExperienceOutcome, PackageWorkspace, RunRecord } from '@dsh-onto/core'
+import {
+  PackageStoreError,
+  experienceFromRun,
+  loadExperienceNote,
+  loadPackage,
+  loadRunRecord,
+  saveExperienceNote,
+} from '@dsh-onto/core'
 import { actionDigest } from './agent-approval.js'
 import { AgentToolError } from './agent-policy.js'
 import { businessPolicy } from './business-policy.js'
@@ -168,4 +175,48 @@ export function persistReviewDecision(
     decision: validated.decision,
     ...(validated.reason !== undefined ? { reason: validated.reason } : {}),
   })
+}
+
+/** 认定→经验卡桥接回执（反馈闭环②断链 A）：成功或显式 skipped（不回滚决定）。 */
+export type ExperienceBridgeResult =
+  | { runId: string; outcome: ExperienceOutcome; created: boolean }
+  | { skipped: string }
+
+/**
+ * 认定→经验卡桥接（断链 A）：缺卡补建（S5.4.2 映射），认定回执追加进 outcomeReason。
+ * 工具面 record_review_decision 与 UI wire recordReviewDecision 共用同一口径——
+ * 任一路径落决定都补建/更新经验卡，回填面看到认定摘要而非仅运行初稿。
+ * 学习层不否决人审：桥接失败不回滚已落决定，回执显式 skipped（不静默吞）。
+ */
+export function bridgeExperienceFromDecision(
+  ws: PackageWorkspace,
+  rec: RunRecord,
+  dec: ReviewDecision,
+): ExperienceBridgeResult {
+  try {
+    let note: ExperienceNote | null = null
+    try {
+      note = loadExperienceNote(ws.root, rec.runId)
+    } catch (e) {
+      if (e instanceof PackageStoreError && e.code === 'NOT_FOUND') note = null
+      else throw e
+    }
+    const created = note === null
+    if (note === null) {
+      const pkg = loadPackage(ws.versionDir(rec.package.name, rec.package.version))
+      note = experienceFromRun(rec, pkg)
+    }
+    const stamp = `复核决定 ${dec.decision}（${dec.decisionId}）${dec.reason !== undefined ? `: ${dec.reason}` : ''}`
+    note.outcomeReason =
+      note.outcomeReason !== undefined && note.outcomeReason !== ''
+        ? `${note.outcomeReason}；${stamp}`
+        : stamp
+    // 补建/桥接同口径：人审认定即定性留痕（reviewedBy=决定复核人，宿主可信身份）
+    note.reviewedBy = dec.reviewer
+    note.savedAt = new Date().toISOString()
+    saveExperienceNote(ws.root, note)
+    return { runId: note.runId, outcome: note.outcome, created }
+  } catch (e) {
+    return { skipped: e instanceof Error ? e.message : String(e) }
+  }
 }

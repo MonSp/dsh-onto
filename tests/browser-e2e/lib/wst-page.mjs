@@ -13,17 +13,35 @@ export const TABS = {
 
 export const URL_OF = (token) => `http://127.0.0.1:3081/?token=${token}`
 
+/**
+ * 页面打开内联 JS（宿主冷启动自愈）：domcontentloaded 在冷启动时可能 45s 不触发且遗留
+ * pending navigation（后续 click 全部卡 "waiting for navigation to finish"）——
+ * 用 waitUntil:'commit'（响应体即返回）+ 固定暖机等待 + 一次重试。
+ * program 侧注入：`${GOTO_WARM_JS}` 后调 `await gotoWarm(page, url)`。
+ */
+export const GOTO_WARM_JS = `
+  async function gotoWarm(page, url) {
+    for (let i = 0; i < 2; i++) {
+      try {
+        await page.goto(url, { waitUntil: 'commit', timeout: 60000 })
+        await page.waitForTimeout(3000)
+        return
+      } catch (e) { /* 冷启动首跳超时——重试一次 */ }
+    }
+    throw new Error('页面打开失败（两次尝试）')
+  }
+`
+
 /** 打开业务页：进 Web UI → 点侧栏「WST 运行」→ 等主面板出现且 wire 健康（场景下拉出选项）。 */
 export async function openBusinessPage(c, token) {
   await c.step('用户打开业务页（侧栏「WST 运行」）', async () => {
     await c.program(`
-      await page.goto(${JSON.stringify(URL_OF(token))}, { waitUntil: 'domcontentloaded', timeout: 45000 })
-      await page.waitForTimeout(2500)
+      ${GOTO_WARM_JS}
+      await gotoWarm(page, ${JSON.stringify(URL_OF(token))})
       // 宿主重启后 hero 可能停在「选择一个工作区」——重开一次页面即恢复（项目记忆口径）
       const hit = page.getByText('WST 运行', { exact: false }).first()
       if (await hit.count().catch(() => 0) === 0) {
-        await page.goto(${JSON.stringify(URL_OF(token))}, { waitUntil: 'domcontentloaded', timeout: 45000 })
-        await page.waitForTimeout(2500)
+        await gotoWarm(page, ${JSON.stringify(URL_OF(token))})
       }
       await page.getByText('WST 运行', { exact: false }).first().click()
       await page.waitForTimeout(1200)
@@ -31,7 +49,7 @@ export async function openBusinessPage(c, token) {
       const scenSel = page.locator('div.txri-gov').last().locator('select').first()
       await scenSel.locator('option').first().waitFor({ state: 'attached', timeout: 30000 })
       return { title: await page.title() }
-    `, { fatal: true, timeoutMs: 90000 })
+    `, { fatal: true, timeoutMs: 120000 })
     await c.shot('open')
   })
 }
