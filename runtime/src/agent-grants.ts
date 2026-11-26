@@ -56,6 +56,8 @@ export const ONTOOL_NAMES: ReadonlySet<string> = new Set([
   // 子图扩展与特征投影（subgraph-expansion S3.2/S4.3；A-1 输入 dataset 收权）
   'expand_entity',
   'project_features',
+  // 实体分页浏览（issue #33 缺口2）：只读分页，收权口径同 wire browseObjects（缺登记则 guard 静默跳过）
+  'browse_objects',
   // 业务动作执行器（可信执行 T4.1）：objectRef 过对象收权（deny-by-default）
   'execute_behavior_action',
   // D 包治理链：复核决定 → 动作提案（提案绑定 decisionId；执行仍过批准卡）

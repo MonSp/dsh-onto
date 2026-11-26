@@ -40,12 +40,14 @@ import {
   ONTOOL_NAMES,
 } from '../dist/agent-grants.js'
 import {
+  browseDatasetPage,
   executeExpandEntity,
   executeProjectFeatures,
   exportSummaryOf,
   loadDatasetFromArgs,
   loadToolPackage,
   redlinesForRuns,
+  renderBrowseText,
   renderExpandText,
   renderProjectText,
   runScenarioBatch,
@@ -991,6 +993,7 @@ test('A-1 expand/project 输入 dataset 必须过收权（未收权 objectRef �
   // I5/A-1：新工具必须登记 ONTOOL_NAMES（否则 guard 静默跳过）
   assert.ok(ONTOOL_NAMES.has('expand_entity'), 'expand_entity 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('project_features'), 'project_features 须入 ONTOOL_NAMES')
+  assert.ok(ONTOOL_NAMES.has('browse_objects'), 'browse_objects 须入 ONTOOL_NAMES（issue #33 缺口2）')
   assert.ok(ONTOOL_NAMES.has('show_run_report'), 'show_run_report 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('show_run_diff'), 'show_run_diff 须入 ONTOOL_NAMES')
   assert.ok(ONTOOL_NAMES.has('save_report_page'), 'save_report_page 须入 ONTOOL_NAMES')
@@ -1096,6 +1099,47 @@ test('A-5 expand render 摘要级：零 attrs 正文、零绝对路径；ID 撞�
   const pt = renderProjectText(pj, [])
   assert.ok(!pt.includes('acctNo') && !pt.includes('6222001'), 'project render 零 attrs 正文')
   assert.ok(pt.includes('n'), '派生配方名在场')
+})
+
+test('缺口2 browse_objects：分页纯函数 + 摘要级渲染零 attrs + 输入校验 fail-loud', () => {
+  const dataset = {
+    objects: [
+      { id: 'a1', type: 'OBJ-AML-ACCOUNT', attrs: { acctNo: '6222001' } },
+      { id: 'a2', type: 'OBJ-AML-ACCOUNT', attrs: {} },
+      { id: 'c1', type: 'OBJ-AML-CUSTOMER', attrs: {} },
+    ],
+    relations: [],
+    candidates: [],
+  }
+  const page = browseDatasetPage(dataset, { typeFilter: 'OBJ-AML-ACCOUNT', offset: 1, limit: 50 })
+  assert.equal(page.total, 2)
+  assert.equal(page.objects.length, 1)
+  assert.equal(page.objects[0].id, 'a2')
+  assert.deepEqual(page.types, [
+    { type: 'OBJ-AML-ACCOUNT', count: 2 },
+    { type: 'OBJ-AML-CUSTOMER', count: 1 },
+  ])
+  // 入参校验 fail-loud；limit 硬上限 200（wire 同口径）
+  expectCode(() => browseDatasetPage(dataset, { typeFilter: 42 }), 'INVALID_ARGS')
+  expectCode(() => browseDatasetPage(dataset, { offset: 'x' }), 'INVALID_ARGS')
+  expectCode(() => browseDatasetPage(dataset, { limit: Number.NaN }), 'INVALID_ARGS')
+  assert.equal(browseDatasetPage(dataset, { limit: 999 }).limit, 200)
+  // A-5 摘要级：零 attrs 正文；ID 面撞红线 fail-loud
+  const out = {
+    objects: page.objects.map((o) => ({ id: o.id, type: o.type })),
+    types: page.types,
+    total: page.total,
+    offset: page.offset,
+    limit: page.limit,
+  }
+  const text = renderBrowseText(out, [])
+  assert.ok(!text.includes('acctNo') && !text.includes('6222001'), 'browse render 零 attrs 正文')
+  assert.ok(text.includes('OBJ-AML-ACCOUNT:a2'), '对象 ID 清单在场')
+  const ph = '认定洗钱'
+  expectCode(
+    () => renderBrowseText({ ...out, objects: [{ id: `x-${ph}`, type: 'T' }] }, [ph]),
+    'INVALID_TOOL_OUTPUT',
+  )
 })
 
 test('A-3/A-6/A-7 core 面重放：诱导子图 / 事实优先覆盖 / now 注入确定性', () => {

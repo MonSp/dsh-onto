@@ -40,6 +40,12 @@ export interface RunRecord {
   redlines: string[]
   /** 执行层 prep 摘要（人审对账；无准备时缺省）。 */
   prep?: ScenarioPrepSummary
+  /**
+   * 补数关联（issue #33 缺口1）：本次运行系对 `refillsRunId` 的 pendingChecks 缺数
+   * 补数后重算——两 run 在台账层可关联对比（compare_runs / show_run_diff）。
+   * 无关联时缺省（不落键，旧记录零回归）。
+   */
+  refillsRunId?: string
   /** 掩蔽前完整结果（core/wire/CLI 人审面口径）。 */
   result: ScenarioRunResult
   savedAt: string
@@ -86,6 +92,8 @@ export function buildRunRecord(input: {
   inputDataset?: RuntimeDataset
   /** prep 摘要；缺省从 result.prep 取（runScenario 回填）。 */
   prep?: ScenarioPrepSummary
+  /** 补数关联原 run（issue #33 缺口1）；无关联省略。 */
+  refillsRunId?: string
   result: ScenarioRunResult
   redlines: readonly string[]
   savedAt?: string
@@ -113,6 +121,7 @@ export function buildRunRecord(input: {
     },
     redlines: [...new Set(input.redlines.filter((p) => typeof p === 'string' && p !== ''))],
     ...(prep !== undefined ? { prep } : {}),
+    ...(input.refillsRunId === undefined ? {} : { refillsRunId: input.refillsRunId }),
     result,
     savedAt: input.savedAt ?? new Date().toISOString(),
   }

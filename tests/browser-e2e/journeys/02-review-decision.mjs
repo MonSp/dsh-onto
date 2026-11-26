@@ -48,9 +48,58 @@ export default {
     c.expect('候选区可见', text.includes('候选'), '')
     c.expect('证据面无禁语', scanForbidden(text).length === 0, scanForbidden(text).join(','))
 
+    await c.step('缺数项若带补数回指：「补数重算 / 回查询补数」一键预填（issue #33 缺口1）', async () => {
+      const r = await c.program(`
+        ${PANEL_JS}
+        const rerun = panel.locator('button[data-e2e="refill-rerun"]')
+        const query = panel.locator('button[data-e2e="refill-query"]')
+        const hasRefill = (await rerun.count()) > 0 && (await query.count()) > 0
+        if (!hasRefill) return { skipped: 'no refill entries', hasRefill: false }
+        await rerun.first().click()
+        await page.waitForTimeout(1200)
+        const noteCount = await panel.locator('[data-e2e="refills-note"]').count()
+        const runTabText = await panel.innerText()
+        // 回到复核面再点「回查询补数」→ 对象页预填（页签按钮在业务面板外，页面级定位）
+        await page.getByRole('button', { name: '复核', exact: true }).first().click()
+        await page.waitForTimeout(800)
+        const opens = panel.getByRole('button', { name: '查看', exact: true })
+        if (await opens.count()) { await opens.first().click(); await page.waitForTimeout(1200) }
+        const q = panel.locator('button[data-e2e="refill-query"]')
+        if (await q.count()) { await q.first().click(); await page.waitForTimeout(1200) }
+        const objText = await panel.innerText()
+        return {
+          hasRefill: true,
+          refillsNote: noteCount > 0,
+          rerunSnippet: runTabText.slice(0, 160),
+          querySwitched: objText.includes('实体浏览') || objText.includes('类型') || objText.includes('回查询'),
+        }
+      `, { fatal: false, timeoutMs: 60000 })
+      await c.shot('refill-actions')
+      return r
+    })
+
+    const textR = await panelText(c)
+    if (textR.includes('补数关联原运行') || textR.includes('实体浏览') || textR.includes('缺失特征')) {
+      c.expect('补数回指一键预填：关联原 run 或缺失特征提示上墙（不静默吞）',
+        textR.includes('补数关联原运行') || textR.includes('缺失特征'), textR.slice(0, 300))
+      c.expect('补数面无禁语', scanForbidden(textR).length === 0, scanForbidden(textR).join(','))
+    } else {
+      c.expect('本轮缺数项无补数回指（诚实跳过，不伪造回指）', true, '')
+    }
+
     await c.step('用户勾选候选、填写理由并提交复核', async () => {
       const r = await c.program(`
         ${PANEL_JS}
+        // 上一步补数预填可能已切到对象/运行页——先回「复核」并重新打开含候选的运行明细（页签按钮页面级定位）
+        await page.getByRole('button', { name: '复核', exact: true }).first().click()
+        await page.waitForTimeout(800)
+        const opens = panel.getByRole('button', { name: '查看', exact: true })
+        const n = Math.min(await opens.count(), 6)
+        for (let i = 0; i < n; i++) {
+          await panel.getByRole('button', { name: '查看', exact: true }).nth(i).click()
+          await page.waitForTimeout(1200)
+          if (await panel.locator('input[data-e2e="cand-check"]').count()) break
+        }
         // 候选勾选框按模板 data-e2e 稳定定位（经验回填反例框同为 checkbox，位置选择器会漂移）
         const cb = panel.locator('input[data-e2e="cand-check"]').first()
         await cb.waitFor({ timeout: 10000 })

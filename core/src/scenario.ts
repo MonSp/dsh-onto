@@ -611,6 +611,30 @@ export function runScenario(
     }
   }
 
+  /* ── 缺口1：缺特征类 pendingChecks 带可执行回指（回查询/补数重算预填面） ──
+   * 来源取打分/排除规则 featureSources 的特征→类型声明（未声明则空）；种子 = 候选对象 id
+   * （可直接作 run_scenario.seedIds / browse 查询回指）。 */
+  const featureSourceOf = new Map<string, string>()
+  for (const r of [...pkg.scoreRules, ...pkg.exclusionRules]) {
+    for (const [key, src] of Object.entries(r.featureSources ?? {})) {
+      if (!featureSourceOf.has(key)) featureSourceOf.set(key, src)
+    }
+  }
+  for (const c of result.candidates) {
+    for (const p of c.pendingChecks) {
+      if (p.missing === undefined || p.missing.length === 0 || p.refill !== undefined) continue
+      const sourceTypes = [
+        ...new Set(p.missing.map((f) => featureSourceOf.get(f)).filter((s): s is string => s !== undefined)),
+      ]
+      p.refill = {
+        missingFeatures: [...p.missing],
+        sourceTypes,
+        seedIds: [c.objectRef],
+        suggestedAction: sourceTypes.length > 0 ? 'query-objects' : 'rerun-scenario',
+      }
+    }
+  }
+
   return result
 }
 

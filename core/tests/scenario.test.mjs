@@ -67,6 +67,49 @@ test('缺失特征 → pendingVerification=true（待核实，不硬判）', () 
     assert.ok(c4.pendingChecks.some((p) => Array.isArray(p.missing) && p.missing.includes('fastInOutRatio')))
     // 缺失特征的规则不得硬判入 hitRuleIds
     assert.ok(!c4.hitRuleIds.includes('RULE-AML-SCORE-FASTFLOW'))
+    // 缺口1：缺特征类条目带可执行回指（无 featureSources 声明 → sourceTypes 空，建议带种子重算）
+    const p = c4.pendingChecks.find((x) => Array.isArray(x.missing) && x.missing.includes('fastInOutRatio'))
+    assert.deepEqual(p.refill, {
+      missingFeatures: ['fastInOutRatio'],
+      sourceTypes: [],
+      seedIds: [c4.objectRef],
+      suggestedAction: 'rerun-scenario',
+    })
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
+test('缺口1：refill.sourceTypes 取规则 featureSources（声明在 → query-objects）', () => {
+  const { dir, root } = mkWorkspaceWithPkg({
+    scoreRules: [
+      {
+        id: 'RULE-TST-S1',
+        name: '规则一',
+        weight: 1,
+        expression: 'min(1, f1 + f2)',
+        threshold: 0.5,
+        evidenceTemplate: '特征 f1 = {f1}',
+        featureSources: { f1: 'OBJ-TST-A', f2: 'OBJ-TST-B' },
+      },
+    ],
+  })
+  try {
+    derivePackage(dir)
+    const result = runScenario(dir, 'SCN-TST-1', {
+      objects: [{ id: 'a1', type: 'OBJ-TST-A', attrs: {} }],
+      relations: [],
+      candidates: [{ candidateId: 'C1', objectRef: 'a1', features: { f1: 0.2 }, tags: [] }],
+    })
+    const c = result.candidates.find((x) => x.candidateId === 'C1')
+    const p = c.pendingChecks.find((x) => Array.isArray(x.missing) && x.missing.includes('f2'))
+    assert.ok(p, '缺 f2 应有待核实')
+    assert.deepEqual(p.refill, {
+      missingFeatures: ['f2'],
+      sourceTypes: ['OBJ-TST-B'],
+      seedIds: ['a1'],
+      suggestedAction: 'query-objects',
+    })
   } finally {
     rmWorkspace(root)
   }

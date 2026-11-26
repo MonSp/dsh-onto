@@ -407,7 +407,16 @@ export function renderRunText(
     for (const p of c.pendingChecks) {
       const missing =
         p.missing && p.missing.length > 0 ? `（缺 ${p.missing.map((m) => idFace('missing', m)).join(', ')}）` : ''
-      lines.push(`  待核实: ${face(p.note)}${missing}`)
+      // 缺口1：缺特征类待核实带可执行回指——回查种子/来源 + 补数重算提示（预填面同源）
+      const refill =
+        p.refill !== undefined
+          ? ` → 回查种子 ${p.refill.seedIds.map((s) => idFace('seedIds', s)).join(', ')}`
+            + (p.refill.sourceTypes.length > 0
+              ? `（来源 ${p.refill.sourceTypes.map((s) => idFace('sourceTypes', s)).join(', ')}）`
+              : '')
+            + '，补数后带 refillsRunId 重算关联原 run'
+          : ''
+      lines.push(`  待核实: ${face(p.note)}${missing}${refill}`)
     }
     if (c.pendingVerification) lines.push('  pendingVerification=true')
     for (const n of c.narrative) lines.push(`  叙述: ${face(n)}`)

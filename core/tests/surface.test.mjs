@@ -6,6 +6,7 @@ import {
   LIST_NUMERIC_FIELDS,
   SURFACE_CATALOG_ID,
   buildDefaultReportSurface,
+  resolveReportSurface,
   validateReportSurface,
 } from '../dist/index.js'
 
@@ -698,4 +699,42 @@ test('批次 5：Compare 组件与 Table export', () => {
     msg(node('t', 'Table', { rowsBind: '/candidates', export: 'yes', columns: [{ field: 'candidateId', header: 'ID' }] })),
   )
   assert.equal(v3.ok, false)
+})
+
+test('resolveReportSurface 四级回退（issue #33 缺口5）：model → package → workspace → default', () => {
+  // 显式 model 短路
+  const explicit = buildDefaultReportSurface({ surfaceId: 's-model' })
+  const r1 = resolveReportSurface({
+    explicit,
+    packageSurface: buildDefaultReportSurface({ surfaceId: 's-pkg' }),
+  })
+  assert.equal(r1.source, 'model')
+  assert.equal(r1.surface.surfaceId, 's-model')
+  assert.deepEqual(r1.fallbackNotes, [])
+
+  // 随包契约命中
+  const r2 = resolveReportSurface({ packageSurface: buildDefaultReportSurface({ surfaceId: 's-pkg' }) })
+  assert.equal(r2.source, 'package')
+  assert.equal(r2.surface.surfaceId, 's-pkg')
+
+  // 随包非法 → 工作区降级 + 回退留痕
+  const bad = buildDefaultReportSurface({ surfaceId: 's-bad' })
+  bad.root = { id: 'cheat', type: 'Stat', props: { label: 'x', value: 0.01 } }
+  const r3 = resolveReportSurface({
+    packageSurface: bad,
+    workspaceSurface: buildDefaultReportSurface({ surfaceId: 's-ws' }),
+  })
+  assert.equal(r3.source, 'workspace')
+  assert.equal(r3.surface.surfaceId, 's-ws')
+  assert.equal(r3.fallbackNotes.length, 1)
+  assert.ok(r3.fallbackNotes[0].includes('随包'))
+
+  // 全缺/全非法 → 默认模板，notes 显式
+  const r4 = resolveReportSurface({})
+  assert.equal(r4.source, 'default')
+  assert.equal(r4.surface.surfaceId, 'run-report-default')
+  assert.ok(r4.fallbackNotes.length >= 1)
+  const r5 = resolveReportSurface({ packageSurface: bad, workspaceSurface: bad })
+  assert.equal(r5.source, 'default')
+  assert.equal(r5.fallbackNotes.length, 2)
 })

@@ -861,3 +861,51 @@ export function buildDefaultReportSurface(opts: { title?: string; surfaceId?: st
     },
   }
 }
+
+/** 报表 surface 来源（issue #33 缺口5 四级回退）：模型显式 → 随包契约 → 工作区沉淀页 → 默认模板。 */
+export type ReportSurfaceSource = 'model' | 'package' | 'workspace' | 'default'
+
+export interface ReportSurfaceResolution {
+  surface: A2uiSurfaceMessage
+  source: ReportSurfaceSource
+  /** 回退留痕（不静默吞）：各候选缺席/非法的原因；空 = 一级即命中。 */
+  fallbackNotes: string[]
+}
+
+/**
+ * 报表 surface 回退链决策（纯函数，issue #33 缺口5）——双入口同源：
+ * 显式 model（调用方已过 validateReportSurface，非法即拒不回退）→ 随包 O3 reportSurface
+ * → 工作区沉淀 ReportPage → 默认模板。随包/工作区候选非法（REPORT_SURFACE_INVALID 同族）
+ * 记 fallbackNotes 后降级下一级，与生成页「不合法回退默认模板并上墙提示」同口径。
+ */
+export function resolveReportSurface(opts: {
+  explicit?: A2uiSurfaceMessage
+  packageSurface?: unknown
+  workspaceSurface?: unknown
+}): ReportSurfaceResolution {
+  const fallbackNotes: string[] = []
+  if (opts.explicit !== undefined) {
+    return { surface: opts.explicit, source: 'model', fallbackNotes }
+  }
+  const tryCandidate = (
+    label: string,
+    candidate: unknown,
+    source: 'package' | 'workspace',
+  ): ReportSurfaceResolution | null => {
+    if (candidate === undefined || candidate === null) {
+      fallbackNotes.push(`${label}未提供报表 surface`)
+      return null
+    }
+    const v = validateReportSurface(candidate)
+    if (!v.ok) {
+      fallbackNotes.push(`${label}报表 surface 不合法（${v.errors.map((e) => e.code).join(';')}），已回退`)
+      return null
+    }
+    return { surface: v.value, source, fallbackNotes }
+  }
+  return (
+    tryCandidate('随包 reportSurface', opts.packageSurface, 'package')
+    ?? tryCandidate('工作区沉淀报表页', opts.workspaceSurface, 'workspace')
+    ?? { surface: buildDefaultReportSurface(), source: 'default', fallbackNotes }
+  )
+}

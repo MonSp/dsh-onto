@@ -6,7 +6,7 @@
  *  2. 「点开一个桶看它的邻域关系；缺种子/截断必须显式提示，不能装作完整。」
  *  3. 「从对象直接跳去发起动作，对象引用要帮我填好。」
  */
-import { TABS, openBusinessPage, switchTab, panelText, PANEL_JS } from '../lib/wst-page.mjs'
+import { TABS, openBusinessPage, switchTab, panelText, scanForbidden, PANEL_JS } from '../lib/wst-page.mjs'
 
 export default {
   id: 'object-explore',
@@ -34,6 +34,28 @@ export default {
 
     const text1 = await panelText(c)
     c.expect('实体表或空态可见（对象计数）', text1.includes('对象'), text1.slice(0, 300))
+
+    await c.step('用户用「特征投影」调试候选特征投影（issue #33 缺口2 双入口对称）', async () => {
+      const r = await c.program(`
+        ${PANEL_JS}
+        const btn = panel.locator('button[data-e2e="project-features"]')
+        await btn.waitFor({ timeout: 10000 })
+        await btn.click()
+        await page.waitForTimeout(3000)
+        const out = panel.locator('[data-e2e="project-out"]')
+        const n = await out.count()
+        const t = n > 0 ? await out.first().innerText() : ''
+        return { rendered: n > 0, snippet: t.slice(0, 200) }
+      `, { fatal: true, timeoutMs: 45000 })
+      await c.shot('project-features')
+      return r
+    })
+
+    const textP = await panelText(c)
+    c.expect('投影调试卡可见（统计/投影特征键/派生配方/事实覆盖）',
+      textP.includes('特征投影调试') && textP.includes('投影特征键')
+        && textP.includes('派生配方') && textP.includes('事实覆盖'), textP.slice(-300))
+    c.expect('投影卡零 attrs 正文泄漏之外无禁语', scanForbidden(textP).length === 0, scanForbidden(textP).join(','))
 
     await c.step('用户展开第一个实体的邻域', async () => {
       const r = await c.program(`

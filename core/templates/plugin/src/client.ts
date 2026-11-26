@@ -113,6 +113,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'reconcileAction', true, 'RRL', 'Manual reconcile of an unknown/in-flight action record.'),
       desc('ontoRuntime', 'browseObjects', true, 'RBO', 'Browse entity instances (paged, by type).'),
       desc('ontoRuntime', 'expandEntity', true, 'REX2', 'Expand entity neighborhood subgraph from seeds.'),
+      desc('ontoRuntime', 'projectFeatures', true, 'RPF', 'Project + derive candidate features (debug face).'),
     ]
 
     const React = require('react') as typeof import('react')

@@ -372,6 +372,58 @@ test('真实工具：save_report_page 沉淀 + list_report_pages 摘要（同名
   }
 })
 
+test('缺口1：run_scenario refillsRunId 关联原 run（台账落盘 + 重算对照动线）', async () => {
+  const host = fixture()
+  try {
+    const { args, out } = await runOnce(host)
+    const tool = host.tools.get('run_scenario')
+    // 不存在的 refillsRunId → 拒（不静默丢关联）
+    await assert.rejects(
+      () => tool.execute({ ...args, refillsRunId: 'run-nope0001' }, {}),
+      (e) => e.code === 'INVALID_ARGS',
+    )
+    // 补数重算：新 run 与原 run 台账关联
+    const out2 = await tool.execute({ ...args, refillsRunId: out.runId }, {})
+    const rec = loadRunRecord(join(host.dir, 'dsh-onto', 'workspace'), out2.runId)
+    assert.equal(rec.refillsRunId, out.runId)
+    const rendered = tool.output.render({ ...args, refillsRunId: out.runId }, out2)
+    assert.ok(rendered[0].text.includes(`compare_runs(runIdA=${out.runId}, runIdB=${out2.runId})`))
+  } finally {
+    host.dispose()
+    configurePhraseStore(null)
+  }
+})
+
+test('缺口5 回退链：沉淀页被 show_run_report 与 getRunReport 同源消费（surfaceSource=workspace）', async () => {
+  const host = fixture()
+  try {
+    const { out } = await runOnce(host)
+    const surface = buildDefaultReportSurface({ surfaceId: 'p-ws' })
+    await host.tools.get('save_report_page').execute({ name: 'ws 页', runId: out.runId, surface }, {})
+    // 工具面：随包无 reportSurface → 工作区沉淀页命中
+    const tool = host.tools.get('show_run_report')
+    const value = await tool.execute({ runId: out.runId }, {})
+    assert.equal(value.surfaceSource, 'workspace')
+    assert.equal(value.surface.surfaceId, 'p-ws')
+    // wire 面同源：同一 run 解析出同一 surface
+    const ctx = new Context()
+    ctx.reflect.provide('profileContext', { dir: host.dir })
+    const runtime = runtimeContextForHost(ctx.root)
+    try {
+      const service = new OntoRuntime(ctx)
+      const wired = await service.remoteExportGetRunReport({ runId: out.runId })
+      assert.equal(wired.surfaceSource, 'workspace')
+      assert.deepEqual(wired.surface, value.surface)
+      assert.ok(Array.isArray(wired.surfaceNotes))
+    } finally {
+      runtime.dispose()
+    }
+  } finally {
+    host.dispose()
+    configurePhraseStore(null)
+  }
+})
+
 test('wire 报表页：列表/读取与 store 一致；strict 越权拒、同身份放行', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'onto-rpt-page-'))
   try {

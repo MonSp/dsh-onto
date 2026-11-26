@@ -27,7 +27,7 @@ import {
   readToolContracts,
   checkGrant,
 } from '../dist/agent-grants.js'
-import { buildRunRecord, derivePackage, saveRunRecord } from '@dsh-onto/core'
+import { buildRunRecord, derivePackage, loadExperienceNote, saveRunRecord } from '@dsh-onto/core'
 import { actionStoreFor } from '../dist/action-store.js'
 import { businessPolicy } from '../dist/business-policy.js'
 import { currentRuntimeContext, provideRuntimeContext } from '@dsh-onto/runtime'
@@ -622,6 +622,13 @@ test('D-7 record_review_decision：runId/snapshotDigest/ruleFingerprint 台账�
     const dec = actionStoreFor(wsRoot).getDecision(out.decisionId)
     assert.equal(dec.reviewer, 'host:u-host-1')
     assert.equal(dec.runId, 'run-dec00001')
+    // 缺口3回归：工具面复核决定与 wire 同源桥接经验卡（认定回执进 outcomeReason）
+    assert.ok(out.experience, '复核决定落库须附经验桥接回执')
+    assert.equal(out.experience.skipped, undefined, `桥接不应 skipped: ${JSON.stringify(out.experience)}`)
+    assert.equal(out.experience.runId, 'run-dec00001')
+    const note = loadExperienceNote(wsRoot, 'run-dec00001')
+    assert.ok(note.outcomeReason.includes('复核决定 approved'), '认定回执须追加进 outcomeReason')
+    assert.equal(note.reviewedBy, 'host:u-host-1', '经验卡定性留痕绑定决定复核人')
     // 5) 复核人身份不可确认 → fail-closed 拒（不落决定）
     businessPolicy.setIdentityProvider(null)
     await assert.rejects(

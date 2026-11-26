@@ -25,6 +25,7 @@ function fullRecord() {
     startedAt: '2026-11-22T00:00:00.000Z',
     savedAt: '2026-11-22T00:01:00.000Z',
     datasetDigest: 'd'.repeat(64),
+    refillsRunId: 'run-prev00001',
     datasetSummary: { objects: 5, relations: 3, behaviors: 4, candidates: 2 },
     redlines: ['认定违规'],
     result: {
@@ -43,7 +44,19 @@ function fullRecord() {
             { ruleId: 'RULE-WST-OVER', score: 0.44, evidence: '超载 1 次' },
           ],
           narrative: ['候选 0.94'],
-          pendingChecks: [{ ruleId: 'RULE-WST-MIX', missing: ['fillLevel'], note: '缺 fillLevel' }],
+          pendingChecks: [
+            {
+              ruleId: 'RULE-WST-MIX',
+              missing: ['fillLevel'],
+              note: '缺 fillLevel',
+              refill: {
+                missingFeatures: ['fillLevel'],
+                sourceTypes: ['OBJ-WST-BIN'],
+                seedIds: ['OBJ-WST-BIN:B3'],
+                suggestedAction: 'query-objects',
+              },
+            },
+          ],
           pendingVerification: true,
         },
         {
@@ -84,6 +97,7 @@ test('buildRunReport：投影形状与引用内容', () => {
     scenarioId: 'SCN-WST-HAZARD-MIX',
     startedAt: '2026-11-22T00:00:00.000Z',
     savedAt: '2026-11-22T00:01:00.000Z',
+    refillsRunId: 'run-prev00001',
   })
   assert.equal(report.summary.candidateCount, 2)
   assert.equal(report.summary.excludedCount, 1)

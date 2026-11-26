@@ -633,6 +633,20 @@ export interface PendingCheck {
   ruleId?: string
   missing?: string[]
   note: string
+  /**
+   * 可执行回指（issue #33 缺口1）：缺特征类待核实 → 回查询/补数重算所需种子与来源。
+   * 仅缺特征类条目携带（missing 非空）；旧记录/审计类条目无此键。
+   */
+  refill?: {
+    /** 缺失特征名（与 missing 同源，显式命名便于页面预填）。 */
+    missingFeatures: string[]
+    /** 缺失特征的声明来源类型（规则 featureSources 解析；未声明则空）。 */
+    sourceTypes: string[]
+    /** 建议回查/补数种子（候选对象 id，可直接作 seedIds）。 */
+    seedIds: string[]
+    /** 建议动作：query-objects=先回查询补数；rerun-scenario=直接带种子重算。 */
+    suggestedAction: 'query-objects' | 'rerun-scenario'
+  }
 }
 
 export interface CandidateResult {
