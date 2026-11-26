@@ -978,5 +978,5 @@ export interface ModelGraph {
   /** 最近一次人审/物化后的单调递增版本号（画布刷新信号）。 */
   revision: number
   /** 骨架状态（存在时下发，供画布显示门禁）。 */
-  skeleton?: { confirmed: boolean; ids: string[] }
+  skeleton?: { confirmed: boolean; ids: string[]; problem?: SkeletonRecord['problem'] }
 }

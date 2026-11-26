@@ -1190,9 +1190,11 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
   const experienceView = (): ReactNode[] => {
     if (!detail) return []
     const note = expNote
+    // 反例改判也算有效变更（认定在人工：可置位/清除机械反例）——新建时勾选同理
+    const counterChanged = expCounter !== (note?.counterexample === true)
     const canSubmitExp =
       !busy &&
-      (expOutcome !== '' || expReason.trim() !== '' || expMisJudged !== '' || expFocus.trim() !== '') &&
+      (expOutcome !== '' || expReason.trim() !== '' || expMisJudged !== '' || expFocus.trim() !== '' || counterChanged) &&
       (note !== null || expOutcome !== '')
     return [
       h(
@@ -1251,18 +1253,18 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
         h(
           'div',
           { key: 'em2', className: 'txri-cand-row' },
-          note === null
-            ? h(
-                'label',
-                { style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
-                h('input', {
-                  type: 'checkbox',
-                  checked: expCounter,
-                  onChange: () => setExpCounter((v) => !v),
-                }),
-                h('span', { className: 'txri-note' }, t('expCounter')),
-              )
-            : null,
+          // 反例勾选恒可用（认定在人工）：已有卡也可改判/清除机械反例，提交按差异发送
+          h(
+            'label',
+            { style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+            h('input', {
+              type: 'checkbox',
+              'data-e2e': 'exp-counter',
+              checked: expCounter,
+              onChange: () => setExpCounter((v) => !v),
+            }),
+            h('span', { className: 'txri-note' }, t('expCounter')),
+          ),
           h('span', { className: 'txri-note' }, `${t('expMis')}:`),
           h(
             'select',

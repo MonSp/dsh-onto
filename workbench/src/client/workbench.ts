@@ -214,11 +214,16 @@ export function GraphWorkbench(props: {
     return () => clearInterval(timer)
   }, [loadGraph])
 
-  // 骨架输入只在非编辑态同步（防轮询覆盖正在输入的内容）
+  // 骨架输入只在非编辑态同步（防轮询覆盖正在输入的内容）；problem 同步回显防重保存丢数据
   useEffect(() => {
     if (!skelOpen && graph) {
       setSkelIds(graph.skeleton ? graph.skeleton.ids.join('\n') : '')
       setSkelConfirmed(graph.skeleton ? graph.skeleton.confirmed : false)
+      const p = graph.skeleton?.problem
+      setSkelGoal(p?.goal ?? '')
+      setSkelBoundary(p?.boundary ?? '')
+      setSkelExpected((p?.expected ?? []).join('\n'))
+      setSkelCounter((p?.counterexamples ?? []).join('\n'))
     }
   }, [graph, skelOpen])
 
