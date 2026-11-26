@@ -49,6 +49,7 @@ export type ReleaseErrorCode =
   | 'RELEASE_SOURCE_REJECTED'
   | 'RELEASE_VERSION_NOT_ACTIVE'
   | 'RELEASE_NOT_ACTIVE'
+  | 'RELEASE_HALF_STATE'
   | 'DERIVED_DRIFT'
 
 export class ReleaseError extends Error {

@@ -1166,6 +1166,7 @@ function ReviewPanel(props: { t: (k: string) => string; ctx: Ctx }) {
             {
               type: 'button',
               className: 'txri-primary',
+              'data-e2e': 'submit-review',
               disabled: !canSubmit,
               onClick: () => submitReview(),
             },

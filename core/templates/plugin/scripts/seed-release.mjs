@@ -30,9 +30,11 @@ const releases = new ReleaseStore({
   capabilities: () => ['dryrun'],
 })
 // 激活/回滚操作者须为宿主可信身份 host:<userId>（assertAuthorizedActor fail-closed）：
-// 运维传裸名（如 "张三"）时归一为 host: 形态，显式带前缀则原样保留
-const actor = authorizedBy === undefined ? undefined
-  : authorizedBy.trim().startsWith('host:') ? authorizedBy.trim() : `host:${authorizedBy.trim()}`
+// 运维传裸名（如 "张三"）时归一为 host: 形态；已带前缀（任意大小写）则规范化为小写 host: 再用
+const rawActor = authorizedBy?.trim()
+const actor = rawActor === undefined || rawActor === ''
+  ? undefined
+  : /^host:/i.test(rawActor) ? `host:${rawActor.slice(5)}` : `host:${rawActor}`
 if (command === 'activate') {
   const act = releases.activate('__PKG_NAME__', '__PKG_VERSION__', { authorizedBy: actor })
   console.log('activate:', JSON.stringify(act))

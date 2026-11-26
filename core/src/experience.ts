@@ -731,14 +731,14 @@ function splitScope(s: string): [string, string | null] {
   return [s.slice(0, i), s.slice(i + 1)]
 }
 
-/** 同名版本先后比较（逐段；数字段按数值比，非数字段退化为字典序）：1.0.0 < 1.1.0 < 1.10.0。 */
+/** 同名版本先后比较（逐段；缺段补 0，数字段按数值比，非数字段退化为字典序）：1.0 ≡ 1.0.0 < 1.1.0 < 1.10.0。 */
 function versionAtMost(a: string, b: string): boolean {
   const pa = a.split('.')
   const pb = b.split('.')
   const n = Math.max(pa.length, pb.length)
   for (let i = 0; i < n; i += 1) {
-    const x = pa[i] ?? ''
-    const y = pb[i] ?? ''
+    const x = pa[i] ?? '0'
+    const y = pb[i] ?? '0'
     const nx = Number(x)
     const ny = Number(y)
     const bothNum = x !== '' && y !== '' && Number.isFinite(nx) && Number.isFinite(ny)

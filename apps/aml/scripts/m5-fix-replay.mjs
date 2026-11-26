@@ -261,7 +261,7 @@ async function main() {
     }
 
     const before = rel.readActive()
-    const act = rel.activate('aml-analysis', '1.1.0', { authorizedBy: 'ops-replay' })
+    const act = rel.activate('aml-analysis', '1.1.0', { authorizedBy: 'host:ops-replay' })
     step('D1 升版激活 1.1.0', act?.package?.version === '1.1.0' && rel.activeVersion('aml-analysis') === '1.1.0')
 
     // 新 run 必须绑 1.1.0；1.0.0 拒绝
@@ -280,7 +280,7 @@ async function main() {
     // 破坏 1.0.0 包源 → 回滚校验失败且指针仍为 1.1.0
     const corrupted = withCorruptedPackage('1.0.0', () => {
       try {
-        rel.rollback('aml-analysis', { authorizedBy: 'ops-replay' })
+        rel.rollback('aml-analysis', { authorizedBy: 'host:ops-replay' })
         return { rejected: false, after: rel.activeVersion('aml-analysis') }
       } catch (e) {
         return {
@@ -296,7 +296,7 @@ async function main() {
       `rejected=${corrupted.rejected} after=${corrupted.after} ${corrupted.code ?? ''} ${corrupted.msg ?? ''}`)
 
     // 完好目标版回滚成功
-    const rb = rel.rollback('aml-analysis', { authorizedBy: 'ops-replay' })
+    const rb = rel.rollback('aml-analysis', { authorizedBy: 'host:ops-replay' })
     step('D5 完好回滚切回 1.0.0',
       rb?.package?.version === '1.0.0' && rel.activeVersion('aml-analysis') === '1.0.0')
 

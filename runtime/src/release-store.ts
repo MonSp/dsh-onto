@@ -555,9 +555,17 @@ export class ReleaseStore {
           ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
         })
       } catch (e) {
-        // 补偿（先读后写）：history 落盘失败 → 回写原指针（无原指针则撤下 active.json）
-        if (active === null) rmSync(this.activePath, { force: true })
-        else this.writeActive(active)
+        // 补偿（先读后写）：history 落盘失败 → 回写原指针（无原指针则撤下 active.json）。
+        // 补偿自身失败时不顶替原错误：合并上报（半态显式可见）；补偿成功则原错误原样抛出
+        try {
+          if (active === null) rmSync(this.activePath, { force: true })
+          else this.writeActive(active)
+        } catch (comp) {
+          throw new ReleaseError(
+            'RELEASE_HALF_STATE',
+            `appendHistory 失败（${e instanceof Error ? e.message : String(e)}）且补偿回写原指针也失败（${comp instanceof Error ? comp.message : String(comp)}）——指针与 history 可能不一致，须人工核对`,
+          )
+        }
         throw e
       }
       return { ok: true, package: { name, version }, previous, versions: next.versions }
@@ -627,8 +635,16 @@ export class ReleaseStore {
           ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
         })
       } catch (e) {
-        // 补偿（先读后写）：history 落盘失败 → 回写原指针，不留「指针已动、无 history」半态
-        this.writeActive(active)
+        // 补偿（先读后写）：history 落盘失败 → 回写原指针，不留「指针已动、无 history」半态。
+        // 补偿自身失败时不顶替原错误：合并上报（半态显式可见）；补偿成功则原错误原样抛出
+        try {
+          this.writeActive(active)
+        } catch (comp) {
+          throw new ReleaseError(
+            'RELEASE_HALF_STATE',
+            `appendHistory 失败（${e instanceof Error ? e.message : String(e)}）且补偿回写原指针也失败（${comp instanceof Error ? comp.message : String(comp)}）——指针与 history 可能不一致，须人工核对`,
+          )
+        }
         throw e
       }
       return {

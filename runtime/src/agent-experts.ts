@@ -574,8 +574,11 @@ export function registerExpertTools(
           // 纯 fire-and-forget（专家出口是运行结果契约，无独立回执位）：写回失败不改判本次交付。
           try {
             saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
-          } catch {
-            /* 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建 */
+          } catch (e) {
+            // 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建——失败显式留痕（runId + 原因），不静默吞
+            console.warn(
+              `warn: run ${rec.runId} saved, experience draft not written (${e instanceof Error ? e.message : String(e)}) — it will be created on review backfill`,
+            )
           }
 
           const profile = buildExpertProfiles(versionDir).experts.find((e) => e.expertId === scenario.id)

@@ -58,7 +58,7 @@ export default {
         // 理由框按 data-e2e 定位（placeholder 与 zh 文案耦合，换语言/改文案即失效）
         const reason = panel.locator('input[data-e2e="review-reason"]')
         await reason.fill('browser-e2e：证据链齐全，同意进入动作面')
-        await panel.getByRole('button', { name: '提交复核', exact: true }).click()
+        await panel.locator('button[data-e2e="submit-review"]').click()
         await page.waitForTimeout(2500)
         const t = await panel.innerText()
         const lines = t.split('\\n').filter((l) => /已提交|REVIEW_|DEC-|错误/.test(l)).slice(-3)

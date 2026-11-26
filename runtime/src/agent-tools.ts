@@ -2966,8 +2966,11 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           // 事实留在 experiences/ 缺卡状态——复核面 recordReviewDecision/annotateExperience 自愈补建。
           try {
             saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
-          } catch {
-            /* 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建 */
+          } catch (e) {
+            // 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建——失败显式留痕（runId + 原因），不静默吞
+            console.warn(
+              `warn: run ${rec.runId} saved, experience draft not written (${e instanceof Error ? e.message : String(e)}) — it will be created on review backfill`,
+            )
           }
           rememberPhrases(result.runId, phrases)
           return toolOut(enforceOutputPolicy(result, phrases))
@@ -3493,7 +3496,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         includePriorVersions: {
           type: 'boolean',
           description:
-            '同包历史版本经验（含已签发生产版）一并参赛聚簇，草案落当前 DRAFT 版本——'
+            '同包历史版本经验（含已签发生产版，≤ 当前版本；未来版不参赛）一并参赛聚簇，草案落当前 DRAFT 版本——'
             + 'fork 出新版本后总结 1.0.0 生产经验时传 true（否则按精确版本匹配、找不到旧经验）',
         },
         humanApproved: {
