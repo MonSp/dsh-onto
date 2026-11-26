@@ -50,6 +50,7 @@ import {
   uploadKnowledgeForPkg,
   validateDatasetShape,
 } from '../dist/agent-tools.js'
+import { businessPolicy } from '@dsh-onto/runtime'
 import {
   HeuristicLlm,
   KnowledgeStore,
@@ -1499,7 +1500,7 @@ function mkAnnotateFixture({ auditPassed = true } = {}) {
   return { root, ws, runId: rec.runId }
 }
 
-test('annotate_experience：humanApproved 契约 + 新建/回填 + 误迁移 by 非空（N5）', () => {
+test('annotate_experience：humanApproved 契约 + 新建/回填 + 误迁移 by 绑宿主身份（不收自报）', () => {
   const { root, ws, runId } = mkAnnotateFixture()
   try {
     // 未点头 → 人审契约拒绝
@@ -1530,25 +1531,36 @@ test('annotate_experience：humanApproved 契约 + 新建/回填 + 误迁移 by 
     assert.equal(note.outcome, 'success')
     assert.equal(note.signature.scenarioId, 'SCN-AML-FIND-CLUES')
 
-    // 回填：误迁移（by 非空人工身份）
-    const patched = annotateExperienceForTool(ws, {
-      runId,
-      misTransfer: { judged: true, by: '张三', note: '复用到异域' },
-      humanApproved: true,
-    })
-    assert.equal(patched.created, false)
-    assert.equal(patched.misTransferJudged, true)
-    assert.equal(patched.misTransferBy, '张三')
+    // 回填：误迁移——by 一律绑宿主可信身份，自报字符串被忽略（不收自报）
+    businessPolicy.setIdentityProvider(() => ({
+      userId: 'u-tool',
+      tenant: 't1',
+      roles: [],
+      dataScope: { objectTypes: [] },
+    }))
+    try {
+      const patched = annotateExperienceForTool(ws, {
+        runId,
+        misTransfer: { judged: true, by: '张三（表单自称）', note: '复用到异域' },
+        humanApproved: true,
+      })
+      assert.equal(patched.created, false)
+      assert.equal(patched.misTransferJudged, true)
+      assert.equal(patched.misTransferBy, 'host:u-tool')
+      assert.equal(loadExperienceNote(ws.root, runId).misTransfer.by, 'host:u-tool')
+    } finally {
+      businessPolicy.setIdentityProvider(null)
+    }
 
-    // 误迁移 by 空白 → 拒（模型不自评 / 必须人工身份）
+    // 无宿主身份 → fail-closed REVIEWER_UNCONFIRMED（自报 by 不放行）
     expectCode(
       () =>
         annotateExperienceForTool(ws, {
           runId,
-          misTransfer: { judged: true, by: '  ' },
+          misTransfer: { judged: true, by: '张三' },
           humanApproved: true,
         }),
-      'INVALID_ARGS',
+      'REVIEWER_UNCONFIRMED',
     )
 
     // 新建缺 outcome → 拒
@@ -1593,6 +1605,42 @@ test('annotate_experience：审计未过不得标 success（除非 counterexampl
     } finally {
       rmSync(second.root, { recursive: true, force: true })
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('annotate_experience：counterexample 可改判——清除/置回（认定在人工）', () => {
+  const { root, ws, runId } = mkAnnotateFixture({ auditPassed: false })
+  try {
+    // 新建为反例
+    const created = annotateExperienceForTool(ws, {
+      runId,
+      outcome: 'failure',
+      counterexample: true,
+      humanApproved: true,
+    })
+    assert.equal(created.counterexample, true)
+    // 回填：清除机械置位的反例（既有回填不得静默丢弃该参数）
+    const cleared = annotateExperienceForTool(ws, {
+      runId,
+      counterexample: false,
+      humanApproved: true,
+    })
+    assert.equal(cleared.counterexample, false)
+    assert.equal(loadExperienceNote(ws.root, runId).counterexample, false)
+    // 清除反例后再标 success 须过审计闸（本夹具审计未过 → 拒，不得借改判绕闸）
+    expectCode(
+      () => annotateExperienceForTool(ws, { runId, outcome: 'success', humanApproved: true }),
+      'INVALID_ARGS',
+    )
+    // 可置回
+    const reset = annotateExperienceForTool(ws, {
+      runId,
+      counterexample: true,
+      humanApproved: true,
+    })
+    assert.equal(reset.counterexample, true)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -1714,6 +1762,41 @@ test('abstract_experience：humanApproved 契约 + 聚簇入队结构位回执�
       () => abstractExperienceForTool(ws, knowledge, { packageId: 'aml-analysis@1.0.0', humanApproved: true }),
       'INVALID_ARGS',
     )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('abstract_experience：includePriorVersions——生产经验回流 fork 出的 DRAFT（断链 B）', () => {
+  const { root, ws, knowledge, mkRun } = mkAbstractFixture()
+  try {
+    mkRun()
+    mkRun()
+    // fork 出 1.1.0（DRAFT）：生产经验绑定 1.0.0，物化只能落 1.1.0
+    ws.forkVersion('aml-analysis', '1.0.0', '1.1.0')
+    // 默认精确版本匹配：死锁复现——1.1.0 找不到 1.0.0 的经验
+    const none = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.1.0',
+      humanApproved: true,
+    })
+    assert.equal(none.skills, 0)
+    assert.equal(none.queued.length, 0)
+
+    // includePriorVersions：同名历史版本经验参赛，草案落当前 DRAFT 版本
+    const abs = abstractExperienceForTool(ws, knowledge, {
+      packageId: 'aml-analysis@1.1.0',
+      includePriorVersions: true,
+      humanApproved: true,
+    })
+    assert.equal(abs.package, 'aml-analysis@1.1.0')
+    assert.equal(abs.skills, 1)
+    assert.equal(abs.queued.length, 1)
+    assert.equal(abs.queued[0].targetKind, 'SkillTemplate')
+    assert.equal(abs.queued[0].members, 2)
+    assert.equal(abs.humanReviewRequired, true)
+    // 只入队：草案在知识库队列（pending），不直写包
+    const cands = knowledge.listCandidates({ packageId: 'aml-analysis', status: 'pending' })
+    assert.equal(cands.length, 1)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

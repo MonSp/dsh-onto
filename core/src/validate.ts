@@ -12,6 +12,7 @@ import { listSourceFiles, loadPackage, readPackageMeta, PackageStoreError, QUALI
 import { derivePackage } from './derive.js'
 import { verifyDerived } from './loadgate.js'
 import type { OntologyPackage, QualityReport, SkeletonRecord, ValidationIssue } from './types.js'
+import { validateReportSurface } from './surface.js'
 import { loadYaml } from './yamlio.js'
 
 const WEIGHT_SUM_TOLERANCE = 1e-6
@@ -395,6 +396,16 @@ export function validatePackage(
       }
       if (prep.expand === undefined && prep.features === undefined) {
         err('PREP_INVALID', `SCN ${sc.id}`, 'prep 至少须声明 expand 或 features 之一')
+      }
+    }
+    // 随包默认报表页契约（chat-run-report 图注布局侧）：surface 过 S2.2 同一校验——
+    // 不合法签发前必须修（运行面另有回退默认模板的降级轴）
+    if (sc.reportSurface !== undefined) {
+      const check = validateReportSurface(sc.reportSurface)
+      if (!check.ok) {
+        for (const problem of check.errors) {
+          err('REPORT_SURFACE_INVALID', `SCN ${sc.id}`, `reportSurface ${problem.where}: ${problem.message}`)
+        }
       }
     }
     // D14：圈定打分后 riskScore 上限 = 圈内权重和（不二次归一，见 P3 拍板）——

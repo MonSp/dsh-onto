@@ -36,7 +36,12 @@ export interface OgGraph {
   edges: OgEdge[]
   issues: OgIssue[]
   revision: number
-  skeleton?: { confirmed: boolean; ids: string[] }
+  skeleton?: {
+    confirmed: boolean
+    ids: string[]
+    /** 业务问题定义（建模前置）：目标/边界/期望结果/反例——骨架面板回显用。 */
+    problem?: { goal?: string; boundary?: string; expected?: string[]; counterexamples?: string[] }
+  }
 }
 
 export const OG_W = 1040

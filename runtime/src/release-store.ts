@@ -13,8 +13,10 @@
  * @module @dsh-onto/runtime/release-store
  */
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   rmSync,
   renameSync,
@@ -108,6 +110,50 @@ export interface ActivateResult {
   package: { name: string; version: string }
   previous: string | null
   versions: ActivePointer['versions']
+}
+
+const LOCK_STALE_MS = 30_000
+const LOCK_WAIT_MS = 10_000
+
+function sleepMs(ms: number): void {
+  // 同步等待（本模块写路径是同步 API）：Atomics.wait 主线程可用（Node）
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 跨进程互斥（lockfile，`openSync(..., 'wx')` 原子创建，同 source-config 持锁模式）：
+ * 把「读活动指针 → 判定 → 写指针 → 落 history」放进同一临界区——
+ * 并发 readActive→writeActive 的 TOCTOU 窗口会造成后写覆盖先写 / 指针与 history 错位。
+ * 持锁进程死亡 → 按 mtime 超时打破陈锁（打破后重新竞争，不直接进临界区）。
+ */
+function withReleaseLock<T>(lockFile: string, fn: () => T): T {
+  mkdirSync(dirname(lockFile), { recursive: true })
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    let fd: number
+    try {
+      fd = openSync(lockFile, 'wx')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+      try {
+        if (Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS) rmSync(lockFile, { force: true })
+      } catch {
+        /* 锁已被并发方移除：下轮重新竞争 */
+      }
+      if (Date.now() > deadline) {
+        throw new ReleaseError('RELEASE_CONFLICT', '发布指针写入锁超时（并发争用）：请重试')
+      }
+      sleepMs(5)
+      continue
+    }
+    try {
+      writeFileSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), 'utf8')
+      return fn()
+    } finally {
+      closeSync(fd)
+      rmSync(lockFile, { force: true })
+    }
+  }
 }
 
 export class ReleaseStore {
@@ -472,39 +518,58 @@ export class ReleaseStore {
   /**
    * 授权激活：重验锚点 + 依赖 + 连接器能力 → 写活动指针（分记插件/core/runtime 版本）。
    * 不改写在途提案与历史 RunRecord。
+   * 全程持锁（读指针→写指针→history 同临界区，消 TOCTOU）；appendHistory 失败
+   * 补偿回写原指针再抛错——不留「指针已动、无 history」半态。
    */
   activate(name: string, version: string, opts: { authorizedBy: string; approvalDigest?: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
-    const manifest = this.validateActivation(name, version)
-    const active = this.readActive()
-    const packages = { ...(active?.packages ?? {}), [name]: version }
-    const previous = active && Object.hasOwn(active.packages, name) ? active.packages[name] : null
+    return withReleaseLock(`${this.activePath}.lock`, () => {
+      const manifest = this.validateActivation(name, version)
+      const active = this.readActive()
+      const packages = { ...(active?.packages ?? {}), [name]: version }
+      const previous = active && Object.hasOwn(active.packages, name) ? active.packages[name] : null
 
-    const next: ActivePointer = {
-      format: RELEASE_ACTIVE_FORMAT,
-      packages,
-      versions: {
-        ...(active?.versions.plugin !== undefined || this.defaultVersions.plugin !== undefined
-          ? { plugin: active?.versions.plugin ?? this.defaultVersions.plugin }
-          : {}),
-        core: this.defaultVersions.core,
-        runtime: this.defaultVersions.runtime,
-      },
-      updatedAt: new Date().toISOString(),
-      updatedBy: by,
-    }
-    this.writeActive(next)
-    this.appendHistory({
-      at: next.updatedAt,
-      action: 'activate',
-      package: { name, version },
-      from: previous,
-      to: version,
-      by,
-      packageDigest: manifest.packageDigest,
-      ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
+      const next: ActivePointer = {
+        format: RELEASE_ACTIVE_FORMAT,
+        packages,
+        versions: {
+          ...(active?.versions.plugin !== undefined || this.defaultVersions.plugin !== undefined
+            ? { plugin: active?.versions.plugin ?? this.defaultVersions.plugin }
+            : {}),
+          core: this.defaultVersions.core,
+          runtime: this.defaultVersions.runtime,
+        },
+        updatedAt: new Date().toISOString(),
+        updatedBy: by,
+      }
+      this.writeActive(next)
+      try {
+        this.appendHistory({
+          at: next.updatedAt,
+          action: 'activate',
+          package: { name, version },
+          from: previous,
+          to: version,
+          by,
+          packageDigest: manifest.packageDigest,
+          ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
+        })
+      } catch (e) {
+        // 补偿（先读后写）：history 落盘失败 → 回写原指针（无原指针则撤下 active.json）。
+        // 补偿自身失败时不顶替原错误：合并上报（半态显式可见）；补偿成功则原错误原样抛出
+        try {
+          if (active === null) rmSync(this.activePath, { force: true })
+          else this.writeActive(active)
+        } catch (comp) {
+          throw new ReleaseError(
+            'RELEASE_HALF_STATE',
+            `appendHistory 失败（${e instanceof Error ? e.message : String(e)}）且补偿回写原指针也失败（${comp instanceof Error ? comp.message : String(comp)}）——指针与 history 可能不一致，须人工核对`,
+          )
+        }
+        throw e
+      }
+      return { ok: true, package: { name, version }, previous, versions: next.versions }
     })
-    return { ok: true, package: { name, version }, previous, versions: next.versions }
   }
 
   private validateActivation(name: string, version: string): ReleaseManifest {
@@ -533,45 +598,62 @@ export class ReleaseStore {
    * 回滚：恢复该包上一活动版本；只追加 history、不删除发布物。
    * 目标版本不存在于存储 → RELEASE_NOT_FOUND（不虚构）。
    * 只影响新运行选版。
+   * 全程持锁 + appendHistory 失败补偿回写原指针（同 activate 口径，不留半态）。
    */
   rollback(name: string, opts: { authorizedBy: string; approvalDigest?: string }): ActivateResult {
     const by = assertAuthorizedActor(opts.authorizedBy)
-    const active = this.readActive()
-    if (active === null || !Object.hasOwn(active.packages, name)) {
-      throw new ReleaseError('RELEASE_NOT_FOUND', `no active pointer for package: ${name}`)
-    }
-    const current = active.packages[name]
-    const prev = this.findPreviousVersion(name, current)
-    if (prev === null) {
-      throw new ReleaseError('RELEASE_NOT_FOUND', `no previous active version to rollback for ${name}`)
-    }
-    const manifest = this.validateActivation(name, prev)
+    return withReleaseLock(`${this.activePath}.lock`, () => {
+      const active = this.readActive()
+      if (active === null || !Object.hasOwn(active.packages, name)) {
+        throw new ReleaseError('RELEASE_NOT_FOUND', `no active pointer for package: ${name}`)
+      }
+      const current = active.packages[name]
+      const prev = this.findPreviousVersion(name, current)
+      if (prev === null) {
+        throw new ReleaseError('RELEASE_NOT_FOUND', `no previous active version to rollback for ${name}`)
+      }
+      const manifest = this.validateActivation(name, prev)
 
-    const packages = { ...active.packages }
-    packages[name] = prev
-    const next: ActivePointer = {
-      ...active,
-      packages,
-      updatedAt: new Date().toISOString(),
-      updatedBy: by,
-    }
-    this.writeActive(next)
-    this.appendHistory({
-      at: next.updatedAt,
-      action: 'rollback',
-      package: { name, version: prev },
-      from: current,
-      to: prev,
-      by,
-      packageDigest: manifest.packageDigest,
-      ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
+      const packages = { ...active.packages }
+      packages[name] = prev
+      const next: ActivePointer = {
+        ...active,
+        packages,
+        updatedAt: new Date().toISOString(),
+        updatedBy: by,
+      }
+      this.writeActive(next)
+      try {
+        this.appendHistory({
+          at: next.updatedAt,
+          action: 'rollback',
+          package: { name, version: prev },
+          from: current,
+          to: prev,
+          by,
+          packageDigest: manifest.packageDigest,
+          ...(opts.approvalDigest !== undefined ? { approvalDigest: opts.approvalDigest } : {}),
+        })
+      } catch (e) {
+        // 补偿（先读后写）：history 落盘失败 → 回写原指针，不留「指针已动、无 history」半态。
+        // 补偿自身失败时不顶替原错误：合并上报（半态显式可见）；补偿成功则原错误原样抛出
+        try {
+          this.writeActive(active)
+        } catch (comp) {
+          throw new ReleaseError(
+            'RELEASE_HALF_STATE',
+            `appendHistory 失败（${e instanceof Error ? e.message : String(e)}）且补偿回写原指针也失败（${comp instanceof Error ? comp.message : String(comp)}）——指针与 history 可能不一致，须人工核对`,
+          )
+        }
+        throw e
+      }
+      return {
+        ok: true,
+        package: { name, version: prev },
+        previous: current,
+        versions: next.versions,
+      }
     })
-    return {
-      ok: true,
-      package: { name, version: prev },
-      previous: current,
-      versions: next.versions,
-    }
   }
 
   /** history 只读快照（P5：回滚后历史仍在）。 */
@@ -595,8 +677,15 @@ export class ReleaseStore {
     const hist = this.readHistory().filter(
       (h) => h.package.name === name && (h.action === 'activate' || h.action === 'rollback') && h.to !== null,
     )
-    // 从后往前找「当前 version 之前」的上一个 to
-    const idx = hist.findIndex((h) => h.to === before)
+    // 从后往前找「当前 version 最近一次成为 to」的前驱——末次匹配：同一版本多次激活/回滚时
+    // 取最近一次的前驱（findIndex 首次匹配会在双回滚场景跳版激活）。
+    let idx = -1
+    for (let i = hist.length - 1; i >= 0; i -= 1) {
+      if (hist[i].to === before) {
+        idx = i
+        break
+      }
+    }
     if (idx <= 0) {
       // 没有恰好等于 before 的记录时，取最近一条 to !== current 且 != before 的
       for (let i = hist.length - 1; i >= 0; i -= 1) {

@@ -267,7 +267,14 @@ export function buildModelGraph(input: {
     issues: graphIssues,
     revision: input.revision ?? 0,
     ...(input.skeleton
-      ? { skeleton: { confirmed: input.skeleton.confirmed, ids: input.skeleton.ids } }
+      ? {
+          skeleton: {
+            confirmed: input.skeleton.confirmed,
+            ids: input.skeleton.ids,
+            // 业务问题定义随骨架回显（建模前置）：重保存面板不丢已存 problem
+            ...(input.skeleton.problem !== undefined ? { problem: input.skeleton.problem } : {}),
+          },
+        }
       : {}),
   }
 }

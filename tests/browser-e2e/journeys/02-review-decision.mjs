@@ -51,12 +51,14 @@ export default {
     await c.step('用户勾选候选、填写理由并提交复核', async () => {
       const r = await c.program(`
         ${PANEL_JS}
-        const cb = panel.locator('input[type="checkbox"]').first()
+        // 候选勾选框按模板 data-e2e 稳定定位（经验回填反例框同为 checkbox，位置选择器会漂移）
+        const cb = panel.locator('input[data-e2e="cand-check"]').first()
         await cb.waitFor({ timeout: 10000 })
         await cb.check()
-        const reason = panel.locator('input[type="text"]').last()
+        // 理由框按 data-e2e 定位（placeholder 与 zh 文案耦合，换语言/改文案即失效）
+        const reason = panel.locator('input[data-e2e="review-reason"]')
         await reason.fill('browser-e2e：证据链齐全，同意进入动作面')
-        await panel.getByRole('button', { name: '提交复核', exact: true }).click()
+        await panel.locator('button[data-e2e="submit-review"]').click()
         await page.waitForTimeout(2500)
         const t = await panel.innerText()
         const lines = t.split('\\n').filter((l) => /已提交|REVIEW_|DEC-|错误/.test(l)).slice(-3)

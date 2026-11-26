@@ -663,6 +663,11 @@ export interface BatchRunItem {
   runId?: string
   summary?: BatchRunSummary
   error?: { code: string; message: string }
+  /**
+   * 运行回写回执（学习层旁路，S5.4.2）：经验初稿写回失败不吞事实——
+   * 带 runId 与原因显式 skipped，状态仍 ok（RunRecord 已保存，交付不回滚）。
+   */
+  experience?: { runId: string; created: true } | { runId: string; skipped: string }
 }
 
 export interface BatchRunOutput {

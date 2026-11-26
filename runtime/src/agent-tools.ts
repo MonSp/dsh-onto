@@ -8,7 +8,7 @@
  * - run_scenario 工具结果恒含 ruleId 回指、humanReviewRequired=true 与禁语扫描。
  * @module @dsh-onto/backend/agent-tools
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { isAbsolute, join, relative, resolve, dirname as pathDirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,7 @@ import {
   compareRunRecords,
   deriveFeatures,
   expandEntity,
+  experienceFromRun,
   exportRunArchive,
   isInsideDir,
   isValidId,
@@ -48,6 +49,7 @@ import {
   projectFeatures,
   retrieveSimilar,
   reviewExperienceNote,
+  runReplay,
   runScenario,
   saveExperienceNote,
   saveReportPage,
@@ -151,7 +153,7 @@ import { buildGraphForTool, capabilitiesFor } from './model-face.js'
 import { registerExpertTools } from './agent-experts.js'
 
 /** 读取本包或 core 的 package.json version（发布激活时分记；失败回退 0.0.0）。 */
-function readOwnVersion(which: 'core' | 'runtime'): string {
+export function readOwnVersion(which: 'core' | 'runtime'): string {
   try {
     const here = pathDirname(fileURLToPath(import.meta.url))
     const rel = which === 'runtime' ? '../package.json' : '../../core/package.json'
@@ -505,7 +507,7 @@ export function saveSkeletonForPkg(
   knowledge: KnowledgeStore,
   ws: { versionDir(name: string, version: string): string },
   versions: ReadonlyArray<{ name: string; version: string }>,
-  args: { packageId?: unknown; domainCode?: unknown; ids?: unknown; humanApproved?: unknown },
+  args: { packageId?: unknown; domainCode?: unknown; ids?: unknown; problem?: unknown; humanApproved?: unknown },
 ): SkeletonRecord {
   assertHumanApproved(args.humanApproved, '确认骨架')
   const packageId = typeof args.packageId === 'string' ? args.packageId : ''
@@ -547,7 +549,42 @@ export function saveSkeletonForPkg(
     domainCode,
     confirmed: true,
     ids: normalized,
+    ...normalizeProblemDef(args.problem),
   })
+}
+
+/**
+ * 业务问题定义轻结构（建模前置，issue #30 差量①）：goal/boundary/expected/counterexamples
+ * 形状校验——字符串/字符串数组；空对象不落键。反例是业务级「不算命中」样例，不与
+ * 经验层 counterexample 混用。
+ */
+function normalizeProblemDef(raw: unknown): { problem?: SkeletonRecord['problem'] } {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new AgentToolError('INVALID_ARGS', 'problem 必须是对象 {goal, boundary, expected[], counterexamples[]}')
+  }
+  const p = raw as Record<string, unknown>
+  const str = (v: unknown): string | undefined => {
+    if (v === undefined || v === null) return undefined
+    if (typeof v !== 'string') throw new AgentToolError('INVALID_ARGS', 'problem 字符串字段须是字符串')
+    const t = v.trim()
+    return t === '' ? undefined : t
+  }
+  const strList = (v: unknown): string[] | undefined => {
+    if (v === undefined || v === null) return undefined
+    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+      throw new AgentToolError('INVALID_ARGS', 'problem 列表字段须是字符串数组')
+    }
+    const out = (v as string[]).map((s) => s.trim()).filter((s) => s !== '')
+    return out.length > 0 ? out : undefined
+  }
+  const problem = {
+    ...(str(p.goal) !== undefined ? { goal: str(p.goal) } : {}),
+    ...(str(p.boundary) !== undefined ? { boundary: str(p.boundary) } : {}),
+    ...(strList(p.expected) !== undefined ? { expected: strList(p.expected) } : {}),
+    ...(strList(p.counterexamples) !== undefined ? { counterexamples: strList(p.counterexamples) } : {}),
+  }
+  return Object.keys(problem).length > 0 ? { problem } : {}
 }
 
 /** packageId 归一为裸包名（旧数据可能存 name@version；与 knowledge 管线同口径）。 */
@@ -955,23 +992,31 @@ export function runScenarioBatch(input: {
       assertRunContract(result)
       const phrases = collectPhrases(result, reds)
       const effective = result.effectiveDataset ?? dataset
-      saveRunRecord(
-        ws.root,
-        buildRunRecord({
-          package: { name: pkg.meta.name, version: pkg.meta.version },
-          dataset: effective,
-          inputDataset: dataset,
-          result,
-          redlines: phrases,
-          accessBinding: input.accessBinding,
-        }),
-      )
+      const rec = buildRunRecord({
+        package: { name: pkg.meta.name, version: pkg.meta.version },
+        dataset: effective,
+        inputDataset: dataset,
+        result,
+        redlines: phrases,
+        accessBinding: input.accessBinding,
+      })
+      saveRunRecord(ws.root, rec)
+      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
+      // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+      // 写回失败不吞事实：受控信封带 runId 与原因（状态仍 ok——RunRecord 已保存）。
+      let experience: NonNullable<BatchRunItem['experience']> = { runId: rec.runId, created: true }
+      try {
+        saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+      } catch (e) {
+        experience = { runId: rec.runId, skipped: e instanceof Error ? e.message : String(e) }
+      }
       rememberPhrases(result.runId, phrases)
       results.push({
         scenarioId,
         status: 'ok',
         runId: result.runId,
         summary: summarizeRunResult(result),
+        experience,
       })
     } catch (e) {
       // 失败隔离：单项错误落受控信封（机器码 + 整段禁语退避），不中断批次。
@@ -1331,7 +1376,9 @@ export function projectRecallHits(
 /**
  * annotate_experience 纯函数（experience-loop P4-3 / S5.4）：
  * 人审回填 + 首次标注共用——note 已存在走 reviewExperienceNote，不存在则从 RunRecord 新建。
- * humanApproved 人审契约：agent 不得自行标注；误迁移 by 必须非空人工身份（模型不自评）。
+ * humanApproved 人审契约：agent 不得自行标注。
+ * 误迁移只由人判：misTransfer.by 不收自报——一律取宿主可信身份（requireReviewerHostId
+ * fail-closed），入参 by 只作形状兼容（与 wire reviewExperience/annotateExperience 同口径）。
  * 审计闸与 CLI `exp annotate` 同口径：新建与回填标 success 均查审计（除非 counterexample）——
  * 机器闸不否决人审的部分留给 workbench `reviewExperience` 人审面（不经本函数）。
  * reusedFromRunId：复用归因（S5.4.4），新建与回填均可写，diff 机械生成。
@@ -1342,7 +1389,7 @@ export function annotateExperienceForTool(
     runId: string
     outcome?: ExperienceOutcome
     outcomeReason?: string
-    misTransfer?: { judged: boolean; by: string; note?: string }
+    misTransfer?: { judged: boolean; by?: string; note?: string }
     reviewFocus?: string[]
     counterexample?: boolean
     reusedFromRunId?: string
@@ -1364,17 +1411,29 @@ export function annotateExperienceForTool(
     args.outcomeReason !== undefined ||
     args.misTransfer !== undefined ||
     args.reviewFocus !== undefined ||
-    args.reusedFromRunId !== undefined
+    args.reusedFromRunId !== undefined ||
+    args.counterexample !== undefined
   if (!hasPatch) {
-    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / misTransfer / reviewFocus / reusedFromRunId 之一')
+    throw new AgentToolError('INVALID_ARGS', '至少提供 outcome / outcomeReason / counterexample / misTransfer / reviewFocus / reusedFromRunId 之一')
   }
-  if (args.misTransfer !== undefined) {
-    if (typeof args.misTransfer.judged !== 'boolean') {
-      throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
-    }
-    if (typeof args.misTransfer.by !== 'string' || args.misTransfer.by.trim() === '') {
-      throw new AgentToolError('INVALID_ARGS', 'misTransfer.by 必须为非空人工身份（误迁移只由人判）')
-    }
+  // 误迁移只由人判：by 一律取宿主可信身份（fail-closed），不收模型/表单自报。
+  // reviewedBy 同源（宿主身份已绑 by）：两条路径（回填/新建）都落人审定性留痕；
+  // 无 misTransfer 时尽力解析宿主身份（本函数可在无宿主上下文的人审契约下被调——
+  // 缺身份则不落 reviewedBy，不为此新增 fail-closed 面）。
+  const optionalHostReviewer = (): string | undefined => {
+    const id = businessPolicy.resolveIdentity()?.userId
+    return typeof id === 'string' && id !== '' ? `host:${id}` : undefined
+  }
+  const reviewer = args.misTransfer !== undefined ? requireReviewerHostId() : optionalHostReviewer()
+  const misPatch = args.misTransfer !== undefined
+    ? {
+        judged: args.misTransfer.judged,
+        by: reviewer as string,
+        ...(args.misTransfer.note !== undefined ? { note: args.misTransfer.note } : {}),
+      }
+    : undefined
+  if (misPatch !== undefined && typeof misPatch.judged !== 'boolean') {
+    throw new AgentToolError('INVALID_ARGS', 'misTransfer.judged 必须是 boolean')
   }
 
   let existing: ExperienceNote | null = null
@@ -1398,7 +1457,8 @@ export function annotateExperienceForTool(
   }
 
   if (existing !== null) {
-    gateSuccess(existing.counterexample || args.counterexample === true)
+    // 闸按「patch 后的 counterexample」判：人审清除反例后再标 success，须重新过审计
+    gateSuccess(args.counterexample !== undefined ? args.counterexample === true : existing.counterexample)
     // 旧签名升版：人审触碰即按当前包补 ruleShape（packageScope 不一致时 upgrade 内部跳过）。
     let upgradePkg: ReturnType<typeof loadPackage> | undefined
     try {
@@ -1410,10 +1470,13 @@ export function annotateExperienceForTool(
     const note = reviewExperienceNote(ws.root, args.runId, {
       outcome: args.outcome,
       outcomeReason: args.outcomeReason,
-      misTransfer: args.misTransfer,
+      counterexample: args.counterexample,
+      misTransfer: misPatch,
       reviewFocus: args.reviewFocus,
       reusedFromRunId: args.reusedFromRunId,
       upgradePkg,
+      // 人审回填者留痕（宿主身份已绑 by）：区分机械映射与人审定性
+      ...(reviewer !== undefined ? { reviewedBy: reviewer } : {}),
     })
     return projectAnnotateReceipt(note, false)
   }
@@ -1451,14 +1514,61 @@ export function annotateExperienceForTool(
         : undefined,
     counterexample,
     misTransfer:
-      args.misTransfer !== undefined
-        ? { judged: args.misTransfer.judged, by: args.misTransfer.by.trim(), note: args.misTransfer.note ?? '' }
+      misPatch !== undefined
+        ? { judged: misPatch.judged, by: misPatch.by, note: misPatch.note ?? '' }
         : undefined,
     reviewFocus: args.reviewFocus !== undefined ? [...args.reviewFocus] : undefined,
+    // 人审回填者留痕（宿主身份已绑 by）：新建即人审定性（区别于 experienceFromRun 机械初稿）
+    ...(reviewer !== undefined ? { reviewedBy: reviewer } : {}),
     savedAt: new Date().toISOString(),
   }
   saveExperienceNote(ws.root, note)
   return projectAnnotateReceipt(note, true)
+}
+
+/**
+ * 发布回放验收门槛（publish_business / publishRelease 共用口径，防两处漂移）：
+ * checkReplay=true 时全场景夹具 → 映射 → 场景回放 → 缺数诊断 + 基线对照，任一不过即拒。
+ * 纯内容包（无 sourceId 且无 apiSources shape）无法映射回放——显式拒、不静默空验收。
+ * 返回回放场景数（= 全场景数；缺夹具即拒）。
+ */
+export function runReplayAcceptance(dir: string, pkg: OntologyPackage, sourceId?: string): number {
+  if (sourceId === undefined && !pkg.apiSources.some((s) => s.shape !== undefined)) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      '纯内容包无 apiSources shape，无法回放验收——移除 checkReplay，或补充 apiSources/映射后用连接器式发布',
+    )
+  }
+  let checked = 0
+  for (const s of pkg.scenarios) {
+    const fixture = join(dir, 'fixtures', `replay-${s.id}.json`)
+    if (!existsSync(fixture)) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收要求全场景夹具：场景 ${s.id} 缺 fixtures/replay-${s.id}.json——不得空验收`,
+      )
+    }
+    const report = runReplay({
+      versionDir: dir,
+      scenarioId: s.id,
+      ...(sourceId !== undefined ? { sourceId } : {}),
+      check: true,
+    })
+    checked++
+    if (report.diagnostics.length > 0) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收未过（${s.id}）：缺数/映射诊断 ${report.diagnostics.length} 处——发布拒绝`,
+      )
+    }
+    if (report.comparison !== undefined && !report.comparison.ok) {
+      throw new AgentToolError(
+        'INVALID_ARGS',
+        `回放验收未过（${s.id}）：基线对照 ${report.comparison.diffs.length} 处不一致——发布拒绝`,
+      )
+    }
+  }
+  return checked
 }
 
 function projectAnnotateReceipt(
@@ -1663,6 +1773,8 @@ export function skillBodyUpdateEntry(
  *
  * packageId 省略（D11）→ 扫描全库：只处理「有经验记录且非 ISSUED」的包；
  * ISSUED 记入 skipped 不整单失败（扫全库是发现面，不该被单个只读包打断）。
+ * includePriorVersions（断链 B）：同包 meta.name 的历史版本经验（含 ISSUED 生产版）
+ * 参赛聚簇，草案落当前 DRAFT 版本——fork 后不必绕 CLI 先在旧版本出草案。
  */
 export function abstractExperienceForTool(
   ws: PackageWorkspace,
@@ -1670,7 +1782,22 @@ export function abstractExperienceForTool(
   args: {
     packageId?: string
     minCluster?: number
+    includePriorVersions?: boolean
     humanApproved?: unknown
+  },
+): ReturnType<typeof abstractExperienceInto> {
+  assertHumanApproved(args.humanApproved, '总结经验')
+  return abstractExperienceInto(ws, knowledge, args)
+}
+
+/** 抽象巩固纯执行（无工具人审闸）：wire 人审面（本人点击即人审事件）与工具面共用一套口径。 */
+export function abstractExperienceInto(
+  ws: PackageWorkspace,
+  knowledge: KnowledgeStore,
+  args: {
+    packageId?: string
+    minCluster?: number
+    includePriorVersions?: boolean
   },
 ): {
   package: string
@@ -1686,7 +1813,6 @@ export function abstractExperienceForTool(
   counters: number
   humanReviewRequired: true
 } {
-  assertHumanApproved(args.humanApproved, '总结经验')
   let minCluster: number | undefined
   if (args.minCluster !== undefined) {
     if (typeof args.minCluster !== 'number' || !Number.isInteger(args.minCluster) || args.minCluster < 1) {
@@ -1704,8 +1830,16 @@ export function abstractExperienceForTool(
     skills: number
     counters: number
   } => {
-    const abs = abstractSkillDrafts(ws.root, { pkg, minCluster })
-    const counters = abstractCounterexampleDrafts(ws.root, { pkg, minCluster })
+    const abs = abstractSkillDrafts(ws.root, {
+      pkg,
+      minCluster,
+      includePriorVersions: args.includePriorVersions,
+    })
+    const counters = abstractCounterexampleDrafts(ws.root, {
+      pkg,
+      minCluster,
+      includePriorVersions: args.includePriorVersions,
+    })
     const queued: AbstractQueuedEntry[] = []
     for (const a of [...abs, ...counters]) {
       const c = knowledge.addDraft({
@@ -1771,7 +1905,12 @@ export function abstractExperienceForTool(
   let countersTotal = 0
   for (const v of ws.listVersions()) {
     const scope = `${v.name}@${v.version}`
-    if (!scopes.has(scope)) continue
+    // 断链 B：fork 出的 DRAFT（如 pkg@1.1.0）自身无经验时，同名历史版本经验也要能进来——
+    // 否则 ISSUED 生产经验在扫全库路径同样失联（packageId 路径已由 includePriorVersions 放行）。
+    const hasPrior =
+      args.includePriorVersions === true
+      && [...scopes].some((s) => s !== scope && s.split('@')[0] === v.name)
+    if (!scopes.has(scope) && !hasPrior) continue
     if (v.status === 'ISSUED') {
       scanned.push({ package: scope, skipped: '已签发只读：请 fork 新版本（P1）', queued: 0, skills: 0, counters: 0 })
       continue
@@ -2812,17 +2951,27 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const phrases = collectPhrases(result, scenario?.outputContract.forbiddenPhrases ?? [])
           // 运行留痕（S2.1/S2.4）：effective 进 datasetDigest，原输入只留 inputDigest。
           const effective = result.effectiveDataset ?? dataset
-          saveRunRecord(
-            ws.root,
-            buildRunRecord({
-              package: { name: pkg.meta.name, version: pkg.meta.version },
-              dataset: effective,
-              inputDataset: dataset,
-              result,
-              redlines: phrases,
-              accessBinding: identity && runAccessBinding(identity),
-            }),
-          )
+          const rec = buildRunRecord({
+            package: { name: pkg.meta.name, version: pkg.meta.version },
+            dataset: effective,
+            inputDataset: dataset,
+            result,
+            redlines: phrases,
+            accessBinding: identity && runAccessBinding(identity),
+          })
+          saveRunRecord(ws.root, rec)
+          // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
+          // 学习层不否决运行交付；缺卡由复核桥接 recordReviewDecision 补建自愈。
+          // 纯 fire-and-forget（出口是运行结果契约，无独立回执位）：写回失败不改判本次交付，
+          // 事实留在 experiences/ 缺卡状态——复核面 recordReviewDecision/annotateExperience 自愈补建。
+          try {
+            saveExperienceNote(ws.root, experienceFromRun(rec, pkg))
+          } catch (e) {
+            // 学习层旁路：RunRecord 已保存，缺卡由复核桥接补建——失败显式留痕（runId + 原因），不静默吞
+            console.warn(
+              `warn: run ${rec.runId} saved, experience draft not written (${e instanceof Error ? e.message : String(e)}) — it will be created on review backfill`,
+            )
+          }
           rememberPhrases(result.runId, phrases)
           return toolOut(enforceOutputPolicy(result, phrases))
         },
@@ -3215,7 +3364,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         '标注/回填一条经验记录（ExperienceNote 的 outcome、误迁移、reviewFocus）。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确指示标注时传 true，agent 不得自行标注；'
         + '实际放行以系统批准卡为准（可信人审 T2.1）。'
-        + '误迁移只由人判（misTransfer.by 须为非空人工身份）。'
+        + '误迁移只由人判：判定人绑定宿主可信身份，不收自报。'
         + 'note 不存在时按 RunRecord 新建（须带 outcome）；已存在则回填。'
         + '新建与回填标 success 均查审计闸（除非 counterexample）。'
         + 'reusedFromRunId 写复用归因（diff 机械生成）。返回结构位回执，认定出口只在人工。',
@@ -3229,7 +3378,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         outcomeReason: { type: 'string', description: '结论理由（结构位补充，非自由流程）' },
         misTransfer: {
           type: 'json',
-          description: '误迁移判定 {judged, by, note?}——by 必须为非空人工身份（模型不自评）',
+          description: '误迁移判定 {judged, note?}——判定人绑定宿主可信身份（不收自报，by 入参只作形状兼容）',
         },
         reviewFocus: {
           type: 'array',
@@ -3274,6 +3423,19 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           counterexample?: boolean
           reusedFromRunId?: string
         }, exec) => {
+          // 误迁移只由人判：by 绑宿主可信身份（fail-closed 先行，不收自报）——
+          // 批准卡摘要与落档用同一绑定值，人批的即人存的。
+          const misBound =
+            raw.misTransfer !== undefined && raw.misTransfer !== null
+              ? (() => {
+                  const m = raw.misTransfer as { judged: boolean; note?: string }
+                  return {
+                    judged: m.judged,
+                    by: requireReviewerHostId(),
+                    ...(m.note !== undefined ? { note: m.note } : {}),
+                  }
+                })()
+              : undefined
           // 人审闸（T2.1）：标注经验是人审写动作，系统批准卡实况放行。
           await approve(exec, {
             toolName: 'annotate_experience',
@@ -3283,7 +3445,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               runId: raw.runId,
               outcome: raw.outcome ?? null,
               outcomeReason: raw.outcomeReason ?? null,
-              misTransfer: raw.misTransfer ?? null,
+              misTransfer: misBound ?? null,
               reviewFocus: raw.reviewFocus ?? null,
               counterexample: raw.counterexample ?? null,
               reusedFromRunId: raw.reusedFromRunId ?? null,
@@ -3295,10 +3457,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             humanApproved: raw.humanApproved,
             outcome: raw.outcome,
             outcomeReason: raw.outcomeReason,
-            misTransfer:
-              raw.misTransfer !== undefined && raw.misTransfer !== null
-                ? (raw.misTransfer as { judged: boolean; by: string; note?: string })
-                : undefined,
+            misTransfer: misBound,
             reviewFocus: raw.reviewFocus,
             counterexample: raw.counterexample,
             reusedFromRunId: raw.reusedFromRunId,
@@ -3334,6 +3493,12 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           type: 'number',
           description: '最小簇员数（缺省 2；≥1 整数）——低于该值不出草案',
         },
+        includePriorVersions: {
+          type: 'boolean',
+          description:
+            '同包历史版本经验（含已签发生产版，≤ 当前版本；未来版不参赛）一并参赛聚簇，草案落当前 DRAFT 版本——'
+            + 'fork 出新版本后总结 1.0.0 生产经验时传 true（否则按精确版本匹配、找不到旧经验）',
+        },
         humanApproved: {
           type: 'boolean',
           required: true,
@@ -3362,7 +3527,10 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           ),
       },
       execute: toolExecute(
-        async (args: { packageId?: string; minCluster?: number; humanApproved: boolean }, exec) => {
+        async (
+          args: { packageId?: string; minCluster?: number; includePriorVersions?: boolean; humanApproved: boolean },
+          exec,
+        ) => {
           // 人审闸（T2.1）：经验抽象只入队，但入队即占人审队列——同族过系统批准卡。
           await approve(exec, {
             toolName: 'abstract_experience',
@@ -3371,6 +3539,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               action: 'abstract_experience',
               packageId: args.packageId ?? null,
               minCluster: args.minCluster ?? null,
+              includePriorVersions: args.includePriorVersions ?? null,
             }),
             summary: `经验抽象（包 ${args.packageId ?? '全库'}）`,
           })
@@ -3378,6 +3547,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const result = abstractExperienceForTool(ws, knowledge, {
             packageId: args.packageId,
             minCluster: args.minCluster,
+            includePriorVersions: args.includePriorVersions,
             humanApproved: args.humanApproved,
           })
           // value 闸：指定包用包内场景红线；扫全库用工作区全量（自由文本可能撞任一包红线）。
@@ -4320,19 +4490,31 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       name: 'publish_business',
       description:
         '发布业务域到运行中平台（免重启声明式发布 v1）：把工作区已签发包收编进发布台账（同摘要幂等，'
-        + '不改写包内容），并按受控数据源配置登记映射连接器（转换契约随包 shape + source-maps）。'
+        + '不改写包内容）。两式：纯内容 dataset 包（不传 sourceId——只收编台账，运行走内联 dataset 通道）｜'
+        + '连接器包（sourceId + 受控基址，按包 shape + source-maps 校验并登记映射连接器）。'
+        + '可选 checkReplay=true 在发布前跑随包夹具回放验收（缺数诊断/基线对照不过即拒发；要求验收时全场景须有夹具，缺一即拒）。'
         + '不激活——激活是独立人工动作（activate_business）。发布后未激活的包拒绝运行（fail-closed）但保持可见；'
         + '同名同版本不同内容拒绝（须 fork 新版本）。回滚用 rollback_business，只动自身指针，不影响已有业务。'
         + 'humanApproved 是意图声明（非放行凭证）：仅当用户明确要求发布该业务域时传 true；实际放行以系统批准卡为准。',
       parameters: {
         name: { type: 'string', required: true, description: '包名（工作区已有该版本且已签发）' },
         version: { type: 'string', required: true, description: '包版本' },
-        sourceId: { type: 'string', required: true, description: '数据源 id（须在包 apiSources 声明 shape）' },
-        sourceKind: { type: 'string', required: true, description: '连接器性质：simulated（演练）| formal（正式）' },
-        apiBaseUrl: { type: 'string', required: true, description: '数据源基址（受控配置）：https 任意；http 仅回环' },
+        sourceId: {
+          type: 'string',
+          description: '数据源 id（连接器式发布；须在包 apiSources 声明 shape）。纯内容 dataset 包不传',
+        },
+        sourceKind: { type: 'string', description: '连接器性质：simulated（演练）| formal（正式）；连接器式必填' },
+        apiBaseUrl: {
+          type: 'string',
+          description: '数据源基址（受控配置）：https 任意；http 仅回环；连接器式必填',
+        },
         apiTokenEnv: {
           type: 'string',
           description: '可选静态令牌的宿主 env 变量名（部署配置；只传名字，令牌值不入对话/不入包/不落盘）',
+        },
+        checkReplay: {
+          type: 'boolean',
+          description: '发布前跑随包夹具回放验收（缺数诊断/基线对照不过即拒发；要求验收时全场景须有夹具——缺一即拒，不得空验收）',
         },
         humanApproved: {
           type: 'boolean',
@@ -4347,16 +4529,28 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           properties: {
             name: { type: 'string', required: true },
             version: { type: 'string', required: true },
-            sourceId: { type: 'string', required: true },
+            mode: { type: 'string', required: true },
+            sourceId: { type: 'string' },
             imported: { type: 'string', required: true },
             activated: { type: 'boolean', required: true, const: false },
             humanReviewRequired: { type: 'boolean', required: true, const: true },
           },
         },
         render: (_args, value) => {
-          const v = value as { name: string; version: string; sourceId: string; imported: string }
+          const v = value as {
+            name: string
+            version: string
+            sourceId?: string
+            imported: string
+            replayChecked?: number
+          }
+          const srcPart =
+            v.sourceId !== undefined && v.sourceId !== ''
+              ? ` · 数据源 ${v.sourceId}（${v.imported}）`
+              : ` · 纯内容包（${v.imported}）`
+          const replayPart = (v.replayChecked ?? 0) > 0 ? ' · 回放验收已过' : ''
           return textBlock(
-            `业务域已发布（未激活）：${v.name}@${v.version} · 数据源 ${v.sourceId}（${v.imported}）。`
+            `业务域已发布（未激活）：${v.name}@${v.version}${srcPart}${replayPart}。`
             + '激活是独立人工动作：activate_business（系统批准卡）。未激活前该包运行一律拒绝。',
           )
         },
@@ -4366,17 +4560,18 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           args: {
             name: string
             version: string
-            sourceId: string
-            sourceKind: string
-            apiBaseUrl: string
+            sourceId?: string
+            sourceKind?: string
+            apiBaseUrl?: string
             apiTokenEnv?: string
+            checkReplay?: boolean
             humanApproved: boolean
           },
           exec,
         ) => {
           assertHumanApproved(args.humanApproved, '发布')
-          const kind = parseSourceKind(args.sourceKind)
-          const url = parseControlledBaseUrl(args.apiBaseUrl)
+          const hasSource = typeof args.sourceId === 'string' && args.sourceId !== ''
+          const mode = hasSource ? 'connector' : 'content'
           // 令牌只传 env 变量名（值不过模型面）；声明了名但宿主 env 取不到值 → fail-closed。
           const tokenEnv = args.apiTokenEnv !== undefined && args.apiTokenEnv !== ''
             ? parseTokenEnvName(args.apiTokenEnv)
@@ -4385,25 +4580,44 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (tokenEnv !== undefined && token === null) {
             throw new AgentToolError('INVALID_ARGS', `令牌 env ${tokenEnv} 缺失/为空：请先在宿主 env 配置后重试`)
           }
-          // sourceId 归属（受控数据源全局命名空间）：提前检查省批准卡；最终判定在 upsertSourceConfig 锁内复核。
-          const owner = loadSourceConfigs(dataDir).find((c) => c.sourceId === args.sourceId)
-          if (owner !== undefined && owner.package.name !== args.name) {
-            throw new AgentToolError(
-              'INVALID_ARGS',
-              `sourceId ${args.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
-            )
+          let kind: ReturnType<typeof parseSourceKind> | undefined
+          let url: ReturnType<typeof parseControlledBaseUrl> | undefined
+          let srcShape: NonNullable<OntologyPackage['apiSources'][number]['shape']> | undefined
+          let maps: NonNullable<OntologyPackage['sourceMaps']> = []
+          if (hasSource) {
+            if (args.sourceKind === undefined || args.apiBaseUrl === undefined) {
+              throw new AgentToolError('INVALID_ARGS', '连接器式发布须提供 sourceKind 与 apiBaseUrl（纯内容包不传 sourceId）')
+            }
+            kind = parseSourceKind(args.sourceKind)
+            url = parseControlledBaseUrl(args.apiBaseUrl)
+            // sourceId 归属（受控数据源全局命名空间）：提前检查省批准卡；最终判定在 upsertSourceConfig 锁内复核。
+            const owner = loadSourceConfigs(dataDir).find((c) => c.sourceId === args.sourceId)
+            if (owner !== undefined && owner.package.name !== args.name) {
+              throw new AgentToolError(
+                'INVALID_ARGS',
+                `sourceId ${args.sourceId} 已被 ${owner.package.name}@${owner.package.version} 占用：换 sourceId 或由原包发布`,
+              )
+            }
           }
           // 先验后批（T2.1）：ISSUED/锚点/契约不过不劳烦批准卡；包内容指纹进批准摘要。
           const dir = ws.versionDir(args.name, args.version)
           const pkg = loadPackage(dir)
-          const src = pkg.apiSources.find((s) => s.id === args.sourceId)
-          if (src === undefined || src.shape === undefined) {
-            throw new AgentToolError('INVALID_ARGS', `${args.sourceId} 未在包 apiSources 声明 shape`)
+          if (hasSource) {
+            const src = pkg.apiSources.find((s) => s.id === args.sourceId)
+            if (src === undefined || src.shape === undefined) {
+              throw new AgentToolError('INVALID_ARGS', `${args.sourceId} 未在包 apiSources 声明 shape`)
+            }
+            srcShape = src.shape
+            maps = pkg.sourceMaps ?? []
+            if (maps.length === 0) {
+              throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
+            }
           }
-          const maps = pkg.sourceMaps ?? []
-          if (maps.length === 0) {
-            throw new AgentToolError('INVALID_ARGS', '包内无 source-maps：先完成映射（source map init/preview）')
-          }
+          // 可选回放验收（发布门槛，与 wire publishRelease 共用 runReplayAcceptance 口径）：
+          // 全场景夹具 → 映射 → 缺数诊断 + 基线对照；缺夹具/缺数/不一致任一即拒，不得空验收。
+          const replayChecked = args.checkReplay === true
+            ? runReplayAcceptance(dir, pkg, hasSource ? (args.sourceId as string) : undefined)
+            : 0
           const manifestOpts = {
             coreCompat: { min: '0.2.0' },
             runtimeCompat: { min: '0.2.0' },
@@ -4416,15 +4630,21 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             name: args.name,
             version: args.version,
             packageDigest: manifest.packageDigest,
-            sourceId: args.sourceId,
-            kind,
-            apiBaseUrl: `${url.origin}${url.pathname}`,
+            mode,
+            sourceId: args.sourceId ?? null,
+            kind: kind ?? null,
+            apiBaseUrl: url !== undefined ? `${url.origin}${url.pathname}` : null,
+            checkReplay: args.checkReplay === true,
           })
           const grant = await approve(exec, {
             toolName: 'publish_business',
             action: `发布业务域 ${args.name}@${args.version}`,
             digest,
-            summary: `数据源 ${args.sourceId}（${kind}）→ ${url.origin}${url.pathname}，内容摘要 ${manifest.packageDigest.slice(0, 12)}，发布后须人工激活`,
+            summary:
+              (hasSource
+                ? `数据源 ${args.sourceId}（${kind}）→ ${url?.origin}${url?.pathname}`
+                : '纯内容包（无受控数据源）')
+              + `，内容摘要 ${manifest.packageDigest.slice(0, 12)}，发布后须人工激活`,
           })
           // 批准回执后复核指纹——批准与收编之间包内容漂移 → 凭证作废（APPROVAL_STALE）。
           const fresh = buildReleaseManifest(dir, manifestOpts)
@@ -4439,37 +4659,40 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             { kind: 'controlled-upload', bundle: buildReleaseBundle(dir, fresh) },
             { approvalDigest: grant.approvalDigest },
           )
-          // 受控数据源配置落盘先行（部署配置，与发布台账分离；落盘失败不留「内存有登记、磁盘无配置」半态，
-          // 下次宿主启动按配置恢复）。令牌只落 env 变量名，值不落盘。
-          upsertSourceConfig(dataDir, {
-            sourceId: args.sourceId,
-            package: { name: args.name, version: args.version },
-            sourceKind: kind,
-            apiBaseUrl: args.apiBaseUrl,
-            ...(tokenEnv !== undefined ? { apiTokenEnv: tokenEnv } : {}),
-            registeredAt: new Date().toISOString(),
-          })
-          // 登记连接器（免重启：运行中 registry 即时生效；同 id 先注销再登记 = 幂等替换）
-          if (dataSources.has(args.sourceId)) dataSources.unregister(args.sourceId)
-          dataSources.register(
-            args.sourceId,
-            createMappedDataConnector({
-              sourceId: args.sourceId,
-              baseUrl: args.apiBaseUrl,
-              shape: src.shape,
-              maps,
-              kind,
-              ...(token !== null ? { auth: { token } } : {}),
-            }),
-          )
+          if (hasSource && kind !== undefined && url !== undefined && srcShape !== undefined) {
+            // 受控数据源配置落盘先行（部署配置，与发布台账分离；落盘失败不留「内存有登记、磁盘无配置」半态，
+            // 下次宿主启动按配置恢复）。令牌只落 env 变量名，值不落盘。
+            upsertSourceConfig(dataDir, {
+              sourceId: args.sourceId as string,
+              package: { name: args.name, version: args.version },
+              sourceKind: kind,
+              apiBaseUrl: args.apiBaseUrl as string,
+              ...(tokenEnv !== undefined ? { apiTokenEnv: tokenEnv } : {}),
+              registeredAt: new Date().toISOString(),
+            })
+            // 登记连接器（免重启：运行中 registry 即时生效；同 id 先注销再登记 = 幂等替换）
+            if (dataSources.has(args.sourceId as string)) dataSources.unregister(args.sourceId as string)
+            dataSources.register(
+              args.sourceId as string,
+              createMappedDataConnector({
+                sourceId: args.sourceId as string,
+                baseUrl: args.apiBaseUrl as string,
+                shape: srcShape,
+                maps,
+                kind,
+                ...(token !== null ? { auth: { token } } : {}),
+              }),
+            )
+          }
           return toolOut(
             enforceOutputPolicy(
               {
                 name: args.name,
                 version: args.version,
-                sourceId: args.sourceId,
-                sourceKind: kind,
+                mode,
+                ...(hasSource ? { sourceId: args.sourceId as string, sourceKind: kind } : {}),
                 imported: imported.idempotent === true ? 'idempotent' : 'new',
+                replayChecked,
                 activated: false as const,
                 humanReviewRequired: true as const,
               },
@@ -4530,7 +4753,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             summary: `授权人激活后新运行绑定 ${args.version}`,
           })
           const act = releases.activate(args.name, args.version, {
-            authorizedBy: identity.userId,
+            // 激活操作者 = 宿主可信身份（N11：assertAuthorizedActor 只放行 host:<userId>）
+            authorizedBy: `host:${identity.userId}`,
             approvalDigest: grant.approvalDigest,
           })
           return toolOut(
@@ -4594,7 +4818,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             summary: `活动指针回上一版本（仅 ${args.name} 自身）`,
           })
           const act = releases.rollback(args.name, {
-            authorizedBy: identity.userId,
+            // 回滚操作者 = 宿主可信身份（N11：assertAuthorizedActor 只放行 host:<userId>）
+            authorizedBy: `host:${identity.userId}`,
             approvalDigest: grant.approvalDigest,
           })
           const rolled = (act as { package?: { version?: string } }).package?.version ?? ''
@@ -4676,6 +4901,12 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         packageId: { type: 'string', required: true, description: '目标包 name@version' },
         domainCode: { type: 'string', required: true, description: '域码（大写字母数字，1–12 位）' },
         ids: { type: 'array', required: true, description: '全量骨架 ID 清单（每项须为合法本体 ID，去重）' },
+        problem: {
+          type: 'json',
+          description:
+            '业务问题定义轻结构（可选，先于原料的前置工件）：{goal, boundary, expected[], counterexamples[]}'
+            + '——counterexamples 是业务级「不算命中」样例，与运行反例不同层',
+        },
         humanApproved: {
           type: 'boolean',
           required: true,
@@ -4701,7 +4932,17 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
         },
       },
       execute: toolExecute(
-        async (args: { packageId: string; domainCode: string; ids: string[]; humanApproved: boolean }, exec) => {
+        async (
+          args: {
+            packageId: string
+            domainCode: string
+            // 宽入参（schema 推断 JsonValue[]）：形状校验收口在 saveSkeletonForPkg
+            ids: unknown[]
+            problem?: unknown
+            humanApproved: boolean
+          },
+          exec,
+        ) => {
           await approve(exec, {
             toolName: 'save_skeleton',
             action: `确认骨架 ${args.packageId}`,
@@ -4710,6 +4951,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
               packageId: args.packageId,
               domainCode: args.domainCode,
               ids: [...(args.ids ?? [])].sort(),
+              problem: args.problem ?? null,
             }),
             summary: `${(args.ids ?? []).length} 个 ID 落盘（域 ${args.domainCode}）`,
           })

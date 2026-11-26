@@ -4,9 +4,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import {
   PackageWorkspace,
   savePackage,
@@ -198,7 +198,7 @@ test('P2a2: manifest 在、包实物缺失 → 同摘要导入自愈补写（防
     const again = store.importRelease({ kind: 'controlled-upload', bundle })
     assert.equal(again.idempotent, true)
     assert.ok(existsSync(join(ws.versionDir('test-pkg', '1.0.0'), 'package.yaml')))
-    const act = store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    const act = store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:human-deployer' })
     assert.equal(act.ok, true)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -365,7 +365,7 @@ test('P4: 激活升级后 filter/assert 只认活动版；旧 RunRecord 版本�
     store.importRelease({ kind: 'controlled-upload', bundle: b10 })
     store.importRelease({ kind: 'controlled-upload', bundle: b11 })
 
-    store.activate('test-pkg', '1.0.0', { authorizedBy: 'ops-admin' })
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' })
     assert.equal(store.activeVersion('test-pkg'), '1.0.0')
 
     // 过滤：只留 1.0.0
@@ -375,7 +375,7 @@ test('P4: 激活升级后 filter/assert 只认活动版；旧 RunRecord 版本�
     assert.deepEqual(filtered.map((v) => v.version), ['1.0.0'])
 
     // 升级激活 1.1.0
-    store.activate('test-pkg', '1.1.0', { authorizedBy: 'ops-admin' })
+    store.activate('test-pkg', '1.1.0', { authorizedBy: 'host:ops-admin' })
     assert.equal(store.activeVersion('test-pkg'), '1.1.0')
     const filtered2 = store.filterActiveVersions(versions)
     assert.deepEqual(filtered2.map((v) => v.version), ['1.1.0'])
@@ -387,7 +387,7 @@ test('P4: 激活升级后 filter/assert 只认活动版；旧 RunRecord 版本�
     const manifestPath = join(a.dir, 'derived', 'manifest.yaml')
     const originalManifest = readFileSync(manifestPath, 'utf8')
     writeFileSync(manifestPath, `${originalManifest}\n# changed`, 'utf8')
-    assert.throws(() => store.rollback('test-pkg', { authorizedBy: 'ops-admin' }))
+    assert.throws(() => store.rollback('test-pkg', { authorizedBy: 'host:ops-admin' }))
     assert.equal(store.activeVersion('test-pkg'), '1.1.0')
     assert.deepEqual(store.readHistory(), historyBeforeRollback)
     writeFileSync(manifestPath, originalManifest, 'utf8')
@@ -398,7 +398,7 @@ test('P4: 激活升级后 filter/assert 只认活动版；旧 RunRecord 版本�
 
     // 在途提案版本字段不改写（结构模拟：activate 前后提案对象引用不变）
     const proposal = { packageVersion: '1.0.0', id: 'PROP-1' }
-    store.activate('test-pkg', '1.1.0', { authorizedBy: 'ops-admin' })
+    store.activate('test-pkg', '1.1.0', { authorizedBy: 'host:ops-admin' })
     assert.equal(proposal.packageVersion, '1.0.0')
 
     // versions 分记
@@ -443,7 +443,7 @@ test('发布业务 v1：已受管（有 manifest）未激活 → RELEASE_NOT_ACT
       (e) => e instanceof ReleaseError && e.code === 'RELEASE_NOT_ACTIVE',
     )
     // 激活后放行；同包其它版本仍拒（指针绑定）
-    store.activate('test-pkg', '1.0.0', { authorizedBy: 'human-deployer' })
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:human-deployer' })
     store.assertActiveBinding('test-pkg', '1.0.0')
     assert.throws(
       () => store.assertActiveBinding('test-pkg', '9.9.9'),
@@ -500,7 +500,7 @@ test('strict publishing requires a valid active pointer and rejects unmanaged pa
     expectReleaseCode(() => store.assertActiveBinding('test-pkg', '1.0.0'), 'RELEASE_NOT_ACTIVE')
     assert.deepEqual(store.filterActiveVersions(ws.listVersions()), [])
     store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
-    store.activate('test-pkg', '1.0.0', { authorizedBy: 'ops-admin' })
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' })
     store.assertActiveBinding('test-pkg', '1.0.0')
     expectReleaseCode(() => store.assertActiveBinding('unmanaged', '1.0.0'), 'RELEASE_NOT_ACTIVE')
     writeFileSync(store.activePath, '{invalid', 'utf8')
@@ -536,13 +536,13 @@ test('P5: 回滚保留 history；目标不存在 → RELEASE_NOT_FOUND', () => {
     const store = storeOf(root, ws)
     store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
     store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir2) })
-    store.activate('test-pkg', '1.0.0', { authorizedBy: 'ops-admin' })
-    store.activate('test-pkg', '1.1.0', { authorizedBy: 'ops-admin' })
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' })
+    store.activate('test-pkg', '1.1.0', { authorizedBy: 'host:ops-admin' })
 
     const before = store.readHistory()
     assert.ok(before.length >= 2)
 
-    const result = store.rollback('test-pkg', { authorizedBy: 'ops-admin' })
+    const result = store.rollback('test-pkg', { authorizedBy: 'host:ops-admin' })
     assert.equal(result.package.version, '1.0.0')
     assert.equal(store.activeVersion('test-pkg'), '1.0.0')
 
@@ -555,12 +555,12 @@ test('P5: 回滚保留 history；目标不存在 → RELEASE_NOT_FOUND', () => {
     // 不存在版本：虚构回滚目标拒绝
     // 直接把指针指到不存在的版本再 rollback——用 activate 拒绝不存在版本
     expectReleaseCode(
-      () => store.activate('test-pkg', '9.9.9', { authorizedBy: 'ops-admin' }),
+      () => store.activate('test-pkg', '9.9.9', { authorizedBy: 'host:ops-admin' }),
       'RELEASE_NOT_FOUND',
     )
     // unknown 包 rollback
     expectReleaseCode(
-      () => store.rollback('never-imported', { authorizedBy: 'ops-admin' }),
+      () => store.rollback('never-imported', { authorizedBy: 'host:ops-admin' }),
       'RELEASE_NOT_FOUND',
     )
     // 发布物未被删除
@@ -588,15 +588,24 @@ test('激活授权：agent/llm → RELEASE_UNAUTHORIZED；能力缺失 → RELEA
       () => store.activate('test-pkg', '1.0.0', { authorizedBy: '' }),
       'RELEASE_UNAUTHORIZED',
     )
-    // 能力不足
+    // N11：裸自称（无 host: 前缀）拒；拒词段绕行（host:llm）同拒
     expectReleaseCode(
       () => store.activate('test-pkg', '1.0.0', { authorizedBy: 'ops' }),
+      'RELEASE_UNAUTHORIZED',
+    )
+    expectReleaseCode(
+      () => store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:llm' }),
+      'RELEASE_UNAUTHORIZED',
+    )
+    // 能力不足（宿主身份过闸后才查能力）
+    expectReleaseCode(
+      () => store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops' }),
       'RELEASE_CAPABILITY_MISMATCH',
     )
     // 补能力后成功
     const store2 = storeOf(root, ws, { capabilities: () => ['ticket-sim'] })
     // 需要重新 import？manifest 已在——直接 activate
-    const r = store2.activate('test-pkg', '1.0.0', { authorizedBy: 'ops' })
+    const r = store2.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops' })
     assert.equal(r.ok, true)
     assert.equal(store2.activeVersion('test-pkg'), '1.0.0')
   } finally {
@@ -632,12 +641,109 @@ test('纯函数：parse/checkCompat/assertAuthorized/assertCapabilities', () => 
   assert.equal(checkCompat(m, { core: '1.5.0', runtime: '3.0.0' }).ok, true)
   assert.equal(checkCompat(m, { core: '0.9.0', runtime: '1.0.0' }).ok, false)
   assert.equal(checkCompat(m, { core: '2.1.0', runtime: '1.0.0' }).ok, false)
+  // N11：只放行宿主可信身份 host:<userId>；拒词逻辑保持（整串与 userId 段都查）
   assert.throws(() => assertAuthorizedActor('llm'), (e) => e.code === 'RELEASE_UNAUTHORIZED')
-  assert.equal(assertAuthorizedActor(' human-op '), 'human-op')
+  assert.throws(() => assertAuthorizedActor('agent'), (e) => e.code === 'RELEASE_UNAUTHORIZED')
+  assert.throws(() => assertAuthorizedActor(' human-op '), (e) => e.code === 'RELEASE_UNAUTHORIZED', '裸自称不放行')
+  assert.throws(() => assertAuthorizedActor('host:'), (e) => e.code === 'RELEASE_UNAUTHORIZED', '空 userId 拒')
+  assert.throws(() => assertAuthorizedActor('host:llm'), (e) => e.code === 'RELEASE_UNAUTHORIZED', '拒词段绕行同拒')
+  assert.equal(assertAuthorizedActor(' host:human-op '), 'host:human-op')
   assert.throws(
     () => assertConnectorCapabilities(['ext'], ['other']),
     (e) => e.code === 'RELEASE_CAPABILITY_MISMATCH',
   )
   assertConnectorCapabilities(['ext'], ['ext', 'dryrun'])
   assertConnectorCapabilities([], [])
+})
+
+/* ── G9 指针原子性：持锁（TOCTOU）+ appendHistory 失败补偿 ────────────────── */
+
+function issueVersion(ws, name, version) {
+  const dir = ws.createPackage({ name, version, domain: 'TST' })
+  const pkg = minimalPkg({
+    meta: {
+      kind: 'BusinessOntologyPackage',
+      name,
+      version,
+      domain: 'TST',
+      metaFrameworkVersion: '1.0',
+      status: 'DRAFT',
+      issueRecord: [],
+      externalRefs: [],
+    },
+  })
+  savePackage(dir, pkg)
+  ws.transition(name, version, 'IN_REVIEW')
+  ws.transition(name, version, 'ISSUED', '张三（人工）', '人审通过')
+  derivePackage(dir)
+  return dir
+}
+
+test('G9 补偿：appendHistory 注入失败 → 指针回写原值（先读后写，不留「指针已动、无 history」半态）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    // ① 无原指针：首次激活 appendHistory 失败 → active.json 撤下（补偿回 null）
+    store.appendHistory = () => {
+      throw new Error('injected-history-failure')
+    }
+    assert.throws(
+      () => store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' }),
+      /injected-history-failure/,
+    )
+    assert.equal(store.readActive(), null, '补偿后不得留半态指针')
+    // ② 有原指针：回写旧值
+    delete store.appendHistory
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' })
+    const dir110 = issueVersion(ws, 'test-pkg', '1.1.0')
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir110) })
+    store.appendHistory = () => {
+      throw new Error('injected-history-failure')
+    }
+    assert.throws(
+      () => store.activate('test-pkg', '1.1.0', { authorizedBy: 'host:ops-admin' }),
+      /injected-history-failure/,
+    )
+    assert.equal(store.activeVersion('test-pkg'), '1.0.0', '激活半态须回写原指针')
+    // ③ rollback 同口径：history 失败 → 指针留在当前版
+    delete store.appendHistory
+    store.activate('test-pkg', '1.1.0', { authorizedBy: 'host:ops-admin' })
+    store.appendHistory = () => {
+      throw new Error('injected-history-failure')
+    }
+    assert.throws(
+      () => store.rollback('test-pkg', { authorizedBy: 'host:ops-admin' }),
+      /injected-history-failure/,
+    )
+    assert.equal(store.activeVersion('test-pkg'), '1.1.0', '回滚半态须回写原指针')
+    // ④ 恢复后全链可走：回滚成功且 history 成长
+    delete store.appendHistory
+    const before = store.readHistory().length
+    const rolled = store.rollback('test-pkg', { authorizedBy: 'host:ops-admin' })
+    assert.equal(rolled.package.version, '1.0.0')
+    assert.equal(store.activeVersion('test-pkg'), '1.0.0')
+    assert.ok(store.readHistory().length > before, 'history 只增不删')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('G9 持锁：activate/rollback 全程锁内（陈锁按 mtime 打破后可入、退出即清锁）', () => {
+  const { root, ws, dir } = setupIssuedPkg()
+  try {
+    const store = storeOf(root, ws)
+    store.importRelease({ kind: 'controlled-upload', bundle: makeBundle(dir) })
+    // 造陈锁（mtime 早于 LOCK_STALE_MS）：打破后重新竞争，不直接进临界区也不永久卡死
+    const lockFile = `${store.activePath}.lock`
+    mkdirSync(dirname(lockFile), { recursive: true })
+    writeFileSync(lockFile, 'stale', 'utf8')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(lockFile, past, past)
+    store.activate('test-pkg', '1.0.0', { authorizedBy: 'host:ops-admin' })
+    assert.equal(store.activeVersion('test-pkg'), '1.0.0')
+    assert.ok(!existsSync(lockFile), '临界区退出即清锁')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

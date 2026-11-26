@@ -21,10 +21,10 @@
  *   dsh-onto knowledge materialize --dir <versionDir> --ids a,b,c [--root <ws>]
  *   dsh-onto exp recall --dir <versionDir> --scenario <SCN> --data run.json [--top-k N] [--threshold T]
  *   dsh-onto exp annotate --dir <versionDir> --run <runId> --outcome success|partial|failure|pending-human
- *                         [--reason R] [--counterexample] [--reused-from <runId>] [--review-focus a,b]
+ *                         [--reason R] [--counterexample [true|false]] [--reused-from <runId>] [--review-focus a,b]
  *   dsh-onto exp diff --dir <versionDir> --scenario <SCN> --data run.json --source <runId>
  *   dsh-onto exp list
- *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--data-dir <knowledgeRoot>]
+ *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--include-prior-versions] [--data-dir <knowledgeRoot>]
  *   dsh-onto exp compress [--retain-days N] [--apply]
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -36,6 +36,7 @@ import {
   buildDiffTable,
   buildTaskSignature,
   compressExperiences,
+  experienceFromRun,
   isLegacySignature,
   listExperienceNotes,
   loadExperienceNote,
@@ -601,7 +602,8 @@ function cmdRun(args: Args): void {
       typeof args.flags['root'] === 'string' ? resolve(args.flags['root']) : workspaceRootOfVersionDir(versionDir)
     if (root !== null) {
       const meta = readPackageMeta(versionDir)
-      const scenario = loadPackage(versionDir).scenarios.find((s) => s.id === scenarioId)
+      const pkg = loadPackage(versionDir)
+      const scenario = pkg.scenarios.find((s) => s.id === scenarioId)
       const redlines = [
         ...new Set(
           [
@@ -610,17 +612,25 @@ function cmdRun(args: Args): void {
           ].filter((p) => typeof p === 'string' && p !== ''),
         ),
       ]
-      saveRunRecord(
-        root,
-        buildRunRecord({
-          package: { name: meta.name, version: meta.version },
-          dataset: result.effectiveDataset ?? dataset,
-          inputDataset: dataset,
-          result,
-          redlines,
-        }),
-      )
+      const rec = buildRunRecord({
+        package: { name: meta.name, version: meta.version },
+        dataset: result.effectiveDataset ?? dataset,
+        inputDataset: dataset,
+        result,
+        redlines,
+      })
+      saveRunRecord(root, rec)
       runRecord = result.runId
+      // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（与 wire/Agent 同口径）。
+      // 学习层不否决运行交付：写回失败不抹掉已保存的 RunRecord、不误报 not saved
+      // （缺卡由复核桥接 recordReviewDecision 补建自愈）
+      try {
+        saveExperienceNote(root, experienceFromRun(rec, pkg))
+      } catch (e) {
+        console.error(
+          `warn: run ${rec.runId} saved, but experience draft not written (${e instanceof Error ? e.message : String(e)}) — it will be created on review backfill`,
+        )
+      }
     }
   } catch (e) {
     runRecord = null
@@ -766,7 +776,11 @@ function cmdExp(sub: string | undefined, args: Args): void {
       } catch {
         existing = null
       }
-      const counterexample = args.flags['counterexample'] === true || existing?.counterexample === true
+      const counterexample = args.flags['counterexample'] === true || args.flags['counterexample'] === 'true'
+        ? true
+        : args.flags['counterexample'] === 'false'
+          ? false
+          : existing?.counterexample === true
       if (outcome === 'success' && rec.result.audit.passed !== true && !counterexample) {
         fail('audit not passed — cannot annotate success (use failure/partial or --counterexample)')
       }
@@ -845,9 +859,16 @@ function cmdExp(sub: string | undefined, args: Args): void {
     case 'abstract': {
       const dir = flagStr(args, 'dir')
       const pkg = loadPackage(dir)
+      // 目标须是 DRAFT：ISSUED 只读（P1）——对已签发版本排队只会出物化死端草案
+      if (readPackageMeta(dir).status === 'ISSUED') {
+        fail('--dir 指向已签发版本：请 fork 新版本后在 DRAFT 上总结（P1）')
+      }
       const minCluster = typeof args.flags['min-cluster'] === 'string' ? Number(args.flags['min-cluster']) : undefined
-      const abs = abstractSkillDrafts(root, { pkg, minCluster })
-      const counters = abstractCounterexampleDrafts(root, { pkg, minCluster })
+      // 断链 B：--include-prior-versions 放行同 meta.name 历史版本经验（含 ISSUED 生产版）参赛，
+      // 草案落当前 --dir 指向的 DRAFT 版本。
+      const includePriorVersions = args.flags['include-prior-versions'] === true
+      const abs = abstractSkillDrafts(root, { pkg, minCluster, includePriorVersions })
+      const counters = abstractCounterexampleDrafts(root, { pkg, minCluster, includePriorVersions })
       // knowledge 队列根：优先 --data-dir（L3）；否则按默认布局推断（workspace 目录名约定）。
       // workspace 布局下 dataDir = dirname(workspace)；否则同根。目录改名时请显式传 --data-dir。
       const dataDirFlag = typeof args.flags['data-dir'] === 'string' ? resolve(args.flags['data-dir']) : undefined

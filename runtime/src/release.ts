@@ -49,6 +49,7 @@ export type ReleaseErrorCode =
   | 'RELEASE_SOURCE_REJECTED'
   | 'RELEASE_VERSION_NOT_ACTIVE'
   | 'RELEASE_NOT_ACTIVE'
+  | 'RELEASE_HALF_STATE'
   | 'DERIVED_DRIFT'
 
 export class ReleaseError extends Error {
@@ -579,13 +580,23 @@ export function assertConnectorCapabilities(
   }
 }
 
-/** 激活/回滚操作者：非空且不得是 agent/llm（与签发同族拒绝口径）。 */
+/**
+ * 激活/回滚操作者：宿主可信身份 `host:<userId>`（fail-closed，唯一放行形态），
+ * 且不得是 agent/llm 等拒词（与签发同族拒绝口径；整串与 userId 段都查，防 `host:llm` 绕行）。
+ */
 export function assertAuthorizedActor(authorizedBy: unknown): string {
   if (typeof authorizedBy !== 'string' || authorizedBy.trim() === '') {
     throw new ReleaseError('RELEASE_UNAUTHORIZED', 'authorizedBy required (human/deployment operator)')
   }
   const t = authorizedBy.trim()
   if (/^(agent|llm|ai|bot|system)$/i.test(t)) {
+    throw new ReleaseError('RELEASE_UNAUTHORIZED', 'agent/LLM may not authorize release activation')
+  }
+  if (!t.startsWith('host:')) {
+    throw new ReleaseError('RELEASE_UNAUTHORIZED', 'authorizedBy 须为宿主可信身份 host:<userId>（不收裸自称）')
+  }
+  const userId = t.slice('host:'.length).trim()
+  if (userId === '' || /^(agent|llm|ai|bot|system)$/i.test(userId)) {
     throw new ReleaseError('RELEASE_UNAUTHORIZED', 'agent/LLM may not authorize release activation')
   }
   return t

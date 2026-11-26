@@ -522,3 +522,36 @@ test('发布业务 v1：apiTokenEnv 声明但宿主 env 缺失 → fail-closed�
     chain.dispose()
   }
 })
+
+test('发布业务 v1：纯内容 dataset 包（不传 sourceId）可发布；checkReplay 回放验收纳入发布门槛', async () => {
+  const chain = setupPublish()
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    // 纯内容式：不传 sourceId/sourceKind/apiBaseUrl——只收编台账，不登记数据源
+    const pub = await chain.tools.get('publish_business').execute(
+      { name: 'wst-ops', version: '1.0.0', humanApproved: true },
+      EXEC,
+    )
+    assert.equal(pub.mode, 'content')
+    assert.equal(pub.activated, false)
+    assert.equal(pub.humanReviewRequired, true)
+    assert.equal(dataSources.has('SRC-WST-CORE'), false, '纯内容式不得登记数据源')
+    assert.equal(chain.approvalCount(), 1, '发布仍过批准卡')
+  } finally {
+    chain.dispose()
+  }
+
+  // checkReplay：随包夹具 → 映射 → 场景 → 基线对照通过才收编（要求验收但无夹具拒发）
+  const chain2 = setupPublish()
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    const rep = await chain2.tools.get('publish_business').execute(
+      { name: 'wst-ops', version: '1.0.0', checkReplay: true, humanApproved: true },
+      EXEC,
+    )
+    assert.ok(rep.replayChecked >= 1, `回放验收应至少跑一条场景: ${JSON.stringify(rep)}`)
+    assert.equal(chain2.approvalCount(), 1)
+  } finally {
+    chain2.dispose()
+  }
+})

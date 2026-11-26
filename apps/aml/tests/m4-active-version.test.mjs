@@ -56,7 +56,7 @@ test('AML wire checks release, business scope and run ownership', async () => {
       coreCompat: { min: '0.0.0' }, runtimeCompat: { min: '0.0.0' }, releasedBy: 'fixture',
     })
     releases.importRelease({ kind: 'controlled-upload', bundle: buildReleaseBundle(dir, manifest) })
-    releases.activate(args.name, args.version, { authorizedBy: 'fixture-ops' })
+    releases.activate(args.name, args.version, { authorizedBy: 'host:fixture-ops' })
     let calls = 0
     let owner = null
     runtime.run(() => {
@@ -228,7 +228,7 @@ test('M4 冒烟：导入两版 → 激活切换 → list/run 绑活动版 → �
     assert.deepEqual(versionsBefore, ['1.0.0', '1.1.0'])
 
     // ── 激活 1.0.0 ─────────────────────────────────────────────────────
-    const act1 = h.releases.activate('aml-analysis', '1.0.0', { authorizedBy: 'ops-admin' })
+    const act1 = h.releases.activate('aml-analysis', '1.0.0', { authorizedBy: 'host:ops-admin' })
     assert.equal(act1.previous, null)
     assert.equal(act1.versions.core, '0.2.1')
     assert.equal(act1.versions.plugin, '@dsh-aml/app@0.1.0')
@@ -270,7 +270,7 @@ test('M4 冒烟：导入两版 → 激活切换 → list/run 绑活动版 → �
     )
 
     // ── 升级：激活 1.1.0 ───────────────────────────────────────────────
-    const act2 = h.releases.activate('aml-analysis', '1.1.0', { authorizedBy: 'ops-admin' })
+    const act2 = h.releases.activate('aml-analysis', '1.1.0', { authorizedBy: 'host:ops-admin' })
     assert.equal(act2.previous, '1.0.0')
 
     const after2 = await listPackages(h)
@@ -319,7 +319,7 @@ test('M4 冒烟：导入两版 → 激活切换 → list/run 绑活动版 → �
 
     // ── 回滚 → 1.0.0 ──────────────────────────────────────────────────
     const histBefore = h.releases.readHistory().length
-    const rb = h.releases.rollback('aml-analysis', { authorizedBy: 'ops-admin' })
+    const rb = h.releases.rollback('aml-analysis', { authorizedBy: 'host:ops-admin' })
     assert.equal(rb.package.version, '1.0.0')
     assert.equal(rb.previous, '1.1.0')
     assert.equal(h.releases.activeVersion('aml-analysis'), '1.0.0')
@@ -381,7 +381,7 @@ test('M4 冒烟：技能发现限定活动版本（agent-skills 扫描过滤同�
     const all = ws.listVersions().filter((v) => v.name === 'aml-analysis')
     assert.equal(h.releases.filterActiveVersions(all).length, 2)
 
-    h.releases.activate('aml-analysis', '1.1.0', { authorizedBy: 'ops-admin' })
+    h.releases.activate('aml-analysis', '1.1.0', { authorizedBy: 'host:ops-admin' })
     const filtered = h.releases.filterActiveVersions(all)
     assert.deepEqual(filtered.map((v) => v.version), ['1.1.0'])
 

@@ -502,6 +502,30 @@ test('图谱结果无显式 undefined 键（工具面 lossless-JSON 契约）', 
   }
 })
 
+test('skeleton.problem 随骨架回显（建模前置问题定义）；无 problem 不带键', () => {
+  const { root, pkg } = mkWorkspaceWithPkg()
+  try {
+    const problem = {
+      goal: '识别高风险线索',
+      boundary: '仅限校园废弃物域',
+      expected: ['产出候选与证据链'],
+      counterexamples: ['正常满桶不算命中'],
+    }
+    const g = buildModelGraph({
+      pkg,
+      skeleton: { packageId: 'test-pkg', domainCode: 'TST', confirmed: true, ids: [], problem, updatedAt: '' },
+    })
+    assert.deepEqual(g.skeleton.problem, problem, 'problem 透传（面板回显防重保存丢数据）')
+    const g2 = buildModelGraph({
+      pkg,
+      skeleton: { packageId: 'test-pkg', domainCode: 'TST', confirmed: true, ids: [], updatedAt: '' },
+    })
+    assert.ok(!('problem' in g2.skeleton), '无 problem 不带键（lossless-JSON 契约）')
+  } finally {
+    rmWorkspace(root)
+  }
+})
+
 test('op=update：改权重联动归一 + 技能模板同权（P3）', () => {
   const { dir, root } = mkWorkspaceWithPkg({
     scoreRules: [

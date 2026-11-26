@@ -32,6 +32,11 @@ export function GraphWorkbench(props: {
   const [skelIds, setSkelIds] = useState('')
   const [skelCode, setSkelCode] = useState('')
   const [skelConfirmed, setSkelConfirmed] = useState(false)
+  // 业务问题定义轻结构（建模前置，issue #30 差量①）：目标/边界/期望结果/反例
+  const [skelGoal, setSkelGoal] = useState('')
+  const [skelBoundary, setSkelBoundary] = useState('')
+  const [skelExpected, setSkelExpected] = useState('')
+  const [skelCounter, setSkelCounter] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
@@ -209,11 +214,16 @@ export function GraphWorkbench(props: {
     return () => clearInterval(timer)
   }, [loadGraph])
 
-  // 骨架输入只在非编辑态同步（防轮询覆盖正在输入的内容）
+  // 骨架输入只在非编辑态同步（防轮询覆盖正在输入的内容）；problem 同步回显防重保存丢数据
   useEffect(() => {
     if (!skelOpen && graph) {
       setSkelIds(graph.skeleton ? graph.skeleton.ids.join('\n') : '')
       setSkelConfirmed(graph.skeleton ? graph.skeleton.confirmed : false)
+      const p = graph.skeleton?.problem
+      setSkelGoal(p?.goal ?? '')
+      setSkelBoundary(p?.boundary ?? '')
+      setSkelExpected((p?.expected ?? []).join('\n'))
+      setSkelCounter((p?.counterexamples ?? []).join('\n'))
     }
   }, [graph, skelOpen])
 
@@ -317,6 +327,14 @@ export function GraphWorkbench(props: {
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
+    const list = (text: string): string[] =>
+      text.split('\n').map((s) => s.trim()).filter(Boolean)
+    const problem = {
+      ...(skelGoal.trim() !== '' ? { goal: skelGoal.trim() } : {}),
+      ...(skelBoundary.trim() !== '' ? { boundary: skelBoundary.trim() } : {}),
+      ...(list(skelExpected).length > 0 ? { expected: list(skelExpected) } : {}),
+      ...(list(skelCounter).length > 0 ? { counterexamples: list(skelCounter) } : {}),
+    }
     void (async () => {
       setBusy('skel')
       setError('')
@@ -329,6 +347,7 @@ export function GraphWorkbench(props: {
             domainCode,
             confirmed: skelConfirmed,
             ids,
+            ...(Object.keys(problem).length > 0 ? { problem } : {}),
           }),
         )
         await loadGraph()
@@ -556,6 +575,32 @@ export function GraphWorkbench(props: {
                   style: { minHeight: 90 },
                   value: skelIds,
                   onChange: (e: { target: { value: string } }) => setSkelIds(e.target.value),
+                })),
+              h(Field, { label: t('skelGoal') },
+                h('input', {
+                  className: 'ow-in',
+                  value: skelGoal,
+                  onChange: (e: { target: { value: string } }) => setSkelGoal(e.target.value),
+                })),
+              h(Field, { label: t('skelBoundary') },
+                h('input', {
+                  className: 'ow-in',
+                  value: skelBoundary,
+                  onChange: (e: { target: { value: string } }) => setSkelBoundary(e.target.value),
+                })),
+              h(Field, { label: t('skelExpected') },
+                h('textarea', {
+                  className: 'ow-textarea',
+                  style: { minHeight: 48 },
+                  value: skelExpected,
+                  onChange: (e: { target: { value: string } }) => setSkelExpected(e.target.value),
+                })),
+              h(Field, { label: t('skelCounter') },
+                h('textarea', {
+                  className: 'ow-textarea',
+                  style: { minHeight: 48 },
+                  value: skelCounter,
+                  onChange: (e: { target: { value: string } }) => setSkelCounter(e.target.value),
                 })),
               h(
                 'div',

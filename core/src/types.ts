@@ -239,6 +239,14 @@ export interface O3ScenarioCard {
   reviewGate: O3ReviewGate
   /** 三层闭合闸门清单，如 [O1_CLOSED, O2_CLOSED, O3_CLOSED]。 */
   auditChecks: string[]
+  /**
+   * 随包默认报表页契约（chat-run-report 图注「契约＝设计时定义」的布局侧）：
+   * 预置可复用报表 surface，随 O3 场景卡发布（进派生指纹/发布台账）。
+   * 消费方：生成页客户端（缺省用它替代 buildDefaultReportSurface，不合法时运行面回退默认模板）
+   * 与 listScenarios 透出；core reportpage / runtime 对话报表工具暂不消费此字段。
+   * 不合法时校验上墙（REPORT_SURFACE_INVALID）。工作区沉淀的 ReportPage 仍可覆盖。
+   */
+  reportSurface?: import('./surface.js').A2uiSurfaceMessage
 }
 
 /** 场景 prep 声明（S2.1）。`expand` 与 `features` 均可选；两者都缺省 = 无准备。 */
@@ -944,6 +952,17 @@ export interface SkeletonRecord {
   ids: string[]
   /** 能力域清单（可选，覆盖率对照用）。 */
   capabilities?: string[]
+  /**
+   * 业务问题定义（建模前置轻结构，issue #30 差量①）：先于原料的问题工件——
+   * 目标/边界/期望结果/反例。「反例」是业务级「不算命中」的样例说明（建模前置语义），
+   * 与经验层 ExperienceNote.counterexample（运行反例）不同层，互不覆盖。
+   */
+  problem?: {
+    goal?: string
+    boundary?: string
+    expected?: string[]
+    counterexamples?: string[]
+  }
   updatedAt: string
 }
 
@@ -959,5 +978,5 @@ export interface ModelGraph {
   /** 最近一次人审/物化后的单调递增版本号（画布刷新信号）。 */
   revision: number
   /** 骨架状态（存在时下发，供画布显示门禁）。 */
-  skeleton?: { confirmed: boolean; ids: string[] }
+  skeleton?: { confirmed: boolean; ids: string[]; problem?: SkeletonRecord['problem'] }
 }

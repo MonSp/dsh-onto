@@ -8,6 +8,7 @@ import { useSharedSelected } from './shared'
 import { unwrap, errText, selectedStore } from './helpers'
 import { Tag, Row, Card, ErrorBanner, OkBanner, Loading, Field, PipelineView } from './ui'
 import { PackagesPanel, type VersionRow } from './panels/packages'
+import { ReleasePanel } from './panels/release'
 import { ModelPanel } from './panels/model'
 import { KnowledgePanel } from './panels/knowledge'
 import { ValidatePanel } from './panels/validate'
@@ -170,7 +171,12 @@ export function createPlugin(React: typeof import('react')): PluginModule {
                   'div',
                   { className: 'ow-wrap' },
                   tab === 'packages'
-                    ? h(PackagesPanel, { t, apis, versions, reload, selected, setSelected })
+                    ? h(
+                        'div',
+                        null,
+                        h(PackagesPanel, { t, apis, versions, reload, selected, setSelected }),
+                        h(ReleasePanel, { t, apis }),
+                      )
                     : tab === 'knowledge'
                       ? h(KnowledgePanel, { t, apis, selected })
                       : tab === 'validate'

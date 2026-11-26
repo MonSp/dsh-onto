@@ -567,6 +567,8 @@ export class OntoKnowledge extends RuntimeRemoteService {
     domainCode: string
     confirmed: boolean
     ids: string[]
+    /** 业务问题定义轻结构（建模前置，issue #30 差量①）：{goal, boundary, expected[], counterexamples[]}。 */
+    problem?: { goal?: string; boundary?: string; expected?: string[]; counterexamples?: string[] }
   }): Promise<{ skeleton: SkeletonRecord }> {
     return guard(() => {
       if (!request?.name || !request?.version || !Array.isArray(request?.ids)) {
@@ -583,6 +585,7 @@ export class OntoKnowledge extends RuntimeRemoteService {
           domainCode: request.domainCode,
           confirmed: request.confirmed,
           ids: request.ids,
+          ...(request.problem !== undefined ? { problem: request.problem } : {}),
         }),
       }
     })

@@ -602,7 +602,13 @@ test('实测 P0/P1/P2/P3 修复源断言：签发门禁+迁移重派生 / 物化
   const wb = readWorkbenchClientSrc()
   assert.ok(wb.includes("approveSkip: '批准已记录，但物化未落地（被跳过）'"), '物化跳过须错误条上墙（不得绿勾吞掉）')
   assert.ok(wb.includes("setError(`${t('approveSkip')}"), '单条批准全跳过须走 setError')
-  assert.ok(wb.includes("|| (formMis !== '' && !formBy.trim())"), '误迁移回填 by 前端必拦')
+  // 误迁移 by 口径升级（反馈闭环②断链 A 身份修复）：前端不再收自报身份（formBy 已移除），
+  // 服务端以宿主可信身份 fail-closed 覆盖——比前端拦更硬
+  assert.ok(!wb.includes('formBy'), '误迁移 by 不得再收前端自报（formBy 已移除）')
+  assert.ok(wb.includes("patch.misTransfer = { judged: formMis === 'true', note: formNote }"), '误迁移回填不再传 by')
+  const svcRt = readFileSync(join(REPO, 'runtime', 'src', 'onto-runtime-service.ts'), 'utf8')
+  assert.ok(svcRt.includes('by: reviewer'), 'reviewExperience/annotateExperience 误迁移 by 须取宿主身份')
+  assert.ok(svcRt.includes('requireReviewerHostId()'), '经验回填写面须宿主身份 fail-closed')
   assert.ok(wb.includes("className: 'ogc-node-acts'"), '人审按钮须二遍绘制（脱离节点组防遮挡）')
   assert.ok(wb.includes('graph.nodes.filter((nd) => nd.draft)'), '二遍绘制作用于全部草案节点')
 })
