@@ -15,6 +15,8 @@ import { derivePackage } from './derive.js'
 import { draftCandidateId, knowledgeSourceId, isValidId } from './ids.js'
 import { isConclusionLike, parseWithFallback } from './llm.js'
 import { assertWritable, loadPackage, normalizeScenarioPrep, readPackageMeta, savePackage } from './store.js'
+import { ruleEngineConfigOf } from './scenario.js'
+import type { RuleEngineConfig } from './rules.js'
 import type {
   DraftCandidate,
   DraftItem,
@@ -1457,4 +1459,65 @@ function pickDictId(p: Record<string, unknown>, pkg: OntologyPackage): string {
     const cand = `${base}-${n}`
     if (!idTaken(pkg, cand)) return cand
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 试跑沙箱（zero-concept-loop P2）：草案 → 内存规则配置（不落包、不绕签发）
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 草案试算配置（P2 可逆试错环核心）：结构化克隆包 → 逐条应用草案（applyDraftToPackage
+ * 既有纯内存应用）→ 场景收窄后的规则引擎配置。**零 IO**——不写 package.yaml/派生、
+ * 不 renormalize（权重归一是采纳动作）、ISSUED/批准闸只在 materialize 路径。
+ *
+ * create 草案新增的规则不受 scoreRefs/exclusionRefs 圈定收窄（显式试算意图：试的就是新规则
+ * 对本场景的影响）；既有规则仍守场景收窄。注意：采纳（materialize）不会自动把新规则接入
+ * 场景范围——场景声明了规则范围时，采纳后须另以 op=update 接入 scoreRefs/exclusionRefs 才在
+ * 正式运行生效（调用方应向用户明示这一差别）。
+ *
+ * 调用方把返回配置经 `runScenario(..., { ruleConfig })` 注入试算运行。
+ */
+export function trialRuleConfigFromDrafts(
+  pkg: OntologyPackage,
+  scenarioId: string,
+  draftItems: readonly DraftItem[],
+): RuleEngineConfig {
+  const scenario = pkg.scenarios.find((s) => s.id === scenarioId)
+  if (scenario === undefined) {
+    throw new KnowledgeError('NOT_FOUND', `场景不存在: ${scenarioId}`)
+  }
+  const cloned: OntologyPackage = structuredClone(pkg)
+  const beforeScoring = new Set(cloned.scoreRules.map((r) => r.id))
+  const beforeExclusion = new Set(cloned.exclusionRules.map((r) => r.id))
+  for (const item of draftItems) {
+    // applyDraftToPackage 只读 op/targetKind/payload/name/layer（不查 status/id）——
+    // 试算可对未采纳草案生效（这正是「先试后采纳」的可逆性所在）
+    applyDraftToPackage(cloned, item as DraftCandidate)
+  }
+  const config = ruleEngineConfigOf(cloned, scenario)
+  // create 草案新增规则显式入试算配置（不受场景收窄；见 docstring 的采纳差别说明）
+  for (const r of cloned.scoreRules) {
+    if (!beforeScoring.has(r.id) && !config.scoring.some((s) => s.id === r.id)) {
+      config.scoring.push({
+        id: r.id,
+        name: r.name,
+        weight: r.weight,
+        expression: r.expression,
+        threshold: r.threshold ?? null,
+        evidenceTemplate: r.evidenceTemplate ?? null,
+      })
+    }
+  }
+  for (const r of cloned.exclusionRules) {
+    if (!beforeExclusion.has(r.id) && !config.exclusion.some((s) => s.id === r.id)) {
+      config.exclusion.push({
+        id: r.id,
+        name: r.name,
+        action: r.action,
+        factor: r.factor ?? null,
+        condition: r.condition,
+      })
+    }
+  }
+  return config
 }

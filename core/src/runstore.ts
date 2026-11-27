@@ -60,6 +60,11 @@ export interface RunRecord {
    * 无 provenance 声明的数据集不落此键（与 A-9 无 prep 不落键同族）。
    */
   mappingReceipt?: MappingReceipt
+  /**
+   * 试算留痕（zero-concept-loop P2）：本 run 是草案试跑（沙箱规则配置，不落包）；
+   * 正式运行不落键。
+   */
+  trial?: { draftIds: string[]; label?: string }
   /** 掩蔽前完整结果（core/wire/CLI 人审面口径）。 */
   result: ScenarioRunResult
   savedAt: string
@@ -110,6 +115,8 @@ export function buildRunRecord(input: {
   refillsRunId?: string
   /** 映射证据（audit-package P1a）；缺省按 dataset.provenance 推导诚实证据态。 */
   mappingEvidence?: MappingEvidenceInput
+  /** 试算标记（zero-concept-loop P2）；正式运行缺省不落键。 */
+  trial?: { draftIds: string[]; label?: string }
   result: ScenarioRunResult
   redlines: readonly string[]
   savedAt?: string
@@ -141,6 +148,7 @@ export function buildRunRecord(input: {
     ...(prep !== undefined ? { prep } : {}),
     ...(input.refillsRunId === undefined ? {} : { refillsRunId: input.refillsRunId }),
     ...(mappingReceipt === undefined ? {} : { mappingReceipt }),
+    ...(input.trial === undefined ? {} : { trial: input.trial }),
     result,
     savedAt,
   }

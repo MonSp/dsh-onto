@@ -115,6 +115,24 @@ Repo samples: `packages/aml`, `packages/med`, `packages/tax` (tax-risk, already 
 
 Real URLs and credentials live only in **deploy env vars**, never in the package.
 
+### 2.5 Zero-concept loop (materials → objects & rules, reversible trial)
+
+No ontology concepts needed: **upload a document material → draft → trial run → compare → adopt or discard**.
+
+1. **Upload material**: Knowledge panel, `DOCUMENT` kind (PDF-extracted text / table text / manuals;
+   POLICY and CASE_SAMPLE kinds work too).
+2. **Draft**: hit Parse to get draft candidates (objects/attributes/rules/red-lines) — drafts queue only,
+   **never write into the package**.
+3. **Trial run**: tick drafts and hit "Trial run" → Run tab, pick data, run the scenario — drafts are
+   applied to the rule surface **in memory** (package untouched, issuance gates intact); the run record
+   carries a trial marker.
+4. **Compare**: tick two runs in the run list and Compare — hit additions/removals and score deltas.
+5. **Adopt or discard**: keep them with Materialize (the only write path, still human-reviewed);
+   discard with Reject — **zero package change, fully reversible at any point**.
+
+Note: when a scenario declares rule scope (scoreRefs/exclusionRefs), trialed create-drafts join the
+trial config explicitly; after adoption wire the new rules into the scenario scope for formal runs.
+
 ---
 
 ## 3. Mount the ontology runtime (runtime phase)

@@ -334,6 +334,61 @@ export function heuristicParse(request: LlmParseRequest): DraftItem[] {
       }
       break
     }
+    case 'DOCUMENT': {
+      // 文档类原料（zero-concept-loop P2）：表格行→对象/属性+数值列统计口径（CASE_SAMPLE 同法）；
+      // 禁止性语句→红线；阈值政策→规则草案（POLICY 同法）；命名行→对象骨架。
+      const csvLines = lines.filter((l) => l.includes(',') && l.split(',').length >= 2)
+      if (csvLines.length >= 1) {
+        const headers = csvLines[0].split(',').map((h) => h.trim()).filter(Boolean)
+        if (headers.length > 0) {
+          items.push({
+            layer: 'O1',
+            targetKind: 'ObjectType',
+            name: '文档对象',
+            payload: {
+              name: '文档对象',
+              attributes: headers.map((h) => ({
+                name: h,
+                type: firstNumber(csvLines[1]?.split(',')[headers.indexOf(h)] ?? '') !== null ? 'float' : 'string',
+              })),
+            },
+            confidence: 0.74,
+            rationale: `文档表格行提取对象与属性: ${headers.join(', ')}`,
+          })
+          for (const h of headers) {
+            if (/amount|金额|count|笔数|次数|ratio|占比/i.test(h)) {
+              items.push({
+                layer: 'O2',
+                targetKind: 'ScoreRule',
+                name: `${h}统计口径`,
+                payload: { name: `${h}统计口径`, weight: 0, expression: '1', description: `文档列 ${h} 的统计口径` },
+                confidence: 0.66,
+                rationale: `数值列 ${h} 提取统计口径`,
+              })
+            }
+          }
+        }
+      }
+      for (const line of lines) {
+        if (/不得|禁止|严禁|不允许/.test(line)) {
+          const phrases = [line.replace(/^(制度|规范|文件)?[：:]\s*/, '').slice(0, 30)]
+          items.push({
+            layer: 'O3',
+            targetKind: 'RedLine',
+            name: `红线:${phrases[0].slice(0, 12)}`,
+            payload: { phrases },
+            confidence: 0.86,
+            rationale: `文档禁止性表述提取红线: ${line.slice(0, 60)}`,
+          })
+          continue
+        }
+        pushConclusion(line)
+        if (/阈值|超过|不低于|占比|上限|下限/.test(line)) {
+          pushThresholdPolicy(line)
+        }
+      }
+      break
+    }
     default:
       break
   }
@@ -370,6 +425,7 @@ export function buildPrompt(request: LlmParseRequest): { system: string; user: s
     SCHEMA_API: '抽字段语义与映射（O1 属性/绑定）。',
     WORK_ORDER: '抽场景目标、输入输出（O3 场景骨架）。',
     CONVERSATION: '从对话轮次抽业务元素草案（对象/规则/场景/红线）；结论性表述只标记为红线候选。',
+    DOCUMENT: '从文档（PDF 提取文本/表格文本/说明书）抽对象与规则草案（对象/属性/统计口径/阈值规则/排除/红线）；结论性表述只标记为红线候选。',
   }
   const system = [
     '你是业务本体建模助手。只起草草案（带置信度），不做规则判定，不输出认定。',

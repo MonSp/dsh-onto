@@ -50,6 +50,7 @@ import {
   projectFeatures,
   resolveReportSurface,
   retrieveSimilar,
+  trialRuleConfigFromDrafts,
   reviewExperienceNote,
   runReplay,
   runScenario,
@@ -1139,6 +1140,24 @@ export function validateRunSeedIds(seedIds: unknown): string[] | undefined {
     throw new AgentToolError('INVALID_ARGS', 'seedIds 须为非空字符串条目')
   }
   return seedIds as string[]
+}
+
+/** 试算草案 ID 校验（零概念上手环 P2）：错型/空/超限 → INVALID_ARGS；缺省 = 非试算。 */
+export function validateTrialDraftIds(draftIds: unknown): string[] | undefined {
+  if (draftIds === undefined || draftIds === null) return undefined
+  if (!Array.isArray(draftIds)) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 需要数组')
+  }
+  if (draftIds.length === 0) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 必须为非空数组（不试算请省略本参数）')
+  }
+  if (draftIds.length > 32) {
+    throw new AgentToolError('INVALID_ARGS', `trialDraftIds 上限 32 个（收到 ${draftIds.length}）`)
+  }
+  if (draftIds.some((s) => typeof s !== 'string' || s === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 须为非空字符串条目')
+  }
+  return draftIds as string[]
 }
 
 /* ─────────── 子图扩展与特征投影（subgraph-expansion S3.2/S4.3） ─────────── */
@@ -3046,6 +3065,13 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             + '（pendingChecks[].refill.seedIds 可作 seedIds 预填）——新 run 与原 run 在台账层关联，'
             + '可用 compare_runs/show_run_diff 对照补数前后变化；须为真实 RunRecord，不存在即拒',
         },
+        trialDraftIds: {
+          type: 'array',
+          description: '试算草案 ID（零概念上手环·可逆试错）：把选中草案临时带入规则面跑本次场景——'
+            + '不写包、不改正式版、不绕签发；跑完用 compare_runs 与基线对照（命中增删/分数差异），'
+            + '满意 apply_draft 采纳、不满意 reject_draft 丢弃（包零改动，随时可逆）。'
+            + '草案 ID 来自 list_drafts/upload 后解析入队',
+        },
       },
       output: {
         schema: {
@@ -3064,7 +3090,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           },
         },
         render: (args, value) => {
-          const a = args as { name?: string; version?: string; analysisMode?: string; refillsRunId?: string }
+          const a = args as { name?: string; version?: string; analysisMode?: string; refillsRunId?: string; trialDraftIds?: unknown }
           const result = value as unknown as ScenarioRunResult
           const text = renderRunText(result, undefined, {
             ...(typeof a.name === 'string' && typeof a.version === 'string'
@@ -3077,6 +3103,10 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           // 缺口1：补数关联原 run → 两轮对照动线（refillsRunId 已过台账校验）
           if (typeof a.refillsRunId === 'string' && a.refillsRunId !== '') {
             hint += `\n补数关联原运行 ${a.refillsRunId}：compare_runs(runIdA=${a.refillsRunId}, runIdB=${result.runId})`
+          }
+          // 零概念上手环（P2）：试算运行 → 对照/采纳/丢弃动线
+          if (Array.isArray(a.trialDraftIds) && a.trialDraftIds.length > 0) {
+            hint += `\n试算运行（草案临时带入，未写包）：compare_runs 对照基线后——满意 apply_draft 采纳，不满意 reject_draft 丢弃（随时可逆）`
           }
           return textBlock(retreatRenderText(text + hint, recallPhrases(result.runId) ?? []))
         },
@@ -3094,6 +3124,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             query?: unknown
             analysisMode?: string
             refillsRunId?: string
+            trialDraftIds?: unknown
           },
         ) => {
           // 入口策略（M1-B，Agent/wire/CLI 同一语义）：三通道互斥——
@@ -3107,6 +3138,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (!hasSource && !hasPath && !hasInline) {
             throw new AgentToolError('INVALID_ARGS', '数据输入三选一：sourceId（正式取数）/ datasetPath / dataset')
           }
+          // 零概念上手环（P2）：试算草案校验（ID 形制+归属本包；fail-loud 不静默漏试算）
+          const trialDraftIds = validateTrialDraftIds(args.trialDraftIds)
           const analysisMode = args.analysisMode === 'formal' ? 'formal' : 'explore'
           const identity = strict ? requireBusinessIdentity('read') : undefined
           // 缺口1：补数关联原 run 先于运行校验（不存在/越权 fail-loud，不静默丢关联）
@@ -3157,10 +3190,26 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           gateDatasetAccess(pkg, dataset, analysisMode)
           if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, contracts)
+          // 试算沙箱（P2）：草案 → 内存规则配置（trialRuleConfigFromDrafts 零 IO，不写包不绕签发）
+          const trialConfig = trialDraftIds === undefined
+            ? undefined
+            : trialRuleConfigFromDrafts(
+                pkg,
+                args.scenarioId,
+                trialDraftIds.map((id) => {
+                  const c = knowledge.getCandidate(id)
+                  // KnowledgeStore.packageId 归一为包名（normalizePackageId 去版本段）——按名归属判定
+                  if (c.packageId !== args.name) {
+                    throw new AgentToolError('INVALID_ARGS', `草案 ${id} 不属于 ${args.name}`)
+                  }
+                  return c
+                }),
+              )
           const result = runScenario(versionDir, args.scenarioId, dataset, {
             ...(seedIds !== undefined ? { seedIds } : {}),
             analysisMode,
             ...(dataBasis !== undefined ? { dataBasis } : {}),
+            ...(trialConfig !== undefined ? { ruleConfig: trialConfig } : {}),
           })
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
@@ -3176,6 +3225,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             accessBinding: identity && runAccessBinding(identity),
             ...(refillsRunId !== undefined ? { refillsRunId } : {}),
             ...(mappingEvidence !== undefined ? { mappingEvidence } : {}),
+            ...(trialDraftIds !== undefined ? { trial: { draftIds: trialDraftIds } } : {}),
           })
           saveRunRecord(ws.root, rec)
           // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。

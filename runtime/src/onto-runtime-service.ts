@@ -30,6 +30,7 @@ import {
   runScenario,
   saveExperienceNote,
   saveRunRecord,
+  trialRuleConfigFromDrafts,
   verifyDerived,
   type A2uiSurfaceMessage,
   type DataBasisInput,
@@ -314,6 +315,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     seedIds?: string[]
     /** 补数关联原运行（issue #33 缺口1）：本次系对原运行 pendingChecks 缺数补数后的重算。 */
     refillsRunId?: string
+    /** 试算草案（零概念上手环 P2）：草案临时带入规则面试跑——不写包、不绕签发；RunRecord 落 trial 留痕。 */
+    trialDraftIds?: string[]
   }): Promise<{
     result: ScenarioRunResult
     /** 运行回写回执（学习层旁路）：缺卡/写回失败显式 skipped——RunRecord 已保存，交付不回滚。 */
@@ -361,10 +364,33 @@ export class OntoRuntime extends RuntimeRemoteService {
         dataset = { ...(request.dataset as RuntimeDataset), provenance: 'inline' }
         if (identity) assertBusinessDataset(identity, pkg, dataset)
       }
+      // 零概念上手环（P2）：试算草案 → 内存规则配置（不写包、不绕签发；RunRecord 落 trial 留痕）
+      let trialConfig: import('@dsh-onto/core').RuleEngineConfig | undefined
+      const trialDraftIds = request.trialDraftIds
+      if (trialDraftIds !== undefined) {
+        if (!Array.isArray(trialDraftIds) || trialDraftIds.length === 0 || trialDraftIds.length > 32
+          || trialDraftIds.some((s) => typeof s !== 'string' || s === '')) {
+          throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 须为非空字符串数组且 ≤32')
+        }
+        const knowledge = new KnowledgeStore(this.dataDir)
+        trialConfig = trialRuleConfigFromDrafts(
+          pkg,
+          request.scenarioId,
+          trialDraftIds.map((id) => {
+            const c = knowledge.getCandidate(id)
+            // KnowledgeStore.packageId 归一为包名（normalizePackageId 去版本段）——按名归属判定
+            if (c.packageId !== request.name) {
+              throw new AgentToolError('INVALID_ARGS', `草案 ${id} 不属于 ${request.name}`)
+            }
+            return c
+          }),
+        )
+      }
       const result = runScenario(dir, request.scenarioId, dataset, {
         ...(seedIds !== undefined ? { seedIds } : {}),
         analysisMode,
         ...(dataBasis !== undefined ? { dataBasis } : {}),
+        ...(trialConfig !== undefined ? { ruleConfig: trialConfig } : {}),
       })
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
@@ -386,6 +412,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         accessBinding: identity && runAccessBinding(identity),
         ...(refillsRunId !== undefined ? { refillsRunId } : {}),
         ...(mappingEvidence !== undefined ? { mappingEvidence } : {}),
+        ...(trialDraftIds !== undefined ? { trial: { draftIds: trialDraftIds } } : {}),
       })
       saveRunRecord(this.ws.root, rec)
       // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
