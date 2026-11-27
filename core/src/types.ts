@@ -784,6 +784,61 @@ export type DataStatus = 'verified' | 'conditional' | 'insufficient' | 'unverifi
 export type ReviewStatus = 'pending' | 'approved' | 'rejected'
 
 /**
+ * 映射校验回执（audit-package P1a）：过程层「数据映射正确」的可指认凭据。
+ * 随 RunRecord 落盘并入审计包——客户审计员据此复核「这批数据是怎么映射进
+ * 对象/候选的、校验过没有」。回执只含结构化计数与诊断码，不展开行数据。
+ */
+export interface MappingReceipt {
+  /** 回执口径版本。 */
+  receiptVersion: 1
+  /** 数据来源标记（provenance：connector/inline/file，dataTrust 轴）。 */
+  provenance: 'connector' | 'inline' | 'file' | 'unspecified'
+  /** source-maps 映射是否发生（true=配置映射连接器转换路径）。 */
+  mappingApplied: boolean
+  /** 映射契约身份（映射证据可得时）。 */
+  mapBasis?: {
+    package?: { name: string; version: string }
+    /** source-maps 契约指纹：sha256(canonicalJson(maps))。 */
+    mapsDigest?: string
+    /** 包派生 manifest sourceDigest（派生链指纹）。 */
+    sourceDigest?: string
+  }
+  /** 来源锚点（可指认）：connector=快照证据；file=文件指纹。 */
+  sourceAnchor?: {
+    snapshotId?: string
+    sourceId?: string
+    queryDigest?: string
+    connectorVersion?: string
+    nature?: 'simulated' | 'business-source'
+    fileLocator?: string
+    fileSha256?: string
+  }
+  /** 映射诊断汇总（错误/警告计数 + 代码归并计数）。 */
+  diagnostics?: {
+    errors: number
+    warnings: number
+    codes: Array<{ code: string; level: string; count: number }>
+  }
+  /** 映射产出计数（与 datasetSummary 对账；prep 前的输入侧）。 */
+  counts?: { objects: number; relations: number; behaviors: number; candidates: number }
+  businessWindow?: { from: string; to: string }
+  /** 对账锚 === RunRecord.datasetDigest（回执与运行数据一致性可查）。 */
+  datasetDigest: string
+  issuedAt: string
+}
+
+/** 映射证据输入（buildRunRecord 汇入 MappingReceipt；连接器/取数路径自报）。 */
+export interface MappingEvidenceInput {
+  /** source-maps 映射已执行（配置映射连接器转换路径自报 true）。 */
+  mappingApplied?: boolean
+  mapBasis?: MappingReceipt['mapBasis']
+  sourceAnchor?: MappingReceipt['sourceAnchor']
+  /** 映射诊断（transformSourceRows 全量；buildRunRecord 归并为汇总）。 */
+  diagnostics?: ValidationIssue[]
+  businessWindow?: { from: string; to: string }
+}
+
+/**
  * 取数上下文（M1-B）：服务端连接器取数时随数据集传入，runScenario 据此统一判定
  * dataStatus——Agent、wire、CLI 同一入口策略（调用方要求 formal ≠ 已满足可信条件）。
  * 缺省 = 来源未声明。nature/complete/fresh 由服务端连接器与快照核验给出，
