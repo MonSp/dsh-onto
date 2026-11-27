@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isSafeRelPath, PackageStoreError } from './store.js'
 import {
+  isSafeRunId,
   ruleBasisDigest,
   VERIFIABILITY_SIGNED,
   type RunExportManifest,
@@ -149,6 +150,9 @@ export function signAuditPackage(
   runId: string,
   sign: { privateKeyPem: string; keyId: string },
 ): { manifest: RunExportManifest; signature: ManifestSignature; signatureLocatorName: string } {
+  if (!isSafeRunId(runId)) {
+    throw new PackageStoreError('INVALID_ARGS', 'invalid runId')
+  }
   const manifestName = `${runId}-manifest.json`
   const manifestPath = join(dir, manifestName)
   if (!existsSync(manifestPath)) {
@@ -176,21 +180,38 @@ export function signAuditPackage(
  * 离线验签（P1b 验收锚点）：导出目录 + 信任根 → 逐步检查行。
  * 不依赖平台 UI / workspace——第三方只拿包目录与信任根文件即可。
  *
- * 检查链：manifest 可读 → 签名块存在（未签包显式 unsigned 行）→
- * signedSha256 对照 manifest 字节 → keyId 受信且未吊销（fail-closed）→
- * Ed25519 验签 → manifest.files 逐文件 sha256 对照包内成员 →
- * 人审决定被签名覆盖（chain 成员在清单内）→ ruleFingerprint 可重算一致。
+ * 检查链：manifest 可读（opts.runId 指定单包；否则目录内恰一份）→ 签名块存在
+ * （未签包显式 unsigned 行）→ signedSha256 对照 manifest 字节 → keyId 受信且未吊销
+ * （fail-closed）→ Ed25519 验签 → manifest.files 逐文件 sha256 对照包内成员 →
+ * 无游离未登记成员 → 人审决定被签名覆盖（chain 成员在清单内）→ ruleFingerprint 可重算一致。
  */
-export function verifyAuditPackage(dir: string, trustRoot: TrustRoot): VerifyResult {
+export function verifyAuditPackage(
+  dir: string,
+  trustRoot: TrustRoot,
+  opts?: { runId?: string },
+): VerifyResult {
   const checks: VerifyCheck[] = []
   const push = (name: string, ok: boolean, detail: string): void => {
     checks.push({ name, ok, detail })
   }
 
-  // manifest 文件定位（导出目录内唯一 *-manifest.json）
-  const manifestName = findManifestName(dir)
+  // manifest 文件定位：opts.runId 精确指定（多包导出目录）；否则要求目录内恰一份
+  let manifestName: string | null
+  if (opts?.runId !== undefined) {
+    if (!isSafeRunId(opts.runId)) {
+      push('manifest-present', false, 'runId 非法')
+      return { ok: false, checks }
+    }
+    manifestName = existsSync(join(dir, `${opts.runId}-manifest.json`))
+      ? `${opts.runId}-manifest.json`
+      : null
+  } else {
+    manifestName = findManifestName(dir)
+  }
   if (manifestName === null) {
-    push('manifest-present', false, '导出目录内无 *-manifest.json')
+    push('manifest-present', false, opts?.runId !== undefined
+      ? `导出目录内无 ${opts.runId}-manifest.json`
+      : describeManifestScan(dir))
     return { ok: false, checks }
   }
   push('manifest-present', true, manifestName)
@@ -202,6 +223,14 @@ export function verifyAuditPackage(dir: string, trustRoot: TrustRoot): VerifyRes
     push('manifest-parse', false, 'manifest 不是合法 JSON')
     return { ok: false, checks }
   }
+  // 形守卫（评审 gap-4）：坏形 manifest 出检查行，不裸抛 TypeError
+  if (!Array.isArray(manifest.files)
+    || typeof manifest.fingerprints?.ruleFingerprint !== 'string'
+    || typeof manifest.runId !== 'string') {
+    push('manifest-shape', false, 'manifest 缺 files/runId/fingerprints.ruleFingerprint 必要字段')
+    return { ok: false, checks }
+  }
+  push('manifest-shape', true, '必要字段齐全')
 
   const sigRef = manifest.signature
   if (sigRef === undefined) {
@@ -216,6 +245,11 @@ export function verifyAuditPackage(dir: string, trustRoot: TrustRoot): VerifyRes
     return { ok: false, checks }
   }
   push('signature-present', true, `${sig.keyId} (${sig.alg})`)
+
+  // sig 元数据与 manifest 标记一致性（评审 gap-7；签名已覆盖内容，此行是显式对账）
+  const metaOk = sig.signedFile === manifestName && sig.keyId === sigRef.keyId
+  push('sig-meta-consistent', metaOk,
+    metaOk ? 'signedFile/keyId 与 manifest.signature 对齐' : 'sig 元数据与 manifest.signature 不一致')
 
   const actualSha = createHash('sha256').update(manifestBytes).digest('hex')
   push('signed-sha256', actualSha === sig.signedSha256, `manifest 字节 sha256 对照签名块`)
@@ -244,10 +278,14 @@ export function verifyAuditPackage(dir: string, trustRoot: TrustRoot): VerifyRes
 
   push('members-intact', verifyMembers(dir, manifest), 'manifest.files 逐文件 sha256')
 
-  // 未登记成员检查（导出目录内 manifest/sig 之外的游离文件 = 清单外内容，不可放过）
+  // 未登记成员检查：只看**本包 runId 前缀**的游离文件（多包导出目录里兄弟包文件不属本包清单）；
+  // 本包前缀内 manifest/sig 之外的未登记文件 = 清单外内容，不可放过（评审 gap-5）
   const listed = new Set(manifest.files.map((f) => f.name))
+  const prefix = `${manifest.runId}.`
+  const prefixDash = `${manifest.runId}-`
   const unlisted = readdirSync(dir).filter(
-    (n) => n !== manifestName && n !== sigRef.file && !listed.has(n),
+    (n) => (n.startsWith(prefix) || n.startsWith(prefixDash))
+      && n !== manifestName && n !== sigRef.file && !listed.has(n),
   )
   push('no-unlisted-members', unlisted.length === 0,
     unlisted.length === 0 ? '无游离未登记成员' : `未登记成员: ${unlisted.join(', ')}`)
@@ -293,6 +331,15 @@ function findManifestName(dir: string): string | null {
   if (!existsSync(dir)) return null
   const hit = readdirSync(dir).filter((n) => n.endsWith('-manifest.json'))
   return hit.length === 1 ? hit[0] : null
+}
+
+/** manifest 扫描歧义说明（0 份 vs 多份分别给结论；多份提示指定 runId——评审 gap-3）。 */
+function describeManifestScan(dir: string): string {
+  if (!existsSync(dir)) return '导出目录不存在'
+  const hit = readdirSync(dir).filter((n) => n.endsWith('-manifest.json'))
+  return hit.length === 0
+    ? '导出目录内无 *-manifest.json'
+    : `导出目录内 ${hit.length} 份 manifest（${hit.join(', ')}）——多包目录请指定 runId`
 }
 
 function readSignature(dir: string, file: string): ManifestSignature | null {

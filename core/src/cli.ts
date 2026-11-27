@@ -184,7 +184,7 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   derive <versionDir>
   gate <versionDir>
   run <versionDir> <scenarioId> --data run.json [--out result.json]
-  runs list|show <runId>|compare <runIdA> <runIdB>|export <runId> [--sign-key F --sign-key-id K]|verify <runId>|--dir <exportDir> --trust <trust-root.json>
+  runs list|show <runId>|compare <runIdA> <runIdB>|export <runId> [--sign-key F --sign-key-id K]|verify [<runId>] [--dir <exportDir>] --trust <trust-root.json>
   trust keygen --out <dir> [--key-id K] [--published-by X]
   source probe --dir <versionDir> [--url U | --data F] [--collections a,b] [--samples N]
   source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
@@ -732,7 +732,8 @@ function cmdRuns(sub: string | undefined, args: Args): void {
       return
     }
     case 'verify': {
-      // 离线验签（P1b）：--dir 直接给导出目录（第三方只拿包+信任根）；否则 <root>/runs/exports
+      // 离线验签（P1b）：--dir 直接给导出目录（第三方只拿包+信任根）；否则 <root>/runs/exports。
+      // 位置参数 runId 可选：多包导出目录时精确指定单包（评审 gap-3）。
       const trustFile = flagStr(args, 'trust', '')
       if (trustFile === '') fail('runs verify requires --trust <trust-root.json>')
       let trustRoot: TrustRoot
@@ -743,7 +744,8 @@ function cmdRuns(sub: string | undefined, args: Args): void {
       }
       const dirFlag = flagStr(args, 'dir', '')
       const dir = dirFlag !== '' ? resolve(dirFlag) : join(root, 'runs', 'exports')
-      const result = verifyAuditPackage(dir, trustRoot)
+      const runIdArg = args._[2]
+      const result = verifyAuditPackage(dir, trustRoot, runIdArg === undefined ? undefined : { runId: runIdArg })
       print(result)
       if (!result.ok) process.exit(3)
       return

@@ -105,9 +105,9 @@ test('签名往返：signAuditPackage 后离线验签全链 ok（含人审覆盖
     assert.equal(result.keyId, 'key-test01')
     const names = result.checks.map((c) => c.name)
     for (const n of [
-      'manifest-present', 'signature-present', 'signed-sha256', 'key-trusted',
-      'signature-valid', 'members-intact', 'no-unlisted-members', 'human-decision-covered',
-      'rule-fingerprint-recompute',
+      'manifest-present', 'manifest-shape', 'signature-present', 'sig-meta-consistent', 'signed-sha256',
+      'key-trusted', 'signature-valid', 'members-intact', 'no-unlisted-members',
+      'human-decision-covered', 'rule-fingerprint-recompute',
     ]) {
       assert.ok(names.includes(n), `缺检查行 ${n}`)
       assert.equal(result.checks.find((c) => c.name === n)?.ok, true, `${n} 未过`)
@@ -235,6 +235,87 @@ test('未签包：显式 unsigned 行（P1a 可复核口径），members-intact 
     assert.equal(result.checks.find((c) => c.name === 'members-intact')?.ok, true)
   } finally {
     rmWorkspace(ws.root)
+  }
+})
+
+test('未签→已签升级：verifiability 切 signed 模板；升级后离线验签全过', () => {
+  const ws = mkWorkspace()
+  try {
+    const rec = buildRunRecord({
+      package: { name: 'test-pkg', version: '1.0.0' },
+      dataset: fakeDataset(),
+      result: fakeResult(),
+      redlines: [],
+      savedAt: '2026-11-05T01:00:00.000Z',
+    })
+    saveRunRecord(ws.root, rec)
+    exportAuditPackage(ws.root, 'run-abc12345')
+    const dir = join(ws.root, 'runs', 'exports')
+    const before = JSON.parse(readFileSync(join(dir, 'run-abc12345-manifest.json'), 'utf8'))
+    assert.ok(before.verifiability.cannotVerify.some((s) => s.includes('无平台签名')))
+    assert.equal(before.signature, undefined)
+    const keys = generateTrustKeyPair({ keyId: 'key-upgrade1' })
+    signAuditPackage(dir, 'run-abc12345', { privateKeyPem: keys.privateKeyPem, keyId: 'key-upgrade1' })
+    const after = JSON.parse(readFileSync(join(dir, 'run-abc12345-manifest.json'), 'utf8'))
+    assert.ok(after.verifiability.canVerify.some((s) => s.includes('Ed25519')))
+    assert.ok(!after.verifiability.cannotVerify.some((s) => s.includes('无平台签名')))
+    assert.equal(after.signature.keyId, 'key-upgrade1')
+    assert.equal(verifyAuditPackage(dir, keys.trustRoot).ok, true)
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
+test('游离未登记成员拒（no-unlisted-members，本包 runId 前缀内）', () => {
+  const { ws, dir, keys } = mkSignedPackage()
+  try {
+    // 本包前缀内游离文件（如伪造的 <runId>-chain 备份）→ 拒
+    writeFileSync(join(dir, 'run-abc12345-stale.json'), '{"x":1}', 'utf8')
+    const result = verifyAuditPackage(dir, keys.trustRoot)
+    assert.equal(result.ok, false)
+    const row = result.checks.find((c) => c.name === 'no-unlisted-members')
+    assert.equal(row?.ok, false)
+    assert.ok(row?.detail.includes('run-abc12345-stale.json'))
+    // 非本包前缀文件（多包目录兄弟文件）不属本包清单——不影响本包验签
+    writeFileSync(join(dir, 'other-notes.txt'), 'x', 'utf8')
+    rmSync(join(dir, 'run-abc12345-stale.json'))
+    const result2 = verifyAuditPackage(dir, keys.trustRoot)
+    assert.equal(result2.checks.find((c) => c.name === 'no-unlisted-members')?.ok, true)
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
+test('多包导出目录：未指定 runId 给歧义说明；指定 runId 精确验单包', () => {
+  const { ws, dir, keys } = mkSignedPackage()
+  try {
+    // 再造第二份 manifest（伪造另一包的导出物）
+    writeFileSync(join(dir, 'run-zzzzzzzz-manifest.json'), '{"kind":"RunExportManifest","runId":"run-zzzzzzzz","files":[],"fingerprints":{"ruleFingerprint":"x","datasetDigest":"y"},"humanReviewRequired":true}', 'utf8')
+    const vague = verifyAuditPackage(dir, keys.trustRoot)
+    assert.equal(vague.ok, false)
+    assert.ok(vague.checks[0].detail.includes('2 份 manifest'))
+    assert.ok(vague.checks[0].detail.includes('指定 runId'))
+    const precise = verifyAuditPackage(dir, keys.trustRoot, { runId: 'run-abc12345' })
+    assert.equal(precise.ok, true, JSON.stringify(precise.checks))
+    const missing = verifyAuditPackage(dir, keys.trustRoot, { runId: 'run-none000' })
+    assert.equal(missing.ok, false)
+    assert.ok(missing.checks[0].detail.includes('run-none000-manifest.json'))
+  } finally {
+    rmWorkspace(ws.root)
+  }
+})
+
+test('坏形 manifest 出检查行不裸抛（manifest-shape）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-onto-badman-'))
+  try {
+    writeFileSync(join(dir, 'run-abc12345-manifest.json'), '{"kind":"RunExportManifest"}', 'utf8')
+    const keys = generateTrustKeyPair()
+    const result = verifyAuditPackage(dir, keys.trustRoot)
+    assert.equal(result.ok, false)
+    const row = result.checks.find((c) => c.name === 'manifest-shape')
+    assert.equal(row?.ok, false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 

@@ -250,12 +250,21 @@ export function exportRunAuditPackage(
       actions: StoredActionRecord[]
     },
   })
-  // P1b 部署配置签名（凭证只来自部署 env，不落盘不进包）：配置齐 → overlay 签名
+  // P1b 部署配置签名（凭证只来自部署 env，不落盘不进包）：配置齐 → overlay 签名；
+  // 半配置（只给其一）→ fail-loud，不静默降级为未签（评审 gap-2）
   const keyFile = process.env.DSH_ONTO_SIGN_KEY_FILE
   const keyId = process.env.DSH_ONTO_SIGN_KEY_ID
-  if (keyFile !== undefined && keyFile !== '' && keyId !== undefined && keyId !== '') {
-    const privateKeyPem = readFileSync(keyFile, 'utf8')
-    const signed = signAuditPackage(join(wsRoot, 'runs', 'exports'), runId, { privateKeyPem, keyId })
+  const hasFile = keyFile !== undefined && keyFile !== ''
+  const hasId = keyId !== undefined && keyId !== ''
+  if (hasFile !== hasId) {
+    throw new AgentToolError(
+      'INVALID_ARGS',
+      '签名配置不完整：DSH_ONTO_SIGN_KEY_FILE 与 DSH_ONTO_SIGN_KEY_ID 须同配（半配置不静默降级为未签）',
+    )
+  }
+  if (hasFile && hasId) {
+    const privateKeyPem = readFileSync(keyFile as string, 'utf8')
+    const signed = signAuditPackage(join(wsRoot, 'runs', 'exports'), runId, { privateKeyPem, keyId: keyId as string })
     return {
       ...out,
       manifest: signed.manifest,

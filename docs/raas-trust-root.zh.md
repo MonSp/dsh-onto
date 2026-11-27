@@ -22,7 +22,8 @@ manifest 内 `signature` 字段（keyId/alg/file）是信息位，被签名覆�
   （Ed25519；输出 `trust-root.json` 公钥文档 + `private/<keyId>.pem` 私钥）。
 - **保管**：私钥由部署侧保管——只经部署 env 注入（`DSH_ONTO_SIGN_KEY_FILE` =
   私钥 PEM 路径、`DSH_ONTO_SIGN_KEY_ID` = keyId），**不入包、不入仓、不落业务存储**。
-  测试/演练用临时密钥，用后即弃。
+  测试/演练用临时密钥，用后即弃。注：`trust keygen` 的 0600 权限位在 Windows 上
+  不生效（NTFS 权限另行收紧），非 Windows 部署按 0600 落盘。
 - **签发**：env 配置齐后 `export_audit`/`exportAudit` 导出自动带签（`signed=true`）；
   CLI `runs export --sign-key F --sign-key-id K` 等价。未配置 → 未签包
   （P1a 可复核口径，manifest verifiability 如实标注未签）。
