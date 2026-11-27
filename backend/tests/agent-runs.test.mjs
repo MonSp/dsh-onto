@@ -494,3 +494,19 @@ test('runScenarioBatch：tax 第三域全场景批量过装配断言（三域 MU
     configurePhraseStore(null)
   }
 })
+
+test('validateTrialDraftIds（试算草案 ID 校验）：合法/缺省过；空/错型/超限/重复拒', async () => {
+  const { validateTrialDraftIds } = await import('../dist/agent-policy.js')
+  assert.equal(validateTrialDraftIds(undefined), undefined)
+  assert.equal(validateTrialDraftIds(null), undefined)
+  assert.deepEqual(validateTrialDraftIds(['kd-a', 'kd-b']), ['kd-a', 'kd-b'])
+  assert.throws(() => validateTrialDraftIds([]), (e) => e.code === 'INVALID_ARGS')
+  assert.throws(() => validateTrialDraftIds('kd-a'), (e) => e.code === 'INVALID_ARGS')
+  assert.throws(() => validateTrialDraftIds([1]), (e) => e.code === 'INVALID_ARGS')
+  assert.throws(() => validateTrialDraftIds(['']), (e) => e.code === 'INVALID_ARGS')
+  assert.throws(
+    () => validateTrialDraftIds(Array.from({ length: 33 }, (_, i) => `kd-${i}`)),
+    (e) => e.code === 'INVALID_ARGS',
+  )
+  assert.throws(() => validateTrialDraftIds(['kd-a', 'kd-a']), (e) => e.code === 'INVALID_ARGS' && /重复/.test(e.message))
+})

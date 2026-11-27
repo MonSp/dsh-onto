@@ -145,7 +145,7 @@ export function RunPanel(props: {
               setError('')
               try {
                 const dataset = JSON.parse(datasetText) as unknown
-                const out = unwrap<{ result: Record<string, unknown> }>(
+                const out = unwrap<{ result: Record<string, unknown>; trialNotes?: string[] }>(
                   await api!.runScenario({
                     name: selected.name,
                     version: selected.version,
@@ -161,7 +161,10 @@ export function RunPanel(props: {
                 const label = `${scenarioId} @ ${new Date().toLocaleTimeString()}`
                 setHistory((hlist) => [{ hid, label, result: out.result }, ...hlist].slice(0, 10))
                 loadRuns()
-                if (trialDraftIds && trialDraftIds.length > 0) setInfo(t('trialHint'))
+                if (trialDraftIds && trialDraftIds.length > 0) {
+                  // 试算差别提示上墙（非规则空转/越界 update/试算≠采纳——评审 gap-1/2/3）
+                  setInfo([t('trialHint'), ...(out.trialNotes ?? [])].join('\n'))
+                }
               } catch (e) {
                 setError(errText(e))
               } finally {

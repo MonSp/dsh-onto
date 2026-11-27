@@ -1477,11 +1477,20 @@ function pickDictId(p: Record<string, unknown>, pkg: OntologyPackage): string {
  *
  * 调用方把返回配置经 `runScenario(..., { ruleConfig })` 注入试算运行。
  */
+export interface TrialRunPlan {
+  /** 试算规则面配置（runScenario 的 ruleConfig 注入位）。 */
+  ruleConfig: RuleEngineConfig
+  /** 不参与试算的草案（对象/红线/字典等非规则类——采纳后生效）。 */
+  ignoredDraftIds: string[]
+  /** 试算差别提示（评审 gap-1/2/3：非规则空转、update 越界、试算≠采纳的显式上墙材料）。 */
+  warnings: string[]
+}
+
 export function trialRuleConfigFromDrafts(
   pkg: OntologyPackage,
   scenarioId: string,
   draftItems: readonly DraftItem[],
-): RuleEngineConfig {
+): TrialRunPlan {
   const scenario = pkg.scenarios.find((s) => s.id === scenarioId)
   if (scenario === undefined) {
     throw new KnowledgeError('NOT_FOUND', `场景不存在: ${scenarioId}`)
@@ -1489,10 +1498,27 @@ export function trialRuleConfigFromDrafts(
   const cloned: OntologyPackage = structuredClone(pkg)
   const beforeScoring = new Set(cloned.scoreRules.map((r) => r.id))
   const beforeExclusion = new Set(cloned.exclusionRules.map((r) => r.id))
+  const ignoredDraftIds: string[] = []
+  const warnings: string[] = []
+  let createRuleCount = 0
+  let redlineIgnored = 0
   for (const item of draftItems) {
+    // 只有规则类草案参与试算（ScoreRule/ExclusionRule）——其余（对象/红线/字典/场景…）
+    // 不进规则面，显式忽略并上墙（评审 gap-1：不得静默空转）
+    if (item.targetKind !== 'ScoreRule' && item.targetKind !== 'ExclusionRule') {
+      ignoredDraftIds.push(item.name)
+      if (item.targetKind === 'RedLine') redlineIgnored += 1
+      continue
+    }
+    if (item.op === 'create') createRuleCount += 1
     // applyDraftToPackage 只读 op/targetKind/payload/name/layer（不查 status/id）——
     // 试算可对未采纳草案生效（这正是「先试后采纳」的可逆性所在）
     applyDraftToPackage(cloned, item as DraftCandidate)
+  }
+  if (ignoredDraftIds.length > 0) {
+    warnings.push(
+      `${ignoredDraftIds.length} 条非规则草案不参与试算（${redlineIgnored > 0 ? '含红线——禁语清单随采纳生效；' : ''}对象/属性/红线等采纳后生效）: ${ignoredDraftIds.join('、')}`,
+    )
   }
   const config = ruleEngineConfigOf(cloned, scenario)
   // create 草案新增规则显式入试算配置（不受场景收窄；见 docstring 的采纳差别说明）
@@ -1519,5 +1545,18 @@ export function trialRuleConfigFromDrafts(
       })
     }
   }
-  return config
+  // update 草案目标不在场景规则收窄内 → 试算不生效（评审 gap-2：显式上墙，不静默）
+  for (const item of draftItems) {
+    if (item.op !== 'update' || (item.targetKind !== 'ScoreRule' && item.targetKind !== 'ExclusionRule')) continue
+    const inConfig = config.scoring.some((s) => s.id === item.targetId)
+      || config.exclusion.some((s) => s.id === item.targetId)
+    if (!inConfig) {
+      warnings.push(`update 草案「${item.name}」目标 ${item.targetId} 不在本场景规则范围（scoreRefs/exclusionRefs 收窄）——试算不生效`)
+    }
+  }
+  // 试算≠采纳差别（评审 gap-3）：原始权重未归一 + create 需接线场景范围
+  if (createRuleCount > 0) {
+    warnings.push('create 草案按原始权重试算（未归一）；采纳时权重归一，且场景声明规则范围时须把新规则接入 scoreRefs/exclusionRefs 才在正式运行生效')
+  }
+  return { ruleConfig: config, ignoredDraftIds, warnings }
 }

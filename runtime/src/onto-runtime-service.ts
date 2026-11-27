@@ -47,7 +47,7 @@ import {
   type ScenarioRunResult,
 } from '@dsh-onto/core'
 import { runtimeContextForHost } from './context.js'
-import { AgentToolError, isRecord } from './agent-policy.js'
+import { AgentToolError, isRecord, validateTrialDraftIds } from './agent-policy.js'
 import { actionDigest } from './agent-approval.js'
 import {
   approvalContextDigest,
@@ -321,6 +321,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     result: ScenarioRunResult
     /** 运行回写回执（学习层旁路）：缺卡/写回失败显式 skipped——RunRecord 已保存，交付不回滚。 */
     experience: { runId: string; created: true } | { runId: string; skipped: string }
+    /** 试算差别提示（非规则草案空转/越界 update/试算≠采纳——评审 gap-1/2/3 显式上墙）。 */
+    trialNotes?: string[]
   }> {
     return guard(async () => {
       this.assertActive(request.name, request.version)
@@ -365,15 +367,11 @@ export class OntoRuntime extends RuntimeRemoteService {
         if (identity) assertBusinessDataset(identity, pkg, dataset)
       }
       // 零概念上手环（P2）：试算草案 → 内存规则配置（不写包、不绕签发；RunRecord 落 trial 留痕）
-      let trialConfig: import('@dsh-onto/core').RuleEngineConfig | undefined
-      const trialDraftIds = request.trialDraftIds
+      let trialPlan: ReturnType<typeof trialRuleConfigFromDrafts> | undefined
+      const trialDraftIds = validateTrialDraftIds(request.trialDraftIds)
       if (trialDraftIds !== undefined) {
-        if (!Array.isArray(trialDraftIds) || trialDraftIds.length === 0 || trialDraftIds.length > 32
-          || trialDraftIds.some((s) => typeof s !== 'string' || s === '')) {
-          throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 须为非空字符串数组且 ≤32')
-        }
         const knowledge = new KnowledgeStore(this.dataDir)
-        trialConfig = trialRuleConfigFromDrafts(
+        trialPlan = trialRuleConfigFromDrafts(
           pkg,
           request.scenarioId,
           trialDraftIds.map((id) => {
@@ -390,7 +388,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         ...(seedIds !== undefined ? { seedIds } : {}),
         analysisMode,
         ...(dataBasis !== undefined ? { dataBasis } : {}),
-        ...(trialConfig !== undefined ? { ruleConfig: trialConfig } : {}),
+        ...(trialPlan !== undefined ? { ruleConfig: trialPlan.ruleConfig } : {}),
       })
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
@@ -428,7 +426,11 @@ export class OntoRuntime extends RuntimeRemoteService {
       } catch (e) {
         experience = { runId: rec.runId, skipped: e instanceof Error ? e.message : String(e) }
       }
-      return { result, experience }
+      return {
+        result,
+        experience,
+        ...(trialPlan !== undefined && trialPlan.warnings.length > 0 ? { trialNotes: trialPlan.warnings } : {}),
+      }
     })
   }
 
@@ -457,6 +459,8 @@ export class OntoRuntime extends RuntimeRemoteService {
       datasetDigest: string
       datasetSummary: RunRecord['datasetSummary']
       auditPassed: boolean
+      /** 试算运行标记（zero-concept-loop P2）：与正式运行可区分。 */
+      trial?: boolean
       startedAt: string
       savedAt: string
     }>
@@ -469,6 +473,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         datasetDigest: r.datasetDigest.slice(0, 12),
         datasetSummary: r.datasetSummary,
         auditPassed: r.result.audit.passed === true,
+        ...(r.trial === undefined ? {} : { trial: true }),
         startedAt: r.startedAt,
         savedAt: r.savedAt,
       })),

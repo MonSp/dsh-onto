@@ -105,6 +105,7 @@ import {
   retreatRenderText,
   reviseTopHitAdvice,
   toolExecute,
+  validateTrialDraftIds,
   type BatchRunItem,
   type BatchRunOutput,
   type BatchRunSummary,
@@ -1142,23 +1143,8 @@ export function validateRunSeedIds(seedIds: unknown): string[] | undefined {
   return seedIds as string[]
 }
 
-/** 试算草案 ID 校验（零概念上手环 P2）：错型/空/超限 → INVALID_ARGS；缺省 = 非试算。 */
-export function validateTrialDraftIds(draftIds: unknown): string[] | undefined {
-  if (draftIds === undefined || draftIds === null) return undefined
-  if (!Array.isArray(draftIds)) {
-    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 需要数组')
-  }
-  if (draftIds.length === 0) {
-    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 必须为非空数组（不试算请省略本参数）')
-  }
-  if (draftIds.length > 32) {
-    throw new AgentToolError('INVALID_ARGS', `trialDraftIds 上限 32 个（收到 ${draftIds.length}）`)
-  }
-  if (draftIds.some((s) => typeof s !== 'string' || s === '')) {
-    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 须为非空字符串条目')
-  }
-  return draftIds as string[]
-}
+/** 试算草案 ID 校验（zero-concept-loop P2）——实现移至 agent-policy（wire 同用）；此处 re-export 保持导出面。 */
+export { validateTrialDraftIds }
 
 /* ─────────── 子图扩展与特征投影（subgraph-expansion S3.2/S4.3） ─────────── */
 
@@ -3104,9 +3090,13 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (typeof a.refillsRunId === 'string' && a.refillsRunId !== '') {
             hint += `\n补数关联原运行 ${a.refillsRunId}：compare_runs(runIdA=${a.refillsRunId}, runIdB=${result.runId})`
           }
-          // 零概念上手环（P2）：试算运行 → 对照/采纳/丢弃动线
+          // 零概念上手环（P2）：试算运行 → 对照/采纳/丢弃动线 + 试算差别提示上墙
           if (Array.isArray(a.trialDraftIds) && a.trialDraftIds.length > 0) {
             hint += `\n试算运行（草案临时带入，未写包）：compare_runs 对照基线后——满意 apply_draft 采纳，不满意 reject_draft 丢弃（随时可逆）`
+            const notes = (value as { trialNotes?: unknown }).trialNotes
+            if (Array.isArray(notes) && notes.length > 0) {
+              hint += `\n试算提示：${notes.map((n) => String(n)).join('；')}`
+            }
           }
           return textBlock(retreatRenderText(text + hint, recallPhrases(result.runId) ?? []))
         },
@@ -3191,7 +3181,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           if (identity) assertBusinessDataset(identity, pkg, dataset)
           assertDatasetGranted(dataset, contracts)
           // 试算沙箱（P2）：草案 → 内存规则配置（trialRuleConfigFromDrafts 零 IO，不写包不绕签发）
-          const trialConfig = trialDraftIds === undefined
+          const trialPlan = trialDraftIds === undefined
             ? undefined
             : trialRuleConfigFromDrafts(
                 pkg,
@@ -3209,7 +3199,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             ...(seedIds !== undefined ? { seedIds } : {}),
             analysisMode,
             ...(dataBasis !== undefined ? { dataBasis } : {}),
-            ...(trialConfig !== undefined ? { ruleConfig: trialConfig } : {}),
+            ...(trialPlan !== undefined ? { ruleConfig: trialPlan.ruleConfig } : {}),
           })
           assertRunContract(result)
           // 短语清单双源一次取定（命中 ∪ 场景红线），经注册表带给 render 闸（P2.2）。
@@ -3241,7 +3231,14 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             )
           }
           rememberPhrases(result.runId, phrases)
-          return toolOut(enforceOutputPolicy(result, phrases))
+          // 试算差别提示随结果上墙（评审 gap-1/2/3：非规则空转/越界 update/试算≠采纳显式出）
+          const trialNotes = trialPlan !== undefined && trialPlan.warnings.length > 0
+            ? trialPlan.warnings
+            : undefined
+          return toolOut(enforceOutputPolicy(
+            trialNotes === undefined ? result : { ...result, trialNotes },
+            phrases,
+          ))
         },
         [],
         (args) => redlines(args),
