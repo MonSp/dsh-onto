@@ -410,8 +410,13 @@ export interface RunExportManifest {
     determination: { owner: 'human-reviewer'; evidence: string[] }
     data: { owner: 'customer'; evidence: string[] }
   }
-  /** 可验什么、不可验什么（P1a 边界：可复核，不含离线验签）。 */
+  /** 可验什么、不可验什么（未签=P1a 可复核口径；signed 模板见 VERIFIABILITY_SIGNED）。 */
   verifiability: { canVerify: string[]; cannotVerify: string[] }
+  /**
+   * 签名标记（signed-delivery P1b，信息位——被签名覆盖自身）：
+   * 本包已签、用哪把钥匙、签名块在哪。未签包不落键。
+   */
+  signature?: { keyId: string; alg: 'ed25519'; file: string }
 }
 
 /** 责任映射与可验边界（常量模板 + 字段路径引用；无业务短语，不进禁语扫描面）。 */
@@ -453,6 +458,22 @@ const VERIFIABILITY = {
     '本包完整性为同信任域自证（无平台签名）——离线验签属 P1b 路线图，不在本包承诺范围',
     '输入数据本身的真实性与及时性（数据层责任归数据提供方）',
     '定性结论（认定层责任归人审方；本包只含候选 + 证据链 + 人审提示）',
+  ],
+}
+
+/** signed-delivery P1b：带平台签名的可验边界（信任根公钥离线验签）。 */
+export const VERIFIABILITY_SIGNED = {
+  canVerify: [
+    '包来源（Ed25519 平台签名对照信任根公钥，离线验签）',
+    '包内文件完整性（manifest.json#/files 逐文件 sha256 对照）',
+    '一次判定的计算过程（证据链 + ruleHitLog + 审计项逐条对账）',
+    '人审认定与运行的绑定关系（决定指纹与运行指纹一致性；人审决定随签名覆盖）',
+    '数据映射校验结果（mappingReceipt 诊断与计数）',
+  ],
+  cannotVerify: [
+    '输入数据本身的真实性与及时性（数据层责任归数据提供方）',
+    '定性结论（认定层责任归人审方；本包只含候选 + 证据链 + 人审提示）',
+    '签名时刻的权威时间戳（createdAt 为签发方自报；时间戳服务属路线图外）',
   ],
 }
 
