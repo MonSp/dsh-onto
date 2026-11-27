@@ -33,7 +33,6 @@ import {
   deriveFeatures,
   expandEntity,
   experienceFromRun,
-  exportRunArchive,
   findReportPageForScenario,
   isInsideDir,
   isSafeRunId,
@@ -66,6 +65,7 @@ import {
   type DataBasisInput,
   type ExpandResult,
   type ExperienceNote,
+  type MappingEvidenceInput,
   type ExperienceOutcome,
   type FeatureRecipe,
   type KnowledgeSourceRecord,
@@ -150,6 +150,7 @@ import { loadSourceConfigs, parseControlledBaseUrl, parseSourceKind, parseTokenE
 import { compareVersions } from './agent-skills-compare.js'
 import {
   bridgeExperienceFromDecision,
+  exportRunAuditPackage,
   persistReviewDecision,
   requireReviewerHostId,
   validateReviewDecision,
@@ -772,6 +773,9 @@ export interface ExportRunSummary {
   exported: true
   runId: string
   locator: string
+  manifestLocator: string
+  reportLocator: string
+  chainLocator?: string
   auditPassed: boolean
   candidateCount: number
   hitRuleCount: number
@@ -780,12 +784,21 @@ export interface ExportRunSummary {
   humanReviewRequired: true
 }
 
-export function exportSummaryOf(exported: { locator: string; archive: RunArchive }): ExportRunSummary {
+export function exportSummaryOf(exported: {
+  locator: string
+  manifestLocator: string
+  reportLocator: string
+  chainLocator?: string
+  archive: RunArchive
+}): ExportRunSummary {
   const s = summarizeRunResult(exported.archive.result)
   return {
     exported: true,
     runId: exported.archive.runId,
     locator: exported.locator,
+    manifestLocator: exported.manifestLocator,
+    reportLocator: exported.reportLocator,
+    ...(exported.chainLocator === undefined ? {} : { chainLocator: exported.chainLocator }),
     auditPassed: s.auditPassed,
     candidateCount: s.candidateCount,
     hitRuleCount: s.hitRuleCount,
@@ -3095,6 +3108,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           const pkg = load(args.name, args.version)
           let dataset: RuntimeDataset
           let dataBasis: DataBasisInput | undefined
+          let mappingEvidence: MappingEvidenceInput | undefined
           if (hasSource) {
             // 正式通道：provenance 与 dataBasis 只由服务端产出（伪造来源拒绝面在 core 判定）
             const query = args.query === undefined || args.query === null ? {} : args.query
@@ -3118,6 +3132,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             })
             dataset = fetched.dataset
             dataBasis = fetched.dataBasis
+            mappingEvidence = fetched.mappingEvidence
           } else {
             dataset = loadDatasetFromArgs(args as { datasetPath?: string; dataset?: unknown })
           }
@@ -3153,6 +3168,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             redlines: phrases,
             accessBinding: identity && runAccessBinding(identity),
             ...(refillsRunId !== undefined ? { refillsRunId } : {}),
+            ...(mappingEvidence !== undefined ? { mappingEvidence } : {}),
           })
           saveRunRecord(ws.root, rec)
           // S5.4.2 运行回写：经验初稿随 RunRecord 落盘（outcome 机械映射，人审回填可改判）。
@@ -3532,7 +3548,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
   reg('run', () => defineTool({
       name: 'export_audit',
       description:
-        '导出一轮运行的审计归档（ruleHitLog、审计项、证据链、时间线）到工作区 runs/exports/ 供人审留痕。' +
+        '导出一轮运行的审计包（run 归档 + 报表投影 + 治理链 + 包清单：ruleHitLog、审计项、证据链、' +
+        '人审认定、指纹、映射校验回执）到工作区 runs/exports/ 供人审留痕与对外复核。' +
         '返回摘要与 workspace 相对 locator；重复导出覆盖幂等。只读数据 + 固定导出目录。',
       parameters: {
         runId: { type: 'string', required: true, description: '运行 ID（如 run-abc12345）' },
@@ -3545,6 +3562,9 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             exported: { type: 'boolean', required: true, const: true },
             runId: { type: 'string', required: true },
             locator: { type: 'string', required: true },
+            manifestLocator: { type: 'string', required: true },
+            reportLocator: { type: 'string', required: true },
+            chainLocator: { type: 'string' },
             auditPassed: { type: 'boolean', required: true },
             candidateCount: { type: 'number', required: true },
             hitRuleCount: { type: 'number', required: true },
@@ -3562,7 +3582,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
           requireBizAuth('export', null, { typeExists: () => true, instanceExists: () => true })
           if (strict) assertBusinessRun(requireBusinessIdentity('export'), loadRunRecord(ws.root, args.runId))
           // 固定导出目录（S2.4）：不接受调用方路径，无路径面可攻击。
-          const exported = exportRunArchive(ws.root, args.runId)
+          // 审计包（P1a）：与 wire exportAudit 同一编排（含治理链），两出口同构。
+          const exported = exportRunAuditPackage(ws.root, args.runId)
           const summary = exportSummaryOf(exported)
           return toolOut(enforceOutputPolicy(summary, exported.archive.redlines))
         },
@@ -4996,6 +5017,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
                 shape: srcShape,
                 maps,
                 kind,
+                mapBasis: { package: { name: args.name, version: args.version } },
                 ...(token !== null ? { auth: { token } } : {}),
               }),
             )

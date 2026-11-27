@@ -27,6 +27,7 @@
  *   dsh-onto exp abstract --dir <versionDir> [--min-cluster N] [--include-prior-versions] [--data-dir <knowledgeRoot>]
  *   dsh-onto exp compress [--retain-days N] [--apply]
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
@@ -50,7 +51,7 @@ import { verifyDerived } from './loadgate.js'
 import {
   buildRunRecord,
   compareRunRecords,
-  exportRunArchive,
+  exportAuditPackage,
   listRunRecords,
   loadRunRecord,
   saveRunRecord,
@@ -588,8 +589,9 @@ function cmdRun(args: Args): void {
   if (!dir || !scenarioId) fail('run requires <versionDir> <scenarioId>')
   const dataPath = flagStr(args, 'data')
   // 入口策略（M1-B，Agent/wire/CLI 同一口径）：文件供数打 provenance=file（不得自称 connector）
+  const fileText = readFileSync(dataPath, 'utf8')
   const dataset: RuntimeDataset = {
-    ...(JSON.parse(readFileSync(dataPath, 'utf8')) as RuntimeDataset),
+    ...(JSON.parse(fileText) as RuntimeDataset),
     provenance: 'file',
   }
   const versionDir = resolve(dir)
@@ -618,6 +620,14 @@ function cmdRun(args: Args): void {
         inputDataset: dataset,
         result,
         redlines,
+        mappingEvidence: {
+          mappingApplied: false,
+          sourceAnchor: {
+            // 只落基名（fileSha256 是锚点）——审计包对外流转不带调用方机器绝对路径（评审 gap-5）
+            fileLocator: basename(dataPath),
+            fileSha256: createHash('sha256').update(fileText).digest('hex'),
+          },
+        },
       })
       saveRunRecord(root, rec)
       runRecord = result.runId
@@ -690,8 +700,16 @@ function cmdRuns(sub: string | undefined, args: Args): void {
     case 'export': {
       const runId = args._[2]
       if (!runId) fail('runs export requires <runId>')
-      const { locator, archive } = exportRunArchive(root, runId)
-      print({ ok: true, locator, archivedAt: archive.archivedAt, humanReviewRequired: true })
+      // 审计包（P1a）：run + report + manifest（CLI 无治理链数据源，chain 缺席如登记）
+      const out = exportAuditPackage(root, runId)
+      print({
+        ok: true,
+        locator: out.locator,
+        reportLocator: out.reportLocator,
+        manifestLocator: out.manifestLocator,
+        archivedAt: out.archivedAt,
+        humanReviewRequired: true,
+      })
       return
     }
     default:

@@ -783,7 +783,12 @@ test('I1 export 出口：摘要零短语；runId 撞红线（ID 面）fail-loud�
     },
     redlines: [PHRASE],
   })
-  const summary = exportSummaryOf({ locator: `runs/exports/${rec.runId}.json`, archive: { ...rec, archivedAt: 't' } })
+  const summary = exportSummaryOf({
+    locator: `runs/exports/${rec.runId}.json`,
+    manifestLocator: `runs/exports/${rec.runId}-manifest.json`,
+    reportLocator: `runs/exports/${rec.runId}-report.json`,
+    archive: { ...rec, archivedAt: 't' },
+  })
   try {
     enforceOutputPolicy(summary, [PHRASE])
     assert.fail('期望 INVALID_TOOL_OUTPUT')
@@ -793,6 +798,8 @@ test('I1 export 出口：摘要零短语；runId 撞红线（ID 面）fail-loud�
   }
   const clean = exportSummaryOf({
     locator: 'runs/exports/run-abc12345.json',
+    manifestLocator: 'runs/exports/run-abc12345-manifest.json',
+    reportLocator: 'runs/exports/run-abc12345-report.json',
     archive: { ...rec, runId: 'run-abc12345', archivedAt: 't' },
   })
   const masked = enforceOutputPolicy(clean, [PHRASE])
@@ -1217,9 +1224,13 @@ test('A-9 无 prep 路径 RunRecord 与现状逐字节一致（无 inputDigest/p
     assert.equal('inputDigest' in rec, false, '无 prep 不得有 inputDigest')
     assert.equal('prep' in rec, false, '无 prep 不得有 prep')
     assert.equal(typeof rec.datasetDigest, 'string')
+    // P1a 增补：provenance=file 落 mappingReceipt（诚实证据态，mappingApplied:false）；
+    // inputDigest/prep 两键仍不得出现（A-9 原防线不动）。
+    assert.equal(rec.mappingReceipt?.provenance, 'file')
+    assert.equal(rec.mappingReceipt?.mappingApplied, false)
     const keys = Object.keys(rec).sort()
     assert.deepEqual(keys, [
-      'datasetDigest', 'datasetSummary', 'package', 'redlines', 'result', 'runId', 'savedAt', 'scenarioId', 'startedAt',
+      'datasetDigest', 'datasetSummary', 'mappingReceipt', 'package', 'redlines', 'result', 'runId', 'savedAt', 'scenarioId', 'startedAt',
     ])
   } finally {
     rmSync(join(ws.root, 'runs'), { recursive: true, force: true })

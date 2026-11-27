@@ -37,7 +37,6 @@ import {
   buildRunRecord,
   compareRunRecords,
   derivePackage,
-  exportRunArchive,
   generatePlugin,
   isInsideDir,
   isSafeRelPath,

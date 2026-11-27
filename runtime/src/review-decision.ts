@@ -16,30 +16,25 @@
 import type { ExperienceNote, ExperienceOutcome, PackageWorkspace, RunRecord } from '@dsh-onto/core'
 import {
   PackageStoreError,
+  exportAuditPackage,
   experienceFromRun,
   loadExperienceNote,
   loadPackage,
   loadRunRecord,
+  ruleBasisDigest,
   saveExperienceNote,
+  type AuditPackageExport,
 } from '@dsh-onto/core'
-import { actionDigest } from './agent-approval.js'
 import { AgentToolError } from './agent-policy.js'
 import { businessPolicy } from './business-policy.js'
-import { actionStoreFor, type ReviewDecision } from './action-store.js'
+import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
 
 /**
  * 运行规则面指纹（复核决定绑定用）：包身份 + 规则命中日志（ruleId/score 排序）——
  * 与 RunRecord 台账可核对，换规则后旧决定不得照常套用（ruleFingerprint 二选一口径之一）。
+ * 实现下沉 core/runstore（审计包清单共用同一算法）；此处 re-export 保持既有导出面。
  */
-export function ruleBasisDigest(rec: RunRecord): string {
-  return actionDigest({
-    action: 'review-rule-basis',
-    package: `${rec.package.name}@${rec.package.version}`,
-    ruleHitLog: [...rec.result.ruleHitLog]
-      .map((h) => ({ ruleId: h.ruleId, score: h.score }))
-      .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
-  })
-}
+export { ruleBasisDigest }
 
 /** 边界归一：模型可能把 JSON 数组参数传成字符串——解析后按数组校验。 */
 export function normalizeCandidateIds(raw: unknown): string[] {
@@ -219,4 +214,31 @@ export function bridgeExperienceFromDecision(
   } catch (e) {
     return { skipped: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * 审计包导出编排（audit-package P1a）：治理链（decision→proposal→action）+
+ * core `exportAuditPackage` 一次写出。工具面 export_audit 与 wire exportAudit
+ * 同调本函数——两个出口交付物逐字段同构。
+ */
+export function exportRunAuditPackage(
+  wsRoot: string,
+  runId: string,
+): AuditPackageExport {
+  const store = actionStoreFor(wsRoot)
+  const decisions = store.listDecisions(runId)
+  const decisionIds = new Set(decisions.map((d) => d.decisionId))
+  const proposals = store.listProposals().filter((p) => decisionIds.has(p.decisionId))
+  const proposalIds = new Set(proposals.map((p) => p.proposalId))
+  const actions = store.listActions().filter(
+    (a) => (a.decisionId !== undefined && decisionIds.has(a.decisionId))
+      || (a.proposalId !== undefined && proposalIds.has(a.proposalId)),
+  )
+  return exportAuditPackage(wsRoot, runId, {
+    chain: { decisions, proposals, actions } satisfies {
+      decisions: ReviewDecision[]
+      proposals: ActionProposal[]
+      actions: StoredActionRecord[]
+    },
+  })
 }

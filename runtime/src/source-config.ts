@@ -276,6 +276,7 @@ export function restoreManagedDataSources(dataDir: string): SourceRestoreReport 
         shape: src.shape,
         maps,
         kind: cfg.sourceKind,
+        mapBasis: { package: { name: cfg.package.name, version: cfg.package.version } },
         ...(token !== null ? { auth: { token } } : {}),
       }))
       restored.push(cfg.sourceId)

@@ -11,11 +11,20 @@
  * @module @dsh-onto/core/runstore
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInsideDir, isSafeRelPath, PackageStoreError } from './store.js'
+import { readManifest } from './derive.js'
 import { diffViewOf, type RunDiffView } from './diffview.js'
-import type { RuntimeDataset, ScenarioPrepSummary, ScenarioRunResult } from './types.js'
+import { buildRunReport } from './report.js'
+import type {
+  MappingEvidenceInput,
+  MappingReceipt,
+  RuntimeDataset,
+  ScenarioPrepSummary,
+  ScenarioRunResult,
+  ValidationIssue,
+} from './types.js'
 
 export const RUNS_DIR = 'runs'
 export const RUNS_EXPORTS_DIR = 'exports'
@@ -46,6 +55,11 @@ export interface RunRecord {
    * 无关联时缺省（不落键，旧记录零回归）。
    */
   refillsRunId?: string
+  /**
+   * 映射校验回执（audit-package P1a）：过程层「数据映射正确」的可指认凭据。
+   * 无 provenance 声明的数据集不落此键（与 A-9 无 prep 不落键同族）。
+   */
+  mappingReceipt?: MappingReceipt
   /** 掩蔽前完整结果（core/wire/CLI 人审面口径）。 */
   result: ScenarioRunResult
   savedAt: string
@@ -94,6 +108,8 @@ export function buildRunRecord(input: {
   prep?: ScenarioPrepSummary
   /** 补数关联原 run（issue #33 缺口1）；无关联省略。 */
   refillsRunId?: string
+  /** 映射证据（audit-package P1a）；缺省按 dataset.provenance 推导诚实证据态。 */
+  mappingEvidence?: MappingEvidenceInput
   result: ScenarioRunResult
   redlines: readonly string[]
   savedAt?: string
@@ -105,6 +121,8 @@ export function buildRunRecord(input: {
   const inputDs = input.inputDataset ?? dataset
   const effDigest = datasetDigest(dataset)
   const inputDigest = prep !== undefined ? datasetDigest(inputDs) : undefined
+  const savedAt = input.savedAt ?? new Date().toISOString()
+  const mappingReceipt = buildMappingReceipt(input.mappingEvidence, inputDs, effDigest, savedAt)
   return {
     ...(input.accessBinding === undefined ? {} : { accessBinding: input.accessBinding }),
     runId: result.runId,
@@ -122,9 +140,101 @@ export function buildRunRecord(input: {
     redlines: [...new Set(input.redlines.filter((p) => typeof p === 'string' && p !== ''))],
     ...(prep !== undefined ? { prep } : {}),
     ...(input.refillsRunId === undefined ? {} : { refillsRunId: input.refillsRunId }),
+    ...(mappingReceipt === undefined ? {} : { mappingReceipt }),
     result,
-    savedAt: input.savedAt ?? new Date().toISOString(),
+    savedAt,
   }
+}
+
+/**
+ * 映射校验回执推导（audit-package P1a）：
+ * - connector + 证据（配置映射连接器透传）→ mappingApplied:true + 诊断/计数/锚点；
+ * - connector + 无证据（手写连接器自映射）→ mappingApplied:false，显式无 source-map 回执；
+ * - inline/file → mappingApplied:false（直入数据，无映射环节）；
+ * - 未声明 provenance 且无证据 → 不落键（零回归）。
+ */
+function buildMappingReceipt(
+  evidence: MappingEvidenceInput | undefined,
+  inputDs: RuntimeDataset,
+  datasetDigestValue: string,
+  issuedAt: string,
+): MappingReceipt | undefined {
+  const provenance = inputDs.provenance
+  if (provenance === undefined && evidence === undefined) return undefined
+  const mappingApplied = evidence?.mappingApplied ?? false
+  return {
+    receiptVersion: 1,
+    provenance: provenance ?? 'unspecified',
+    mappingApplied,
+    ...(evidence?.mapBasis === undefined ? {} : { mapBasis: evidence.mapBasis }),
+    ...(evidence?.sourceAnchor === undefined ? {} : { sourceAnchor: evidence.sourceAnchor }),
+    ...(evidence?.diagnostics === undefined
+      ? {}
+      : { diagnostics: summarizeDiagnostics(evidence.diagnostics) }),
+    counts: {
+      objects: inputDs.objects.length,
+      relations: inputDs.relations.length,
+      behaviors: inputDs.behaviors?.length ?? 0,
+      candidates: inputDs.candidates.length,
+    },
+    ...(evidence?.businessWindow === undefined ? {} : { businessWindow: evidence.businessWindow }),
+    datasetDigest: datasetDigestValue,
+    issuedAt,
+  }
+}
+
+/** 诊断汇总：错误/警告计数 + 代码归并计数（不展开行数据、不带短语）。 */
+function summarizeDiagnostics(
+  issues: readonly ValidationIssue[],
+): NonNullable<MappingReceipt['diagnostics']> {
+  let errors = 0
+  let warnings = 0
+  const byCode = new Map<string, { code: string; level: string; count: number }>()
+  for (const issue of issues) {
+    if (issue.level === 'error') errors += 1
+    else if (issue.level === 'warn') warnings += 1
+    const key = `${issue.level}\u0000${issue.code}`
+    const entry = byCode.get(key)
+    if (entry === undefined) byCode.set(key, { code: issue.code, level: issue.level, count: 1 })
+    else entry.count += 1
+  }
+  return {
+    errors,
+    warnings,
+    codes: [...byCode.values()].sort((a, b) =>
+      a.level === b.level ? (a.code < b.code ? -1 : a.code > b.code ? 1 : 0) : a.level < b.level ? -1 : 1,
+    ),
+  }
+}
+
+/**
+ * 运行规则面指纹（review-decision 同一算法，实现下沉 core 供包清单共用）：
+ * 包身份 + 规则命中日志（ruleId/score 排序）。换规则后旧决定不得照常套用。
+ *
+ * 规范化语义与 runtime `actionDigest`（agent-approval.ts）逐字节一致——
+ * undefined/'undefined'、NaN/'NaN'、±Infinity 显式字面（score 为 NaN 时两实现仍同指纹，
+ * 已落库 ReviewDecision.ruleFingerprint 不因本次下沉漂移）。注意与 runstore 自用
+ * canonicalJson（datasetDigest）语义不同：那边 NaN→'null'，此处不得复用。
+ */
+export function ruleBasisDigest(rec: RunRecord): string {
+  const actionCanonical = (value: unknown): string => {
+    if (value === undefined) return 'undefined'
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      return Number.isNaN(value) ? 'NaN' : value > 0 ? 'Infinity' : '-Infinity'
+    }
+    if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+    if (Array.isArray(value)) return `[${value.map(actionCanonical).join(',')}]`
+    const r = value as Record<string, unknown>
+    const keys = Object.keys(r).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${actionCanonical(r[k])}`).join(',')}}`
+  }
+  return createHash('sha256').update(actionCanonical({
+    action: 'review-rule-basis',
+    package: `${rec.package.name}@${rec.package.version}`,
+    ruleHitLog: [...rec.result.ruleHitLog]
+      .map((h) => ({ ruleId: h.ruleId, score: h.score }))
+      .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
+  })).digest('hex')
 }
 
 /** runs/ 目录（workspace 根之下）。 */
@@ -270,6 +380,177 @@ export function exportRunArchive(
   const archive: RunArchive = { ...record, archivedAt: new Date().toISOString() }
   writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(archive, null, 2)}\n`, 'utf8')
   return { locator: `${RUNS_DIR}/${RUNS_EXPORTS_DIR}/${id}.json`, archive }
+}
+
+/* ───────────────────── 审计包（audit-package P1a） ───────────────────── */
+
+/** 包清单（完整性层 + 分层责任 + 可验边界；manifest 自身不入 files——自证到成员为止）。 */
+export interface RunExportManifest {
+  kind: 'RunExportManifest'
+  runId: string
+  package: { name: string; version: string }
+  scenarioId: string
+  exportedAt: string
+  /** 包内逐文件指纹（成员文件名 + sha256 + 字节数）。 */
+  files: Array<{ name: string; sha256: string; bytes: number }>
+  fingerprints: {
+    datasetDigest: string
+    inputDigest?: string
+    /** ruleBasisDigest（review-decision 同一算法；换规则后旧决定不得套用）。 */
+    ruleFingerprint: string
+    /** 映射契约 sourceDigest（mappingReceipt.mapBasis.sourceDigest）。 */
+    mapSourceDigest?: string
+    /** 包派生 manifest sourceDigest（派生链指纹；包目录可读时）。 */
+    packageSourceDigest?: string
+  }
+  humanReviewRequired: true
+  /** 分层责任 → 可指认技术证据（合同语言同构 docs/raas-responsibility-clause.zh.md）。 */
+  responsibility: {
+    process: { owner: 'platform'; evidence: string[] }
+    determination: { owner: 'human-reviewer'; evidence: string[] }
+    data: { owner: 'customer'; evidence: string[] }
+  }
+  /** 可验什么、不可验什么（P1a 边界：可复核，不含离线验签）。 */
+  verifiability: { canVerify: string[]; cannotVerify: string[] }
+}
+
+/** 责任映射与可验边界（常量模板 + 字段路径引用；无业务短语，不进禁语扫描面）。 */
+const RESPONSIBILITY = {
+  process: {
+    owner: 'platform' as const,
+    evidence: [
+      'run.json#/mappingReceipt（映射校验回执：来源/诊断/计数）',
+      'run.json#/datasetDigest + inputDigest（数据指纹）',
+      'run.json#/result/ruleHitLog（规则命中计分流水）',
+      'run.json#/result/audit（三层闭合审计与禁语扫描）',
+      'manifest.json#/fingerprints（包级指纹）',
+    ],
+  },
+  determination: {
+    owner: 'human-reviewer' as const,
+    evidence: [
+      'chain.json#/decisions[]（复核决定：reviewer + ruleFingerprint + snapshotDigest 绑定）',
+      'chain.json#/proposals[] + actions[]（处置动作与外部回执）',
+    ],
+  },
+  data: {
+    owner: 'customer' as const,
+    evidence: [
+      'run.json#/mappingReceipt/provenance（数据来源标记）',
+      'run.json#/mappingReceipt/sourceAnchor（快照/文件锚点）',
+    ],
+  },
+}
+
+const VERIFIABILITY = {
+  canVerify: [
+    '包内文件完整性（manifest.json#/files 逐文件 sha256 对照）',
+    '一次判定的计算过程（证据链 + ruleHitLog + 审计项逐条对账）',
+    '人审认定与运行的绑定关系（决定指纹与运行指纹一致性）',
+    '数据映射校验结果（mappingReceipt 诊断与计数）',
+  ],
+  cannotVerify: [
+    '本包完整性为同信任域自证（无平台签名）——离线验签属 P1b 路线图，不在本包承诺范围',
+    '输入数据本身的真实性与及时性（数据层责任归数据提供方）',
+    '定性结论（认定层责任归人审方；本包只含候选 + 证据链 + 人审提示）',
+  ],
+}
+
+/** 审计包导出结果（全部 workspace 相对 locator）。 */
+export interface AuditPackageExport {
+  locator: string
+  manifestLocator: string
+  reportLocator: string
+  chainLocator?: string
+  archivedAt: string
+  manifest: RunExportManifest
+  /** 归档本体（人审面完整，含短语；模型面摘要另走脱敏闸）。 */
+  archive: RunArchive
+}
+
+/**
+ * 统一审计包（audit-package P1a）：run + 报表投影 + 治理链（可选）+ 包清单，
+ * 一次写出 runs/exports/ 全套（覆盖幂等）。工具面与 wire 同调此函数——
+ * 两个出口交付物逐字段同构。客户审计员脱离平台 UI 仅凭包内容复核一次判定。
+ */
+export function exportAuditPackage(
+  root: string,
+  runId: unknown,
+  extras?: { chain?: unknown },
+): AuditPackageExport {
+  const id = requireSafeRunId(runId)
+  const record = loadRunRecord(root, id)
+  const dir = join(runsDir(root), RUNS_EXPORTS_DIR)
+  assertInsideRoot(root, dir)
+  mkdirSync(dir, { recursive: true })
+  const rel = (name: string): string => `${RUNS_DIR}/${RUNS_EXPORTS_DIR}/${name}`
+  const write = (name: string, body: unknown): { name: string; sha256: string; bytes: number } => {
+    const text = `${JSON.stringify(body, null, 2)}\n`
+    const bytes = Buffer.byteLength(text, 'utf8')
+    writeFileSync(join(dir, name), text, 'utf8')
+    return { name, sha256: createHash('sha256').update(text).digest('hex'), bytes }
+  }
+
+  const exportedAt = new Date().toISOString()
+  const archive: RunArchive = { ...record, archivedAt: exportedAt }
+  const report = buildRunReport(record)
+  const members = [write(`${id}.json`, archive), write(`${id}-report.json`, report)]
+  let chainLocator: string | undefined
+  const chainFile = join(dir, `${id}-chain.json`)
+  if (extras?.chain !== undefined) {
+    members.push(write(`${id}-chain.json`, { runId: id, ...(extras.chain as object) }))
+    chainLocator = rel(`${id}-chain.json`)
+  } else if (existsSync(chainFile)) {
+    // 无治理链数据源（CLI）：清掉上次导出的链文件——不留游离未登记成员（评审 gap-2）
+    rmSync(chainFile, { force: true })
+  }
+
+  const manifest: RunExportManifest = {
+    kind: 'RunExportManifest',
+    runId: id,
+    package: { name: record.package.name, version: record.package.version },
+    scenarioId: record.scenarioId,
+    exportedAt,
+    files: members,
+    fingerprints: {
+      datasetDigest: record.datasetDigest,
+      ...(record.inputDigest === undefined ? {} : { inputDigest: record.inputDigest }),
+      ruleFingerprint: ruleBasisDigest(record),
+      ...(record.mappingReceipt?.mapBasis?.sourceDigest === undefined
+        ? {}
+        : { mapSourceDigest: record.mappingReceipt.mapBasis.sourceDigest }),
+      ...packageSourceDigestOf(root, record),
+    },
+    humanReviewRequired: true,
+    responsibility: RESPONSIBILITY,
+    verifiability: VERIFIABILITY,
+  }
+  // manifest 不自列（自证到成员为止）：files 只登记成员文件的指纹。
+  write(`${id}-manifest.json`, manifest)
+
+  return {
+    locator: rel(`${id}.json`),
+    manifestLocator: rel(`${id}-manifest.json`),
+    reportLocator: rel(`${id}-report.json`),
+    ...(chainLocator === undefined ? {} : { chainLocator }),
+    archivedAt: exportedAt,
+    manifest,
+    archive,
+  }
+}
+
+/** 包派生链指纹（版本目录可读时读 DerivedManifest.sourceDigest；否则缺省不落键）。 */
+function packageSourceDigestOf(
+  root: string,
+  record: RunRecord,
+): { packageSourceDigest?: string } {
+  try {
+    const dir = join(root, 'packages', record.package.name, record.package.version)
+    const manifest = readManifest(dir)
+    return manifest === null ? {} : { packageSourceDigest: manifest.sourceDigest }
+  } catch {
+    return {}
+  }
 }
 
 /* ───────────────────────── 两轮对比（S2.2） ───────────────────────── */

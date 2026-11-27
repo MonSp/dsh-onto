@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listReviewQueue', false, 'RLQ', 'Review queue: runs joined with latest ReviewDecision.'),
       desc('ontoRuntime', 'showRun', true, 'RSH', 'Show one run record (human-review face).'),
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records.'),
-      desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export one run audit archive.'),
+      desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export run audit package (run + report + chain + manifest).'),
       desc('ontoRuntime', 'reviewChain', true, 'RVC', 'Review decision -> proposal -> action chain for one run.'),
       desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record business review decision (UI write).'),
       desc('ontoRuntime', 'listExperiences', false, 'EXL', 'List experience notes (summary).'),

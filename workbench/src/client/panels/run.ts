@@ -305,10 +305,12 @@ export function RunPanel(props: {
                         setBusy('export')
                         setError('')
                         try {
-                          const out = unwrap<{ locator: string; chainLocator?: string }>(
+                          const out = unwrap<{ locator: string; manifestLocator: string; chainLocator?: string }>(
                             await api!.exportAudit({ runId: r.runId }),
                           )
-                          setExportInfo(out.chainLocator ? `${out.locator} + ${out.chainLocator}` : out.locator)
+                          setExportInfo(
+                            [out.locator, out.chainLocator, out.manifestLocator].filter(Boolean).join(' + '),
+                          )
                         } catch (e) {
                           setError(errText(e))
                         } finally {
