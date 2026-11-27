@@ -196,7 +196,9 @@ export class DataSourceRegistry {
     }
     // provenance 只由本通道产出（调用方自称 connector 一律被入口覆盖/拒绝）
     const dataset = { ...out.dataset, provenance: 'connector' } as RuntimeDataset
-    // 映射证据（P1a）：连接器自报的 source-maps 转换证据 + 快照锚点（回执 sourceAnchor 同源）
+    // 映射证据（P1a）：连接器自报的 source-maps 转换证据 + 快照锚点（回执 sourceAnchor 同源）。
+    // 信任边界：连接器是部署侧登记代码（Agent 不可注册任意连接器），自报可接受；
+    // 手写连接器不报 mappingApplied → 回执如实记「连接器自映射，无 source-map 回执」。
     const base = out.mappingEvidence
     const mappingEvidence: MappingEvidenceInput | undefined = base === undefined
       ? undefined

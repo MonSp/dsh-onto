@@ -11,7 +11,7 @@
  * @module @dsh-onto/core/runstore
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isInsideDir, isSafeRelPath, PackageStoreError } from './store.js'
 import { readManifest } from './derive.js'
@@ -210,9 +210,25 @@ function summarizeDiagnostics(
 /**
  * 运行规则面指纹（review-decision 同一算法，实现下沉 core 供包清单共用）：
  * 包身份 + 规则命中日志（ruleId/score 排序）。换规则后旧决定不得照常套用。
+ *
+ * 规范化语义与 runtime `actionDigest`（agent-approval.ts）逐字节一致——
+ * undefined/'undefined'、NaN/'NaN'、±Infinity 显式字面（score 为 NaN 时两实现仍同指纹，
+ * 已落库 ReviewDecision.ruleFingerprint 不因本次下沉漂移）。注意与 runstore 自用
+ * canonicalJson（datasetDigest）语义不同：那边 NaN→'null'，此处不得复用。
  */
 export function ruleBasisDigest(rec: RunRecord): string {
-  return createHash('sha256').update(canonicalJson({
+  const actionCanonical = (value: unknown): string => {
+    if (value === undefined) return 'undefined'
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      return Number.isNaN(value) ? 'NaN' : value > 0 ? 'Infinity' : '-Infinity'
+    }
+    if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+    if (Array.isArray(value)) return `[${value.map(actionCanonical).join(',')}]`
+    const r = value as Record<string, unknown>
+    const keys = Object.keys(r).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${actionCanonical(r[k])}`).join(',')}}`
+  }
+  return createHash('sha256').update(actionCanonical({
     action: 'review-rule-basis',
     package: `${rec.package.name}@${rec.package.version}`,
     ruleHitLog: [...rec.result.ruleHitLog]
@@ -480,9 +496,13 @@ export function exportAuditPackage(
   const report = buildRunReport(record)
   const members = [write(`${id}.json`, archive), write(`${id}-report.json`, report)]
   let chainLocator: string | undefined
+  const chainFile = join(dir, `${id}-chain.json`)
   if (extras?.chain !== undefined) {
-    members.push(write(`${id}-chain.json`, { runId: id, ...((extras.chain ?? {}) as object) }))
+    members.push(write(`${id}-chain.json`, { runId: id, ...(extras.chain as object) }))
     chainLocator = rel(`${id}-chain.json`)
+  } else if (existsSync(chainFile)) {
+    // 无治理链数据源（CLI）：清掉上次导出的链文件——不留游离未登记成员（评审 gap-2）
+    rmSync(chainFile, { force: true })
   }
 
   const manifest: RunExportManifest = {

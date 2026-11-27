@@ -52,7 +52,6 @@ import {
   buildRunRecord,
   compareRunRecords,
   exportAuditPackage,
-  exportRunArchive,
   listRunRecords,
   loadRunRecord,
   saveRunRecord,
@@ -624,7 +623,8 @@ function cmdRun(args: Args): void {
         mappingEvidence: {
           mappingApplied: false,
           sourceAnchor: {
-            fileLocator: dataPath,
+            // 只落基名（fileSha256 是锚点）——审计包对外流转不带调用方机器绝对路径（评审 gap-5）
+            fileLocator: basename(dataPath),
             fileSha256: createHash('sha256').update(fileText).digest('hex'),
           },
         },

@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
 import {
   assertBatchContract,
   assertDiffContract,
@@ -32,12 +33,12 @@ import {
   buildRunRecord,
   compareRunRecords,
   derivePackage,
-  exportRunArchive,
   loadPackage,
   loadRunRecord,
   loadRunRedlines,
   saveRunRecord,
 } from '@dsh-onto/core'
+import { exportRunAuditPackage } from '@dsh-onto/runtime'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const AML_DIR = fileURLToPath(new URL('../../packages/aml/1.0.0', import.meta.url))
@@ -393,18 +394,18 @@ test('exportSummaryOf：模型面摘要零短语、locator 相对路径（S2.4�
   assert.ok(!summary.locator.includes(':') && !summary.locator.startsWith('/'))
 })
 
-test('export_audit 集成：batch → export，摘要与 RunRecord 一致、归档人审面完整', () => {
+test('export_audit 集成：batch → exportRunAuditPackage（工具面=wire 同一编排），摘要与 RunRecord 一致、四件套人审面完整', () => {
   const { ws, root, dir, pkg, dataset } = mkAmlBatchFixture()
   try {
     const out = runScenarioBatch({ ws, pkg, versionDir: dir, dataset, ids: ['SCN-AML-FIND-CLUES'] })
     const runId = out.results[0].runId
-    const exported = exportRunArchive(root, runId)
+    const exported = exportRunAuditPackage(root, runId)
     assert.equal(exported.locator, `runs/exports/${runId}.json`)
-    const summary = exportSummaryOf({
-      ...exported,
-      manifestLocator: `runs/exports/${runId}-manifest.json`,
-      reportLocator: `runs/exports/${runId}-report.json`,
-    })
+    assert.equal(exported.manifestLocator, `runs/exports/${runId}-manifest.json`)
+    assert.equal(exported.reportLocator, `runs/exports/${runId}-report.json`)
+    // 治理链文件无条件落（空链也登记）——工具面不再漏链（P1a 出口归一）
+    assert.equal(exported.chainLocator, `runs/exports/${runId}-chain.json`)
+    const summary = exportSummaryOf(exported)
     assert.equal(summary.runId, runId)
     assert.equal(summary.candidateCount, out.results[0].summary.candidateCount)
     assert.equal(summary.auditPassed, out.results[0].summary.auditPassed)
@@ -412,9 +413,22 @@ test('export_audit 集成：batch → export，摘要与 RunRecord 一致、归�
     const rec = loadRunRecord(root, runId)
     assert.deepEqual(exported.archive.redlines, rec.redlines)
     assert.equal(exported.archive.result.candidates.length, summary.candidateCount)
-    // 重复导出覆盖幂等
-    const again = exportRunArchive(root, runId)
+    // manifest 如实登记三成员 + 逐文件 sha256 对照实文件
+    const manifest = JSON.parse(readFileSync(join(root, 'runs', 'exports', `${runId}-manifest.json`), 'utf8'))
+    assert.deepEqual(manifest.files.map((f) => f.name), [`${runId}.json`, `${runId}-report.json`, `${runId}-chain.json`])
+    for (const f of manifest.files) {
+      const text = readFileSync(join(root, 'runs', 'exports', f.name), 'utf8')
+      assert.equal(f.sha256, createHash('sha256').update(text).digest('hex'))
+    }
+    // 重复导出覆盖幂等；两次导出除时间戳/文件哈希（archivedAt 随导出时刻变）外逐字段同构
+    //（工具面=wire 同编排的回归锚——结构性同构由共享编排保证，此处锁住不漂移）
+    const again = exportRunAuditPackage(root, runId)
     assert.equal(again.locator, exported.locator)
+    const strip = (m) => ({
+      ...JSON.parse(JSON.stringify(m).replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'TS')),
+      files: m.files.map((f) => f.name),
+    })
+    assert.deepEqual(strip(again.manifest), strip(exported.manifest))
   } finally {
     rmSync(root, { recursive: true, force: true })
     configurePhraseStore(null)

@@ -123,7 +123,7 @@ test('MappingReceipt：inline/file → mappingApplied:false（直入数据无映
   }
 })
 
-test('MappingReceipt：connector 无证据（手写连接器）→ mappingApplied:false 显式无回执', () => {
+test('MappingReceipt：connector 无证据（手写连接器）→ 回执在场且 mappingApplied:false（无 source-map 回执）', () => {
   const rec = buildRunRecord({
     package: { name: 'test-pkg', version: '1.0.0' },
     dataset: fakeDataset('connector'),
@@ -173,6 +173,50 @@ test('ruleBasisDigest：同 run 同指纹；ruleHitLog 顺序无关', () => {
   assert.equal(ruleBasisDigest(mk(base)), ruleBasisDigest(mk(base)))
   assert.equal(ruleBasisDigest(mk(shuffled)), ruleBasisDigest(mk(sameOrder)))
   assert.notEqual(ruleBasisDigest(mk(base)), ruleBasisDigest(mk(shuffled)))
+})
+
+test('ruleBasisDigest：与历史 actionDigest 算法逐字节一致（含 NaN score 边界）', () => {
+  // 历史实现（runtime/agent-approval.ts actionDigest + 同款 canonicalJson）内联复刻：
+  // 已落库 ReviewDecision.ruleFingerprint 不因实现下沉而漂移。
+  const legacyDigest = (parts) => {
+    const cj = (value) => {
+      if (value === undefined) return 'undefined'
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        return Number.isNaN(value) ? 'NaN' : value > 0 ? 'Infinity' : '-Infinity'
+      }
+      if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+      if (Array.isArray(value)) return `[${value.map(cj).join(',')}]`
+      const r = value
+      const keys = Object.keys(r).sort()
+      return `{${keys.map((k) => `${JSON.stringify(k)}:${cj(r[k])}`).join(',')}}`
+    }
+    return createHash('sha256').update(cj(parts)).digest('hex')
+  }
+  const mk = (ruleHitLog) =>
+    buildRunRecord({
+      package: { name: 'test-pkg', version: '1.0.0' },
+      dataset: fakeDataset(),
+      result: fakeResult({ ruleHitLog }),
+      redlines: [],
+      savedAt: '2026-11-05T01:00:00.000Z',
+    })
+  const cases = [
+    [{ ruleId: 'RULE-TST-S1', candidateId: 'CAND-001', score: 0.5, ts: 't' }],
+    [{ ruleId: 'RULE-A', candidateId: 'C', score: 0, ts: 't' }, { ruleId: 'RULE-B', candidateId: 'C', score: 1, ts: 't' }],
+    // NaN score（表达式 0/0 可达）：两实现都序列化 'NaN'，指纹不得漂移
+    [{ ruleId: 'RULE-N', candidateId: 'C', score: NaN, ts: 't' }],
+  ]
+  for (const ruleHitLog of cases) {
+    const rec = mk(ruleHitLog)
+    const expected = legacyDigest({
+      action: 'review-rule-basis',
+      package: 'test-pkg@1.0.0',
+      ruleHitLog: ruleHitLog
+        .map((h) => ({ ruleId: h.ruleId, score: h.score }))
+        .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
+    })
+    assert.equal(ruleBasisDigest(rec), expected, `digest 漂移: ${JSON.stringify(ruleHitLog)}`)
+  }
 })
 
 test('exportAuditPackage：四件套落盘 + manifest 逐文件 sha256 可复验', () => {
