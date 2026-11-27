@@ -78,6 +78,8 @@ export function createPlugin(React: typeof import('react')): PluginModule {
         // 与右栏图谱 tab 共享的包选中态（P1 修正）
         const [selected, setSelectedRaw] = useSharedSelected()
         const [listError, setListError] = useState('')
+        // 零概念上手环（P2）：知识面板选中草案 → 试算（切运行面板带 trialDraftIds）
+        const [trialDraftIds, setTrialDraftIds] = useState<string[] | null>(null)
 
         // 选中包 → 直接进画布（不再停在包表格）
         const setSelected = (s: { name: string; version: string } | null): void => {
@@ -178,14 +180,24 @@ export function createPlugin(React: typeof import('react')): PluginModule {
                         h(ReleasePanel, { t, apis }),
                       )
                     : tab === 'knowledge'
-                      ? h(KnowledgePanel, { t, apis, selected })
+                      ? h(KnowledgePanel, {
+                          t, apis, selected,
+                          onTrial: (ids: string[]) => {
+                            setTrialDraftIds(ids)
+                            setTab('run')
+                          },
+                        })
                       : tab === 'validate'
                         ? h(ValidatePanel, { t, apis, selected })
                         : tab === 'source'
                           ? h(SourcePanel, { t, apis, selected })
                           : tab === 'experience'
                             ? h(ExperiencePanel, { t, apis })
-                            : h(RunPanel, { t, apis, selected }),
+                            : h(RunPanel, {
+                                t, apis, selected,
+                                trialDraftIds,
+                                onTrialDone: () => setTrialDraftIds(null),
+                              }),
                 ),
           ),
         )

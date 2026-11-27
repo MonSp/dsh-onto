@@ -8,8 +8,16 @@
 /** 包签发状态机（§3.4）：DRAFT → IN_REVIEW → ISSUED。 */
 export type PackageStatus = 'DRAFT' | 'IN_REVIEW' | 'ISSUED'
 
-/** 知识原料六类（§5.1；CONVERSATION 为对话轮次原料，conversational-modeling P3）。 */
-export type SourceType = 'LEGACY_SYS' | 'CASE_SAMPLE' | 'POLICY' | 'SCHEMA_API' | 'WORK_ORDER' | 'CONVERSATION'
+/** 知识原料七类（§5.1；CONVERSATION 为对话轮次原料，conversational-modeling P3；
+ *  DOCUMENT 文档类原料（PDF 提取文本/表格文本），zero-concept-loop P2）。 */
+export type SourceType =
+  | 'LEGACY_SYS'
+  | 'CASE_SAMPLE'
+  | 'POLICY'
+  | 'SCHEMA_API'
+  | 'WORK_ORDER'
+  | 'CONVERSATION'
+  | 'DOCUMENT'
 
 export const SOURCE_TYPES: readonly SourceType[] = [
   'LEGACY_SYS',
@@ -18,6 +26,7 @@ export const SOURCE_TYPES: readonly SourceType[] = [
   'SCHEMA_API',
   'WORK_ORDER',
   'CONVERSATION',
+  'DOCUMENT',
 ]
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -12,14 +12,18 @@ export function RunPanel(props: {
   t: (k: string) => string
   apis: Ctx
   selected: { name: string; version: string } | null
+  /** 零概念上手环（P2）：知识面板带过来的试算草案（运行即试算；跑完回知识库采纳/丢弃）。 */
+  trialDraftIds?: string[] | null
+  onTrialDone?: () => void
 }) {
-  const { t, apis, selected } = props
+  const { t, apis, selected, trialDraftIds, onTrialDone } = props
   const [scenarios, setScenarios] = useState<Array<{ id: string; name: string; goal: string }>>([])
   const [scenarioId, setScenarioId] = useState('')
   const [datasetText, setDatasetText] = useState('{\n  "objects": [],\n  "relations": [],\n  "behaviors": [],\n  "candidates": []\n}')
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   // P1：本地暂存最近 N 次运行（不持久化，v0.4 再入库）
   const [history, setHistory] = useState<Array<{ hid: string; label: string; result: Record<string, unknown> }>>([])
   const [viewHid, setViewHid] = useState('')
@@ -101,6 +105,27 @@ export function RunPanel(props: {
     h('h3', { className: 'ow-h2' }, t('tabRun')),
     h('div', { className: 'ow-row' }, h(Loading, { text: busy ? `${t('busy')} (${busy})` : '' })),
     h(ErrorBanner, { text: error }),
+    info ? h(OkBanner, { text: info }) : null,
+    // 零概念上手环（P2）：试算横幅——草案临时带入（不写包），跑完对照后回知识库采纳/丢弃
+    trialDraftIds && trialDraftIds.length > 0
+      ? h(
+          'div',
+          { className: 'ow-note', style: { border: '1px solid #c7d2fe', background: '#eef2ff', padding: '8px 10px', borderRadius: 6 } },
+          `${t('trialBanner')}（${trialDraftIds.length}）`,
+          h(
+            'button',
+            {
+              className: 'ow-btn ghost',
+              style: { marginLeft: 8 },
+              onClick: () => {
+                setInfo('')
+                onTrialDone?.()
+              },
+            },
+            '×',
+          ),
+        )
+      : null,
     h(
       Row,
       { label: t('scenario') },
@@ -120,8 +145,15 @@ export function RunPanel(props: {
               setError('')
               try {
                 const dataset = JSON.parse(datasetText) as unknown
-                const out = unwrap<{ result: Record<string, unknown> }>(
-                  await api!.runScenario({ name: selected.name, version: selected.version, scenarioId, dataset }),
+                const out = unwrap<{ result: Record<string, unknown>; trialNotes?: string[] }>(
+                  await api!.runScenario({
+                    name: selected.name,
+                    version: selected.version,
+                    scenarioId,
+                    dataset,
+                    // 零概念上手环（P2）：试算草案临时带入（不写包、不改正式版）
+                    ...(trialDraftIds && trialDraftIds.length > 0 ? { trialDraftIds } : {}),
+                  }),
                 )
                 setResult(out.result)
                 setViewHid('')
@@ -129,6 +161,10 @@ export function RunPanel(props: {
                 const label = `${scenarioId} @ ${new Date().toLocaleTimeString()}`
                 setHistory((hlist) => [{ hid, label, result: out.result }, ...hlist].slice(0, 10))
                 loadRuns()
+                if (trialDraftIds && trialDraftIds.length > 0) {
+                  // 试算差别提示上墙（非规则空转/越界 update/试算≠采纳——评审 gap-1/2/3）
+                  setInfo([t('trialHint'), ...(out.trialNotes ?? [])].join('\n'))
+                }
               } catch (e) {
                 setError(errText(e))
               } finally {

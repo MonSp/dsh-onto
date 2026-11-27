@@ -30,6 +30,7 @@ import {
   runScenario,
   saveExperienceNote,
   saveRunRecord,
+  trialRuleConfigFromDrafts,
   verifyDerived,
   type A2uiSurfaceMessage,
   type DataBasisInput,
@@ -46,7 +47,7 @@ import {
   type ScenarioRunResult,
 } from '@dsh-onto/core'
 import { runtimeContextForHost } from './context.js'
-import { AgentToolError, isRecord } from './agent-policy.js'
+import { AgentToolError, isRecord, validateTrialDraftIds } from './agent-policy.js'
 import { actionDigest } from './agent-approval.js'
 import {
   approvalContextDigest,
@@ -314,10 +315,14 @@ export class OntoRuntime extends RuntimeRemoteService {
     seedIds?: string[]
     /** 补数关联原运行（issue #33 缺口1）：本次系对原运行 pendingChecks 缺数补数后的重算。 */
     refillsRunId?: string
+    /** 试算草案（零概念上手环 P2）：草案临时带入规则面试跑——不写包、不绕签发；RunRecord 落 trial 留痕。 */
+    trialDraftIds?: string[]
   }): Promise<{
     result: ScenarioRunResult
     /** 运行回写回执（学习层旁路）：缺卡/写回失败显式 skipped——RunRecord 已保存，交付不回滚。 */
     experience: { runId: string; created: true } | { runId: string; skipped: string }
+    /** 试算差别提示（非规则草案空转/越界 update/试算≠采纳——评审 gap-1/2/3 显式上墙）。 */
+    trialNotes?: string[]
   }> {
     return guard(async () => {
       this.assertActive(request.name, request.version)
@@ -361,10 +366,29 @@ export class OntoRuntime extends RuntimeRemoteService {
         dataset = { ...(request.dataset as RuntimeDataset), provenance: 'inline' }
         if (identity) assertBusinessDataset(identity, pkg, dataset)
       }
+      // 零概念上手环（P2）：试算草案 → 内存规则配置（不写包、不绕签发；RunRecord 落 trial 留痕）
+      let trialPlan: ReturnType<typeof trialRuleConfigFromDrafts> | undefined
+      const trialDraftIds = validateTrialDraftIds(request.trialDraftIds)
+      if (trialDraftIds !== undefined) {
+        const knowledge = new KnowledgeStore(this.dataDir)
+        trialPlan = trialRuleConfigFromDrafts(
+          pkg,
+          request.scenarioId,
+          trialDraftIds.map((id) => {
+            const c = knowledge.getCandidate(id)
+            // KnowledgeStore.packageId 归一为包名（normalizePackageId 去版本段）——按名归属判定
+            if (c.packageId !== request.name) {
+              throw new AgentToolError('INVALID_ARGS', `草案 ${id} 不属于 ${request.name}`)
+            }
+            return c
+          }),
+        )
+      }
       const result = runScenario(dir, request.scenarioId, dataset, {
         ...(seedIds !== undefined ? { seedIds } : {}),
         analysisMode,
         ...(dataBasis !== undefined ? { dataBasis } : {}),
+        ...(trialPlan !== undefined ? { ruleConfig: trialPlan.ruleConfig } : {}),
       })
       // 运行留痕（run-insight S2.1）：人审面完整结果 + 双源红线落盘（wire 不脱敏，落盘面供跨进程遮蔽）。
       const meta = readPackageMeta(dir)
@@ -386,6 +410,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         accessBinding: identity && runAccessBinding(identity),
         ...(refillsRunId !== undefined ? { refillsRunId } : {}),
         ...(mappingEvidence !== undefined ? { mappingEvidence } : {}),
+        ...(trialDraftIds !== undefined ? { trial: { draftIds: trialDraftIds } } : {}),
       })
       saveRunRecord(this.ws.root, rec)
       // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
@@ -401,7 +426,11 @@ export class OntoRuntime extends RuntimeRemoteService {
       } catch (e) {
         experience = { runId: rec.runId, skipped: e instanceof Error ? e.message : String(e) }
       }
-      return { result, experience }
+      return {
+        result,
+        experience,
+        ...(trialPlan !== undefined && trialPlan.warnings.length > 0 ? { trialNotes: trialPlan.warnings } : {}),
+      }
     })
   }
 
@@ -430,6 +459,8 @@ export class OntoRuntime extends RuntimeRemoteService {
       datasetDigest: string
       datasetSummary: RunRecord['datasetSummary']
       auditPassed: boolean
+      /** 试算运行标记（zero-concept-loop P2）：与正式运行可区分。 */
+      trial?: boolean
       startedAt: string
       savedAt: string
     }>
@@ -442,6 +473,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         datasetDigest: r.datasetDigest.slice(0, 12),
         datasetSummary: r.datasetSummary,
         auditPassed: r.result.audit.passed === true,
+        ...(r.trial === undefined ? {} : { trial: true }),
         startedAt: r.startedAt,
         savedAt: r.savedAt,
       })),

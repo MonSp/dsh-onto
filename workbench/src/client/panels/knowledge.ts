@@ -12,6 +12,8 @@ export function KnowledgePanel(props: {
   t: (k: string) => string
   apis: Ctx
   selected: { name: string; version: string } | null
+  /** 零概念上手环（P2）：选中草案 → 试算（切运行面板带 trialDraftIds）。 */
+  onTrial?: (draftIds: string[]) => void
 }) {
   const { t, apis, selected } = props
   const [sources, setSources] = useState<Array<{ id: string; name: string; sourceType: string; parseStatus: string }>>([])
@@ -205,7 +207,7 @@ export function KnowledgePanel(props: {
           className: 'ow-sel',
           value: sourceType,
           onChange: (e: { target: { value: string } }) => setSourceType(e.target.value),
-        }, ...['LEGACY_SYS', 'CASE_SAMPLE', 'POLICY', 'SCHEMA_API', 'WORK_ORDER', 'CONVERSATION'].map((k) => h('option', { key: k, value: k }, k))),
+        }, ...['LEGACY_SYS', 'CASE_SAMPLE', 'POLICY', 'SCHEMA_API', 'WORK_ORDER', 'CONVERSATION', 'DOCUMENT'].map((k) => h('option', { key: k, value: k }, k))),
         h('input', { className: 'ow-in', placeholder: t('sourceName'), value: sourceName, onChange: (e: { target: { value: string } }) => setSourceName(e.target.value) }),
       ),
       h('textarea', {
@@ -467,6 +469,16 @@ export function KnowledgePanel(props: {
           onClick: () => void doPreview(picked, 'bulk'),
         },
         `${t('preview')} (${picked.length})`,
+      ),
+      // 零概念上手环（P2）：选中草案 → 试算（可逆试错——不写包，满意再采纳）
+      h(
+        'button',
+        {
+          className: 'ow-btn ghost',
+          disabled: !!busy || picked.length === 0 || !selected || !props.onTrial,
+          onClick: () => props.onTrial?.(picked),
+        },
+        `${t('trial')} (${picked.length})`,
       ),
       h(
         'button',

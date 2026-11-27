@@ -60,6 +60,11 @@ export interface RunRecord {
    * 无 provenance 声明的数据集不落此键（与 A-9 无 prep 不落键同族）。
    */
   mappingReceipt?: MappingReceipt
+  /**
+   * 试算留痕（zero-concept-loop P2）：本 run 是草案试跑（沙箱规则配置，不落包）；
+   * 正式运行不落键。
+   */
+  trial?: { draftIds: string[]; label?: string }
   /** 掩蔽前完整结果（core/wire/CLI 人审面口径）。 */
   result: ScenarioRunResult
   savedAt: string
@@ -110,6 +115,8 @@ export function buildRunRecord(input: {
   refillsRunId?: string
   /** 映射证据（audit-package P1a）；缺省按 dataset.provenance 推导诚实证据态。 */
   mappingEvidence?: MappingEvidenceInput
+  /** 试算标记（zero-concept-loop P2）；正式运行缺省不落键。 */
+  trial?: { draftIds: string[]; label?: string }
   result: ScenarioRunResult
   redlines: readonly string[]
   savedAt?: string
@@ -141,6 +148,7 @@ export function buildRunRecord(input: {
     ...(prep !== undefined ? { prep } : {}),
     ...(input.refillsRunId === undefined ? {} : { refillsRunId: input.refillsRunId }),
     ...(mappingReceipt === undefined ? {} : { mappingReceipt }),
+    ...(input.trial === undefined ? {} : { trial: input.trial }),
     result,
     savedAt,
   }
@@ -234,6 +242,9 @@ export function ruleBasisDigest(rec: RunRecord): string {
     ruleHitLog: [...rec.result.ruleHitLog]
       .map((h) => ({ ruleId: h.ruleId, score: h.score }))
       .sort((a, b) => (a.ruleId < b.ruleId ? -1 : a.ruleId > b.ruleId ? 1 : a.score - b.score)),
+    // 试算运行把草案集折进指纹（评审 gap-6：试算指纹与正式运行不得互认，决定不串味）；
+    // 正式运行不落此键——既有 ReviewDecision.ruleFingerprint 字节兼容不变。
+    ...(rec.trial === undefined ? {} : { trial: [...rec.trial.draftIds].sort() }),
   })).digest('hex')
 }
 
@@ -601,6 +612,9 @@ export interface RunDiff {
   excludedRemoved: Array<{ candidateId: string; ruleId: string }>
   auditPassedA: boolean
   auditPassedB: boolean
+  /** 试算标记（zero-concept-loop P2）：对照双方是否试算运行（试算≠正式的显式信号）。 */
+  trialA?: { draftIds: string[] }
+  trialB?: { draftIds: string[] }
   humanReviewRequired: true
 }
 
@@ -664,6 +678,8 @@ export function compareRunRecords(a: RunRecord, b: RunRecord): RunDiff {
     excludedRemoved: [...exA.values()].filter((x) => !exB.has(exKey(x))),
     auditPassedA: a.result.audit.passed === true,
     auditPassedB: b.result.audit.passed === true,
+    ...(a.trial === undefined ? {} : { trialA: { draftIds: a.trial.draftIds } }),
+    ...(b.trial === undefined ? {} : { trialB: { draftIds: b.trial.draftIds } }),
     humanReviewRequired: true,
   }
 }

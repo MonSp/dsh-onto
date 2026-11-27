@@ -70,6 +70,12 @@ export interface ScenarioRunOptions {
    * （伪造来源拒绝，不得 verified）。
    */
   dataBasis?: DataBasisInput
+  /**
+   * 规则面配置覆盖（zero-concept-loop P2 试跑沙箱 / 测试注入）：
+   * 缺省 = ruleEngineConfigOf(现盘包, 场景)。覆盖只作用于内存计算——
+   * 不写包、不绕签发（verifyDerived 门禁与 materialize 闸门原样）。
+   */
+  ruleConfig?: RuleEngineConfig
 }
 
 /**
@@ -153,7 +159,8 @@ export function runScenario(
   // since 派生基准与 startedAt 同源单次捕获（评审缺陷4）：回放可还原计算条件。
   const sinceBasis = startedAt
   const runId = `run-${randomUUID().slice(0, 8)}`
-  const config = ruleEngineConfigOf(pkg, scenario)
+  // 试跑沙箱（P2）：ruleConfig 覆盖只在内存生效；缺省=现盘包配置（现状不变）
+  const config = opts.ruleConfig ?? ruleEngineConfigOf(pkg, scenario)
 
   /* ── prep（S2.3）：expand → project → derive；必须先于排除/评分 ── */
   let effective: RuntimeDataset = dataset

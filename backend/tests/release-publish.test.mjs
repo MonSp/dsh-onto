@@ -20,6 +20,7 @@ import {
   OntoRuntime, loadSourceConfigs, restoreManagedDataSources, upsertSourceConfig, sourceConfigsPath,
   parseControlledBaseUrl,
 } from '@dsh-onto/runtime'
+import { KnowledgeStore, loadRunRecord } from '@dsh-onto/core'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const WST_SRC = join(REPO, 'packages', 'wst', '1.0.0')
@@ -553,5 +554,79 @@ test('发布业务 v1：纯内容 dataset 包（不传 sourceId）可发布；ch
     assert.equal(chain2.approvalCount(), 1)
   } finally {
     chain2.dispose()
+  }
+})
+
+test('零概念上手环 wire：trialDraftIds 试算（草案临时带入，不写包）→ RunRecord 落 trial 留痕', async () => {
+  const chain = setupPublish()
+  const wireCtx = new Context()
+  wireCtx.reflect.provide('profileContext', { dir: chain.root })
+  const wireRuntime = runtimeContextForHost(wireCtx.root)
+  try {
+    businessPolicy.setIdentityProvider(() => IDENTITY)
+    await chain.tools.get('publish_business').execute(
+      {
+        name: 'wst-ops',
+        version: '1.0.0',
+        sourceId: 'SRC-WST-CORE',
+        sourceKind: 'simulated',
+        apiBaseUrl: 'http://127.0.0.1:3912',
+        humanApproved: true,
+      },
+      EXEC,
+    )
+    await chain.tools.get('activate_business').execute(
+      { name: 'wst-ops', version: '1.0.0', humanApproved: true },
+      EXEC,
+    )
+    const service = new OntoRuntime(wireCtx)
+    const runArgs = { name: 'wst-ops', version: '1.0.0', scenarioId: 'SCN-WST-HAZARD-MIX', dataset: DATASET }
+    const base = await service.remoteExportRunScenario(runArgs)
+
+    // 起草：文档原料解析入队（DOCUMENT 启发）——零概念入口的「起草」步
+    const dataDir = join(chain.root, 'dsh-onto')
+    const knowledge = new KnowledgeStore(dataDir)
+    const draft = knowledge.addDraft({
+      packageId: 'wst-ops@1.0.0',
+      item: {
+        layer: 'O2',
+        targetKind: 'ScoreRule',
+        op: 'create',
+        name: '试算规则-满溢加权',
+        payload: { name: '试算规则-满溢加权', weight: 3, expression: 'min(1, fillRatio)', threshold: 0.05 },
+        confidence: 0.8,
+        rationale: 'trial',
+      },
+    })
+
+    // 试算：草案临时带入规则面（SCN 带 scoreRefs 收窄——create 草案显式入试算配置）
+    const trial = await service.remoteExportRunScenario({ ...runArgs, trialDraftIds: [draft.id] })
+    assert.equal(trial.result.humanReviewRequired, true, '试算仍恒人审')
+    assert.notEqual(
+      JSON.stringify(trial.result.ruleHitLog),
+      JSON.stringify(base.result.ruleHitLog),
+      '试算命中应随草案变化（对照信号源）',
+    )
+    // RunRecord 落 trial 留痕；正式基线 run 无 trial 键
+    const wsRoot = join(dataDir, 'workspace')
+    const trialRec = loadRunRecord(wsRoot, trial.result.runId)
+    assert.deepEqual(trialRec.trial, { draftIds: [draft.id] })
+    const baseRec = loadRunRecord(wsRoot, base.result.runId)
+    assert.equal('trial' in baseRec, false)
+    // 可逆性：草案仍未采纳（pending）——「先试后采纳，随时可弃」
+    assert.equal(knowledge.getCandidate(draft.id).status, 'pending')
+
+    // 非法 trialDraftIds 拒（空/未知 id）
+    await assert.rejects(
+      () => service.remoteExportRunScenario({ ...runArgs, trialDraftIds: [] }),
+      (e) => /trialDraftIds/.test(e.message),
+    )
+    await assert.rejects(
+      () => service.remoteExportRunScenario({ ...runArgs, trialDraftIds: ['kd-none0000'] }),
+      (e) => /不存在|not found|kd-none0000/.test(e.message),
+    )
+  } finally {
+    wireRuntime.dispose()
+    chain.dispose()
   }
 })

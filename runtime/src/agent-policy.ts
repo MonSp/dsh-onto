@@ -764,6 +764,27 @@ export function renderBatchText(out: BatchRunOutput, phrases?: readonly string[]
   return list.some((p) => text.includes(p)) ? token : text
 }
 
+/** 试算草案 ID 校验（zero-concept-loop P2）：错型/空/超限/重复 → INVALID_ARGS；缺省 = 非试算。 */
+export function validateTrialDraftIds(draftIds: unknown): string[] | undefined {
+  if (draftIds === undefined || draftIds === null) return undefined
+  if (!Array.isArray(draftIds)) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 需要数组')
+  }
+  if (draftIds.length === 0) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 必须为非空数组（不试算请省略本参数）')
+  }
+  if (draftIds.length > 32) {
+    throw new AgentToolError('INVALID_ARGS', `trialDraftIds 上限 32 个（收到 ${draftIds.length}）`)
+  }
+  if (draftIds.some((s) => typeof s !== 'string' || s === '')) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 须为非空字符串条目')
+  }
+  if (new Set(draftIds).size !== draftIds.length) {
+    throw new AgentToolError('INVALID_ARGS', 'trialDraftIds 不得重复（同草案重复应用会虚增影响）')
+  }
+  return draftIds as string[]
+}
+
 /**
  * export 摘要渲染（render 闸同口径，S2.4）：禁纯序列化直出——JSON.stringify 无拼接后
  * 兜底，跨分隔符重组/模板碰撞同族可漏（评审 critical）。清单缺省 recall(runId)
