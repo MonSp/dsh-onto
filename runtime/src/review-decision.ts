@@ -23,8 +23,11 @@ import {
   loadRunRecord,
   ruleBasisDigest,
   saveExperienceNote,
+  signAuditPackage,
   type AuditPackageExport,
 } from '@dsh-onto/core'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { AgentToolError } from './agent-policy.js'
 import { businessPolicy } from './business-policy.js'
 import { actionStoreFor, type ActionProposal, type ReviewDecision, type StoredActionRecord } from './action-store.js'
@@ -221,10 +224,16 @@ export function bridgeExperienceFromDecision(
  * core `exportAuditPackage` 一次写出。工具面 export_audit 与 wire exportAudit
  * 同调本函数——两个出口交付物逐字段同构。
  */
+export interface RunAuditExport extends AuditPackageExport {
+  /** P1b：本包是否带平台签名（env 配置齐且签名成功）。 */
+  signed: boolean
+  signatureLocator?: string
+}
+
 export function exportRunAuditPackage(
   wsRoot: string,
   runId: string,
-): AuditPackageExport {
+): RunAuditExport {
   const store = actionStoreFor(wsRoot)
   const decisions = store.listDecisions(runId)
   const decisionIds = new Set(decisions.map((d) => d.decisionId))
@@ -234,11 +243,25 @@ export function exportRunAuditPackage(
     (a) => (a.decisionId !== undefined && decisionIds.has(a.decisionId))
       || (a.proposalId !== undefined && proposalIds.has(a.proposalId)),
   )
-  return exportAuditPackage(wsRoot, runId, {
+  const out = exportAuditPackage(wsRoot, runId, {
     chain: { decisions, proposals, actions } satisfies {
       decisions: ReviewDecision[]
       proposals: ActionProposal[]
       actions: StoredActionRecord[]
     },
   })
+  // P1b 部署配置签名（凭证只来自部署 env，不落盘不进包）：配置齐 → overlay 签名
+  const keyFile = process.env.DSH_ONTO_SIGN_KEY_FILE
+  const keyId = process.env.DSH_ONTO_SIGN_KEY_ID
+  if (keyFile !== undefined && keyFile !== '' && keyId !== undefined && keyId !== '') {
+    const privateKeyPem = readFileSync(keyFile, 'utf8')
+    const signed = signAuditPackage(join(wsRoot, 'runs', 'exports'), runId, { privateKeyPem, keyId })
+    return {
+      ...out,
+      manifest: signed.manifest,
+      signed: true,
+      signatureLocator: `runs/exports/${signed.signatureLocatorName}`,
+    }
+  }
+  return { ...out, signed: false }
 }

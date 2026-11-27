@@ -597,7 +597,7 @@ export class OntoRuntime extends RuntimeRemoteService {
     })
   }
 
-  /** 审计包导出（固定目录；返回 workspace 相对 locator）：run + report + 治理链 + 包清单（P1a）。 */
+  /** 审计包导出（固定目录；返回 workspace 相对 locator）：run + report + 治理链 + 包清单（P1a），部署配置签名密钥时自动带签（P1b）。 */
   @Remote('exportAudit')
   async remoteExportExportAudit(request: { runId: string }): Promise<{
     locator: string
@@ -605,6 +605,8 @@ export class OntoRuntime extends RuntimeRemoteService {
     manifestLocator: string
     reportLocator: string
     chainLocator?: string
+    signatureLocator?: string
+    signed: boolean
   }> {
     return guard(() => {
       // 本层独立复核 runId（不依赖导出内部校验的调用顺序）：文件名直拼入参
@@ -617,7 +619,9 @@ export class OntoRuntime extends RuntimeRemoteService {
         archivedAt: out.archivedAt,
         manifestLocator: out.manifestLocator,
         reportLocator: out.reportLocator,
+        signed: out.signed,
         ...(out.chainLocator === undefined ? {} : { chainLocator: out.chainLocator }),
+        ...(out.signatureLocator === undefined ? {} : { signatureLocator: out.signatureLocator }),
       }
     })
   }

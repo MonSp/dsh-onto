@@ -28,8 +28,8 @@
  *   dsh-onto exp compress [--retain-days N] [--apply]
  */
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, dirname, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { derivePackage } from './derive.js'
 import {
   abstractCounterexampleDrafts,
@@ -56,6 +56,7 @@ import {
   loadRunRecord,
   saveRunRecord,
 } from './runstore.js'
+import { generateTrustKeyPair, signAuditPackage, verifyAuditPackage, type TrustRoot } from './trust.js'
 import { runScenario } from './scenario.js'
 import {
   extractPageItems,
@@ -153,6 +154,8 @@ function main(): void {
       return cmdRun(args)
     case 'runs':
       return cmdRuns(sub, args)
+    case 'trust':
+      return cmdTrust(sub, args)
     case 'source':
       return cmdSource(sub, args)
     case 'replay':
@@ -181,7 +184,8 @@ const USAGE = `dsh-onto — 业务本体建模平台 CLI
   derive <versionDir>
   gate <versionDir>
   run <versionDir> <scenarioId> --data run.json [--out result.json]
-  runs list|show <runId>|compare <runIdA> <runIdB>|export <runId>
+  runs list|show <runId>|compare <runIdA> <runIdB>|export <runId> [--sign-key F --sign-key-id K]|verify <runId>|--dir <exportDir> --trust <trust-root.json>
+  trust keygen --out <dir> [--key-id K] [--published-by X]
   source probe --dir <versionDir> [--url U | --data F] [--collections a,b] [--samples N]
   source map init|preview --dir <versionDir> [--url U | --data F] [--json] [--strict] [--force]
   replay --dir <versionDir> --scenario <SCN> [--fixture F] [--expected F] [--check]
@@ -702,18 +706,80 @@ function cmdRuns(sub: string | undefined, args: Args): void {
       if (!runId) fail('runs export requires <runId>')
       // 审计包（P1a）：run + report + manifest（CLI 无治理链数据源，chain 缺席如登记）
       const out = exportAuditPackage(root, runId)
+      // P1b 可选签名：--sign-key 私钥 PEM + --sign-key-id（overlay 步骤，manifest 补标记后签字）
+      let signed = false
+      let signatureLocator: string | undefined
+      const signKey = flagStr(args, 'sign-key', '')
+      const signKeyId = flagStr(args, 'sign-key-id', '')
+      if (signKey !== '' || signKeyId !== '') {
+        if (signKey === '' || signKeyId === '') fail('runs export --sign-key 与 --sign-key-id 须同传')
+        const pem = readFileSync(resolve(signKey), 'utf8')
+        const dir = join(root, 'runs', 'exports')
+        const signedOut = signAuditPackage(dir, runId, { privateKeyPem: pem, keyId: signKeyId })
+        signed = true
+        signatureLocator = `runs/exports/${signedOut.signatureLocatorName}`
+      }
       print({
         ok: true,
         locator: out.locator,
         reportLocator: out.reportLocator,
         manifestLocator: out.manifestLocator,
+        ...(signatureLocator === undefined ? {} : { signatureLocator }),
         archivedAt: out.archivedAt,
+        signed,
         humanReviewRequired: true,
       })
       return
     }
+    case 'verify': {
+      // 离线验签（P1b）：--dir 直接给导出目录（第三方只拿包+信任根）；否则 <root>/runs/exports
+      const trustFile = flagStr(args, 'trust', '')
+      if (trustFile === '') fail('runs verify requires --trust <trust-root.json>')
+      let trustRoot: TrustRoot
+      try {
+        trustRoot = JSON.parse(readFileSync(resolve(trustFile), 'utf8')) as TrustRoot
+      } catch {
+        fail('trust-root.json 不可读/非合法 JSON')
+      }
+      const dirFlag = flagStr(args, 'dir', '')
+      const dir = dirFlag !== '' ? resolve(dirFlag) : join(root, 'runs', 'exports')
+      const result = verifyAuditPackage(dir, trustRoot)
+      print(result)
+      if (!result.ok) process.exit(3)
+      return
+    }
     default:
       fail(`unknown runs subcommand ${String(sub)}`)
+  }
+}
+
+/** 信任根（signed-delivery P1b）：keygen 生成 Ed25519 密钥对 + 公钥发布文档。 */
+function cmdTrust(sub: string | undefined, args: Args): void {
+  switch (sub) {
+    case 'keygen': {
+      const out = flagStr(args, 'out', '')
+      if (out === '') fail('trust keygen requires --out <dir>')
+      const dir = resolve(out)
+      const keyIdFlag = flagStr(args, 'key-id', '')
+      const gen = generateTrustKeyPair({
+        ...(keyIdFlag === '' ? {} : { keyId: keyIdFlag }),
+        ...(flagStr(args, 'published-by', '') === '' ? {} : { publishedBy: flagStr(args, 'published-by', '') }),
+      })
+      // 私钥落 private/（部署侧保管，不入包不入仓）；公钥进 trust-root.json（带外发布）
+      mkdirSync(join(dir, 'private'), { recursive: true })
+      writeFileSync(join(dir, 'private', `${gen.keyId}.pem`), gen.privateKeyPem, { encoding: 'utf8', mode: 0o600 })
+      writeFileSync(join(dir, 'trust-root.json'), `${JSON.stringify(gen.trustRoot, null, 2)}\n`, 'utf8')
+      print({
+        ok: true,
+        keyId: gen.keyId,
+        trustRoot: join(dir, 'trust-root.json'),
+        privateKey: join(dir, 'private', `${gen.keyId}.pem`),
+        note: '私钥由部署侧保管（不入包不入仓）；trust-root.json 经带外渠道发布给验签方',
+      })
+      return
+    }
+    default:
+      fail(`unknown trust subcommand ${String(sub)}`)
   }
 }
 

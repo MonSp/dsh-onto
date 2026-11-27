@@ -776,6 +776,8 @@ export function renderExportText(
     manifestLocator?: string
     reportLocator?: string
     chainLocator?: string
+    signatureLocator?: string
+    signed?: boolean
     auditPassed: boolean
     candidateCount: number
     hitRuleCount: number
@@ -805,6 +807,8 @@ export function renderExportText(
   if (out.reportLocator !== undefined) lines.push(`报表 ${face(out.reportLocator)}`)
   if (out.chainLocator !== undefined) lines.push(`治理链 ${face(out.chainLocator)}`)
   if (out.manifestLocator !== undefined) lines.push(`包清单 ${face(out.manifestLocator)}`)
+  if (out.signatureLocator !== undefined) lines.push(`验签块 ${face(out.signatureLocator)}`)
+  lines.push(out.signed === true ? '平台签名 已签（离线验签见信任根）' : '平台签名 未签（可复核口径）')
   lines.push(
     `候选=${out.candidateCount} 命中规则=${out.hitRuleCount} 排除=${out.excludedCount} ` +
       `审计=${out.auditPassed ? 'passed' : 'failed'} 禁语=${out.forbiddenPhraseHitCount}`,

@@ -776,6 +776,9 @@ export interface ExportRunSummary {
   manifestLocator: string
   reportLocator: string
   chainLocator?: string
+  signatureLocator?: string
+  /** P1b：本包是否带平台签名。 */
+  signed: boolean
   auditPassed: boolean
   candidateCount: number
   hitRuleCount: number
@@ -789,6 +792,8 @@ export function exportSummaryOf(exported: {
   manifestLocator: string
   reportLocator: string
   chainLocator?: string
+  signatureLocator?: string
+  signed?: boolean
   archive: RunArchive
 }): ExportRunSummary {
   const s = summarizeRunResult(exported.archive.result)
@@ -799,6 +804,8 @@ export function exportSummaryOf(exported: {
     manifestLocator: exported.manifestLocator,
     reportLocator: exported.reportLocator,
     ...(exported.chainLocator === undefined ? {} : { chainLocator: exported.chainLocator }),
+    ...(exported.signatureLocator === undefined ? {} : { signatureLocator: exported.signatureLocator }),
+    signed: exported.signed === true,
     auditPassed: s.auditPassed,
     candidateCount: s.candidateCount,
     hitRuleCount: s.hitRuleCount,
@@ -3550,6 +3557,7 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
       description:
         '导出一轮运行的审计包（run 归档 + 报表投影 + 治理链 + 包清单：ruleHitLog、审计项、证据链、' +
         '人审认定、指纹、映射校验回执）到工作区 runs/exports/ 供人审留痕与对外复核。' +
+        '部署配置了签名密钥时自动带平台签名（signed=true，附验签块）。' +
         '返回摘要与 workspace 相对 locator；重复导出覆盖幂等。只读数据 + 固定导出目录。',
       parameters: {
         runId: { type: 'string', required: true, description: '运行 ID（如 run-abc12345）' },
@@ -3565,6 +3573,8 @@ function registerTools(ctx: Context, faces: readonly ToolFace[] = ['run', 'dev']
             manifestLocator: { type: 'string', required: true },
             reportLocator: { type: 'string', required: true },
             chainLocator: { type: 'string' },
+            signatureLocator: { type: 'string' },
+            signed: { type: 'boolean', required: true },
             auditPassed: { type: 'boolean', required: true },
             candidateCount: { type: 'number', required: true },
             hitRuleCount: { type: 'number', required: true },
