@@ -907,10 +907,12 @@ function ReviewPanel(props: {
       setOkMsg('')
       setBusy('export')
       try {
-        const out = unwrap<{ locator: string; chainLocator?: string }>(
+        const out = unwrap<{ locator: string; manifestLocator: string; chainLocator?: string }>(
           await api.exportAudit({ runId: detail.record.runId }),
         )
-        setOkMsg(`${t('exportAuditDone')}: ${out.locator}${out.chainLocator ? ` / ${out.chainLocator}` : ''}`)
+        setOkMsg(
+          `${t('exportAuditDone')}: ${[out.locator, out.chainLocator, out.manifestLocator].filter(Boolean).join(' / ')}`,
+        )
       } catch (e) {
         setError(errText(e))
       } finally {

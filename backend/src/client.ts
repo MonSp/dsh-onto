@@ -151,7 +151,7 @@ window.__ModuleLoader__.load({
       desc('ontoRuntime', 'listReportPages', false, 'RLP', 'List saved report pages (human-review face).'),
       desc('ontoRuntime', 'getReportPage', true, 'RGP', 'Show one saved report page (human-review face).'),
       desc('ontoRuntime', 'compareRuns', true, 'RCP', 'Compare two run records.'),
-      desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export one run audit archive.'),
+      desc('ontoRuntime', 'exportAudit', true, 'REX', 'Export run audit package (run + report + chain + manifest).'),
       desc('ontoRuntime', 'reviewChain', true, 'RVC', 'Review decision -> proposal -> action chain for one run.'),
       desc('ontoRuntime', 'recordReviewDecision', true, 'RRD', 'Record business review decision (UI write).'),
       desc('ontoRuntime', 'createActionProposal', true, 'CAP', 'Create an action proposal (governed, single-use).'),

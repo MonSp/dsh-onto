@@ -373,10 +373,17 @@ test('exportSummaryOf：模型面摘要零短语、locator 相对路径（S2.4�
     result: fakeResult(),
     redlines: ['认定违规'],
   })
-  const summary = exportSummaryOf({ locator: 'runs/exports/run-abc12345.json', archive: { ...rec, archivedAt: '2026-11-05T03:00:00.000Z' } })
+  const summary = exportSummaryOf({
+    locator: 'runs/exports/run-abc12345.json',
+    manifestLocator: 'runs/exports/run-abc12345-manifest.json',
+    reportLocator: 'runs/exports/run-abc12345-report.json',
+    archive: { ...rec, archivedAt: '2026-11-05T03:00:00.000Z' },
+  })
   assert.equal(summary.exported, true)
   assert.equal(summary.runId, 'run-abc12345')
   assert.equal(summary.locator, 'runs/exports/run-abc12345.json')
+  assert.equal(summary.manifestLocator, 'runs/exports/run-abc12345-manifest.json')
+  assert.equal(summary.reportLocator, 'runs/exports/run-abc12345-report.json')
   assert.equal(summary.auditPassed, true)
   assert.equal(summary.candidateCount, 1)
   assert.equal(summary.hitRuleCount, 1)
@@ -393,7 +400,11 @@ test('export_audit 集成：batch → export，摘要与 RunRecord 一致、归�
     const runId = out.results[0].runId
     const exported = exportRunArchive(root, runId)
     assert.equal(exported.locator, `runs/exports/${runId}.json`)
-    const summary = exportSummaryOf(exported)
+    const summary = exportSummaryOf({
+      ...exported,
+      manifestLocator: `runs/exports/${runId}-manifest.json`,
+      reportLocator: `runs/exports/${runId}-report.json`,
+    })
     assert.equal(summary.runId, runId)
     assert.equal(summary.candidateCount, out.results[0].summary.candidateCount)
     assert.equal(summary.auditPassed, out.results[0].summary.auditPassed)
