@@ -11,10 +11,23 @@
  * 结构；静态 Bearer token 不落日志。鉴权 v1：无鉴权或静态 Bearer（复用 ext-token），不做 OAuth2。
  * @module @dsh-onto/runtime/data-source-map
  */
-import type { ApiShape, O1SourceMap, SourceRow, SourceRows } from '@dsh-onto/core'
+import type { ApiShape, MappingEvidenceInput, O1SourceMap, SourceRow, SourceRows } from '@dsh-onto/core'
 import { readField, transformSourceRows } from '@dsh-onto/core'
 import type { ConnectorFetchOutput, DataConnector, DataQuery } from './data-sources.js'
 import { staticTokenProvider, type TokenProvider } from './ext-token.js'
+import { createHash } from 'node:crypto'
+
+/** 映射契约指纹：sha256(canonicalJson(maps))——键序稳定，同契约同指纹。 */
+function mapsDigestOf(maps: readonly O1SourceMap[]): string {
+  const canonical = (v: unknown): string => {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null'
+    if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
+    const rec = v as Record<string, unknown>
+    const keys = Object.keys(rec).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(rec[k])}`).join(',')}}`
+  }
+  return createHash('sha256').update(canonical(maps)).digest('hex')
+}
 
 export interface MappedDataConnectorOptions {
   /** 逻辑来源 id（随错误/截断信息可辨识；登记仍走 dataSources.register）。 */
@@ -36,6 +49,11 @@ export interface MappedDataConnectorOptions {
   fetchImpl?: typeof fetch
   /** 单集合最大页数（防失控；触顶 → complete=false）。缺省 20。 */
   maxPages?: number
+  /** 映射契约身份（audit-package P1a）：包身份 + 派生链指纹，进映射校验回执。 */
+  mapBasis?: {
+    package?: { name: string; version: string }
+    sourceDigest?: string
+  }
 }
 
 export interface MappedDataConnector extends DataConnector {
@@ -310,12 +328,25 @@ export function createMappedDataConnector(opts: MappedDataConnectorOptions): Map
       if (truncated) reasons.push(`触顶 maxPages=${opts.maxPages ?? DEFAULT_MAX_PAGES} 截断`)
       if (upstreamIncomplete) reasons.push('上游 completeField 显式 false')
 
+      // 映射证据（audit-package P1a）：诊断不再丢弃——随取数透传进 MappingReceipt
+      const mappingEvidence: MappingEvidenceInput = {
+        mappingApplied: true,
+        mapBasis: {
+          ...(opts.mapBasis?.package === undefined ? {} : { package: opts.mapBasis.package }),
+          mapsDigest: mapsDigestOf(opts.maps),
+          ...(opts.mapBasis?.sourceDigest === undefined ? {} : { sourceDigest: opts.mapBasis.sourceDigest }),
+        },
+        diagnostics: transformed.diagnostics,
+        businessWindow: transformed.businessWindow,
+      }
+
       return {
         dataset: transformed.dataset,
         complete,
         paged: opts.shape.pagination.mode !== 'none',
         ...(complete ? {} : { truncatedReason: reasons.join('；') || '取数分页不全（complete=false）' }),
         businessWindow: transformed.businessWindow,
+        mappingEvidence,
       }
     },
   }

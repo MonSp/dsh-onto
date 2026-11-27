@@ -773,6 +773,9 @@ export function renderExportText(
   out: {
     runId: string
     locator: string
+    manifestLocator?: string
+    reportLocator?: string
+    chainLocator?: string
     auditPassed: boolean
     candidateCount: number
     hitRuleCount: number
@@ -799,6 +802,9 @@ export function renderExportText(
   const lines: string[] = []
   lines.push(`审计导出 运行 ${idFace('runId', out.runId)}`)
   lines.push(`归档 ${face(out.locator)}`)
+  if (out.reportLocator !== undefined) lines.push(`报表 ${face(out.reportLocator)}`)
+  if (out.chainLocator !== undefined) lines.push(`治理链 ${face(out.chainLocator)}`)
+  if (out.manifestLocator !== undefined) lines.push(`包清单 ${face(out.manifestLocator)}`)
   lines.push(
     `候选=${out.candidateCount} 命中规则=${out.hitRuleCount} 排除=${out.excludedCount} ` +
       `审计=${out.auditPassed ? 'passed' : 'failed'} 禁语=${out.forbiddenPhraseHitCount}`,

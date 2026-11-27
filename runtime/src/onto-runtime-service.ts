@@ -6,7 +6,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteErrorDetailsMap } from '@deepseek-ai/dsh-typert-protocol'
-import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   KnowledgeStore,
@@ -16,7 +15,6 @@ import {
   buildRunRecord,
   buildRunReport,
   compareRunRecords,
-  exportRunArchive,
   expandEntity,
   experienceFromRun,
   isSafeRunId,
@@ -37,6 +35,7 @@ import {
   type DataBasisInput,
   type ExpandResult,
   type ExperienceNote,
+  type MappingEvidenceInput,
   type OntologyPackage,
   type ReportPage,
   type ReportSurfaceSource,
@@ -73,6 +72,7 @@ import {
 } from './business-policy.js'
 import {
   bridgeExperienceFromDecision,
+  exportRunAuditPackage,
   persistReviewDecision,
   requireReviewerHostId,
   validateReviewDecision,
@@ -342,6 +342,7 @@ export class OntoRuntime extends RuntimeRemoteService {
       }
       let dataset: RuntimeDataset
       let dataBasis: DataBasisInput | undefined
+      let mappingEvidence: MappingEvidenceInput | undefined
       if (hasSource) {
         // 正式通道：provenance/dataBasis 只由服务端连接器产出
         const fetched = await dataSources.fetch({
@@ -354,6 +355,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         })
         dataset = fetched.dataset
         dataBasis = fetched.dataBasis
+        mappingEvidence = fetched.mappingEvidence
       } else {
         // 数据入口固定来源身份（R5）：wire 入参是外部请求，不得自称 connector 获得可信状态。
         dataset = { ...(request.dataset as RuntimeDataset), provenance: 'inline' }
@@ -383,6 +385,7 @@ export class OntoRuntime extends RuntimeRemoteService {
         redlines,
         accessBinding: identity && runAccessBinding(identity),
         ...(refillsRunId !== undefined ? { refillsRunId } : {}),
+        ...(mappingEvidence !== undefined ? { mappingEvidence } : {}),
       })
       saveRunRecord(this.ws.root, rec)
       // S5.4.2 运行回写（反馈闭环②断链 A）：经验初稿随 RunRecord 落盘——
@@ -594,24 +597,28 @@ export class OntoRuntime extends RuntimeRemoteService {
     })
   }
 
-  /** 审计归档导出（固定目录；返回 workspace 相对 locator）。D 包：附治理链条文件。 */
+  /** 审计包导出（固定目录；返回 workspace 相对 locator）：run + report + 治理链 + 包清单（P1a）。 */
   @Remote('exportAudit')
   async remoteExportExportAudit(request: { runId: string }): Promise<{
     locator: string
     archivedAt: string
+    manifestLocator: string
+    reportLocator: string
     chainLocator?: string
   }> {
     return guard(() => {
-      // 本层独立复核 runId（不依赖 exportRunArchive 内部校验的调用顺序）：治理链文件名直拼入参
+      // 本层独立复核 runId（不依赖导出内部校验的调用顺序）：文件名直拼入参
       const safeRunId = requireSafeRunId(request.runId)
       if (this.strict) this.readRun(safeRunId, 'export')
-      const { locator, archive } = exportRunArchive(this.ws.root, safeRunId)
-      // 治理链串联（F1 步骤 7）：snapshot → run → decision → proposal → approval → externalRef
-      const chain = this.reviewChainOf(safeRunId)
-      const chainLocator = `runs/exports/${safeRunId}-chain.json`
-      const chainPath = join(this.ws.root, 'runs', 'exports', `${safeRunId}-chain.json`)
-      writeFileSync(chainPath, `${JSON.stringify({ runId: safeRunId, ...chain }, null, 2)}\n`, 'utf8')
-      return { locator, archivedAt: archive.archivedAt, chainLocator }
+      // 与工具面 export_audit 同一编排（exportRunAuditPackage）：两出口交付物逐字段同构
+      const out = exportRunAuditPackage(this.ws.root, safeRunId)
+      return {
+        locator: out.locator,
+        archivedAt: out.archivedAt,
+        manifestLocator: out.manifestLocator,
+        reportLocator: out.reportLocator,
+        ...(out.chainLocator === undefined ? {} : { chainLocator: out.chainLocator }),
+      }
     })
   }
 
@@ -1561,6 +1568,7 @@ export class OntoRuntime extends RuntimeRemoteService {
             shape: sourceCfg.shape,
             maps: pkg.sourceMaps ?? [],
             kind: sourceCfg.sourceKind,
+            mapBasis: { package: { name: request.name, version: request.version } },
             ...(token !== null ? { auth: { token } } : {}),
           }),
         )

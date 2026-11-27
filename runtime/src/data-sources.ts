@@ -19,7 +19,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DataBasisInput, DataSnapshot, RuntimeDataset } from '@dsh-onto/core'
+import type { DataBasisInput, DataSnapshot, MappingEvidenceInput, RuntimeDataset } from '@dsh-onto/core'
 import { AgentToolError, isRecord } from './agent-policy.js'
 import { scopedRuntimeObject } from './context.js'
 
@@ -42,6 +42,8 @@ export interface ConnectorFetchOutput {
   truncatedReason?: string
   /** 数据覆盖的业务时间窗。 */
   businessWindow: { from: string; to: string }
+  /** 映射证据（audit-package P1a）：source-maps 转换路径自报诊断/计数/契约身份。 */
+  mappingEvidence?: MappingEvidenceInput
 }
 
 /**
@@ -61,6 +63,8 @@ export interface FetchResult {
   dataset: RuntimeDataset
   snapshot: DataSnapshot
   dataBasis: DataBasisInput
+  /** 映射证据（audit-package P1a）：无 source-maps 转换时缺省。 */
+  mappingEvidence?: MappingEvidenceInput
 }
 
 /** snap-<uuid8>（runId 同惯例）。 */
@@ -192,7 +196,30 @@ export class DataSourceRegistry {
     }
     // provenance 只由本通道产出（调用方自称 connector 一律被入口覆盖/拒绝）
     const dataset = { ...out.dataset, provenance: 'connector' } as RuntimeDataset
-    return { dataset, snapshot, dataBasis }
+    // 映射证据（P1a）：连接器自报的 source-maps 转换证据 + 快照锚点（回执 sourceAnchor 同源）
+    const base = out.mappingEvidence
+    const mappingEvidence: MappingEvidenceInput | undefined = base === undefined
+      ? undefined
+      : {
+          ...(base.mappingApplied === undefined ? {} : { mappingApplied: base.mappingApplied }),
+          ...(base.mapBasis === undefined ? {} : { mapBasis: base.mapBasis }),
+          ...(base.diagnostics === undefined ? {} : { diagnostics: base.diagnostics }),
+          ...(base.businessWindow === undefined ? {} : { businessWindow: base.businessWindow }),
+          sourceAnchor: {
+            ...(base.sourceAnchor ?? {}),
+            snapshotId,
+            sourceId: input.sourceId,
+            queryDigest,
+            connectorVersion: connector.version,
+            nature: connector.nature,
+          },
+        }
+    return {
+      dataset,
+      snapshot,
+      dataBasis,
+      ...(mappingEvidence === undefined ? {} : { mappingEvidence }),
+    }
   }
 }
 
